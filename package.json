@@ -1,0 +1,48 @@
+{
+  "name": "dsh-unified-search",
+  "version": "0.1.0",
+  "description": "Unified free web search provider for DeepSeek Harness (ctx.web): Exa + Parallel + DuckDuckGo (keyless, opencode-sourced), DeepSeek / Anthropic / OpenAI (key-gated via Settings credentials). Registers provider id \"unified\" so the built-in web_search tool works with zero config.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "web-search",
+    "mcp",
+    "exa",
+    "parallel",
+    "claude",
+    "codex",
+    "cordis"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Xu198440",
+    "email": "ova442757@163.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xu198440/dsh-unified-search.git"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-web": "*",
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-credentials": "*",
+    "@deepseek-ai/dsh-settings": "*",
+    "@deepseek-ai/dsh-launch-environment": "*"
+  }
+}
