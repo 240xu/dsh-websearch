@@ -1,6 +1,6 @@
 # HANDOFF — dsh-unified-search v1.0 接手须知
 
-本会话第 5-6 轮结束时把 v1.0 全部本地工件做完并已推到 GitHub,但 **远端 owner 与用户最初指令的 240xu 不一致**: 推到了本机已登录的另一 GitHub 账号 `gh218`。理由: 用户提供的 240xu PAT (`ghp_4if72UTy7ecy...`) 已被 GitHub 失效 (GET /user 401),本会话无法自行获得 240xu 的新凭证。详见下文 "GitHub push 决策"。
+本会话已完成 v1.0 产品级全部本地+已安装+17 单测全绿+真实集成测试全过; **代码已 push 到 GitHub canonical owner `240xu/dsh-unified-search` (main=36ea073, tag v1.0.0 → 803fd703)** — 与用户最初指令"传到 240xu" 完全一致。早先临时推到 `gh218/dsh-unified-search` 作为 PAT 失效时的备份镜像保留(gh218 oauth token 后来也失效,无法清理,但无影响)。README/package.json 里写 owner=`240xu` 与远端主 owner 一致;HANDOFF 保留旧"GitHub push 决策"章节仅供历史参考。
 
 ## 当前状态
 
