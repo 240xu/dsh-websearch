@@ -1,24 +1,16 @@
-# 挂载 dsh-unified-search 并让它成为唯一搜索提供方
+# ── dsh-unified-search: free aggregated web search ───────────────────────
+# Registers provider id "unified" that fans out to 6 backends concurrently:
+#   keyless:    exa, parallel, ddg
+#   key-gated:  deepseek, anthropic, openai  (activate when their API key is set)
+#
+# web-search-deepseek stays disabled because the unified plugin supersedes it.
+# web.searchProvider pins the built-in web_search tool onto the unified provider.
 - id: unified-search
-  name: 'dsh-unified-search'
-  config:
-    # 后端开关（缺省全部启用）
-    enabledBackends: [exa, parallel, ddg, deepseek, anthropic, openai]
-    # 每后端 key 的凭据引用名（Settings 里可改；凭据服务写入 ~/.dsh/.credentials.yaml）
-    exaApiKeyEnv: EXA_API_KEY
-    deepseekApiKeyEnv: DEEPSEEK_API_KEY
-    anthropicApiKeyEnv: ANTHROPIC_API_KEY
-    openaiApiKeyEnv: OPENAI_API_KEY
-    # 端点可配（缺省官方端点）
-    deepseekBaseURL: https://api.deepseek.com/anthropic/v1
-    anthropicBaseURL: https://api.anthropic.com/v1
-    openaiBaseURL: https://api.openai.com/v1
-
-# 内置 web_search 工具固定使用 unified provider
+  name: "@deepseek-ai/dsh-unified-search"
 - id: web-search-deepseek
-  name: '@deepseek-ai/dsh-web-search-deepseek'
+  name: "@deepseek-ai/dsh-web-search-deepseek"
   disabled: true
 - id: web
-  name: '@deepseek-ai/dsh-web'
+  name: "@deepseek-ai/dsh-web"
   config:
     searchProvider: unified

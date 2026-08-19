@@ -1,76 +1,103 @@
 # dsh-unified-search
 
-DSH（DeepSeek Harness）原生插件：向 `ctx.web` 注册聚合搜索 provider **`unified`**，内置 `web_search` 工具零配置直接可用。
+> Aggregated free web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to six backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
 
-## 后端
+A pure-Cordis drop-in: registers ONE provider at `ctx.web` so the `dsh-web` selection rule never fires `WEB_PROVIDER_AMBIGUOUS`. Zero-config search out of the box (Exa + Parallel + DuckDuckGo are keyless); API-key backends (DeepSeek / Anthropic / OpenAI) auto-activate once their key is supplied via the credentials service or env.
 
-| 后端 | Key | 端点 | 说明 |
-|---|---|---|---|
-| exa | 免（可选 `EXA_API_KEY` 提额） | `mcp.exa.ai/mcp` | opencode 同源 |
-| parallel | 免 | `search.parallel.ai/mcp` | opencode 同源 |
-| ddg | 免 | DuckDuckGo HTML | 兜底 |
-| deepseek | `DEEPSEEK_API_KEY` | `api.deepseek.com/anthropic/v1/messages` + `web_search_2025/2026*` | Claude 线，本机可达 |
-| anthropic | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL/messages` + `web_search_20260*` | Claude Code 同机制 |
-| openai | `OPENAI_API_KEY` | `OPENAI_BASE_URL/responses` + `web_search` | Codex 同机制 |
+---
 
-## 安装
+DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置六个后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
+
+纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo 三者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI 在提供 API key 后自动激活。
+
+## Backends | 后端
+
+| id | key | endpoint | how it returns | notes |
+|---|---|---|---|---|
+| `exa` | none | `https://mcp.exa.ai/mcp` | streamable-http MCP, tool `web_search_exa { query, numResults }`, text blocks "Title:/URL:/Published:/Highlights:" | opencode 同源,无 key |
+| `parallel` | none | `https://search.parallel.ai/mcp` | streamable-http MCP, tool `web_search { objective, search_queries[], session_id?, model_name? }` returns JSON-string `{ search_id, results: [{ url, title, publish_date, excerpts[] }] }` | opencode 同源,无 key |
+| `ddg` | none | `https://html.duckduckgo.com/html/` | HTML scrape, decode `uddg=` redirect param for real URL + `result__snippet` | 兜底,零依赖 |
+| `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/anthropic/v1/messages` | Anthropic Messages API + native `web_search_20250305` server tool, model `deepseek-v4-flash` | 与 dav web-search-deepseek 同机制 |
+| `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` | Anthropic Messages + `web_search_20250305`, model `claude-sonnet-4-6` | Claude Code 同机制 |
+| `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` | Responses API native `web_search` tool, parse `url_citation` annotations | Codex 同机制 |
+
+**Default enabled set**: `["exa", "parallel", "ddg"]` — all keyless. The key-gated backends only join when their `available()` returns true (key present + baseURL reachable).
+
+## Install | 安装
+
+Drop into any node_modules dir that the dsh loader can resolve:
 
 ```bash
-cp -r dsh-unified-search /data/data/com.termux/files/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/
-# 或放入任意可被 dsh loader 解析的 node_modules 目录
+cp -r dsh-unified-search /data/data/com.termux/files/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/
 ```
 
-在 `~/.dsh/profiles/<profile>/cordis.patch.yml` 追加（见 `examples/cordis.patch.yml`）：
+Then add this block to `~/.dsh/profiles/<profile>/cordis.patch.yml` (see [`examples/cordis.patch.yml`](examples/cordis.patch.yml)):
 
 ```yaml
 - id: unified-search
-  name: 'dsh-unified-search'
+  name: "@deepseek-ai/dsh-unified-search"
+- id: web-search-deepseek
+  name: "@deepseek-ai/dsh-web-search-deepseek"
+  disabled: true
 - id: web
-  name: '@deepseek-ai/dsh-web'
+  name: "@deepseek-ai/dsh-web"
   config:
     searchProvider: unified
 ```
 
-重启 dsh web 后，内置 `web_search` 工具即走 unified provider。
+Restart `dsh web`. The built-in `web_search` tool now resolves through **unified**.
 
-## 设置（Settings）
+## Settings | 配置
 
-插件注册 `unified-search` 设置段：
+The plugin installs a `settings:` section keyed `web.unified-search`. Override the enabled-backends list, numResults, base URLs, model names, and credential references per key-gated backend there. Defaults live in [`lib/index.js`](lib/index.js) (`Config` / `resolveOptions`).
 
-- `enabledBackends`: 后端开关数组（缺省全部）
-- `numResults`: 每后端结果数上限
-- `exaApiKeyEnv` / `deepseekApiKeyEnv` / `anthropicApiKeyEnv` / `openaiApiKeyEnv`: 每后端 key 的凭据引用名
-- `deepseekBaseURL` / `anthropicBaseURL` / `openaiBaseURL`: 端点（缺省官方）
-- `deepseekModel` / `anthropicModel` / `openaiModel`: 模型（缺省 deepseek-v4-flash / claude-sonnet-4-6 / gpt-5-codex）
+Env-var fallbacks (when the settings section is empty or omitted):
 
-Key 解析顺序：Settings 字面值 → 凭据服务（`~/.dsh/.credentials.yaml`，如 `DEEPSEEK_API_KEY`）→ 进程环境变量。
-凭据服务名可指向任意你已配置的 key（例如自定义 `apiKeyEnv: MY_OPENAI_KEY` 并在 Models 页存储）。
+| backend | env var | when absent |
+|---|---|---|
+| deepseek | `DEEPSEEK_API_KEY` | backend stays unavailable (keyless-only set runs) |
+| anthropic | `ANTHROPIC_API_KEY` | same |
+| openai | `OPENAI_API_KEY` | same |
+| global override of backend set | `DSH_UNIFIED_SEARCH_BACKENDS` (comma-separated ids) | falls back to the keyless-only default |
 
-## 环境变量（不经设置时兜底）
+## Design | 设计
+
+- **One provider, no ambiguity**: a single `registeredSearchProvider({id:"unified"})` — the `dsh-web` seam's selection rule picks it unambiguously, and `search()` caps `maxResults` itself.
+- **`Promise.allSettled` fan-out**: every enabled + available backend fires concurrently; a single backend failure is demoted to a soft `null` so the rest still contribute — only when ALL fail does the provider throw `WEB_PROVIDER_ERROR`.
+- **Per-backend abort demotion**: a single backend aborting becomes soft-null; the provider only rethrows `WEB_ABORTED` when the caller's own `AbortSignal` fires.
+- **URL dedup + merge**: results across backends are merged and deduped by case-insensitive URL; missing title/snippet/publishedAt from one backend get filled in from another (e.g. Exa's title + Parallel's excerpt).
+- **Streamable-http MCP,自定义握手**: `lib/util/rpc.js` implements `initialize → notifications/initialized → tools/call` with `Mcp-Session-Id` header caching against Exa and Parallel — no dependency on the full MCP SDK.
+- **hooks.recordRequest/recordOutcome bridge**: each backend routes its request/outcome to `lib/util/log.js` which records `web/unified-search-backend-request` / `…backend-outcome` events onto the active DSH session via `ctx.get("agents")?.currentInitiator()?.session.append(...)` (mirrors `dsh-web-search-deepseek`).
+
+## Architecture | 架构
+
+```
+lib/
+  index.js                 # name/inject/Config/apply — registers settings + provider
+  provider.js              # UnifiedSearchProvider — fan-out, abort demotion, dedup, truncate
+  util/
+    abort.js               # isAbortError / searchAborted / throwIfSearchAborted / maybeAbortError
+    rpc.js                 # streamable-http MCP client (initialize + tools/call + session cache)
+    log.js                 # recordBackendRequest / recordBackendOutcome → session event log
+  backends/
+    exa.js                 # Exa (web_search_exa)
+    parallel.js            # Parallel (web_search)
+    ddg.js                 # DuckDuckGo HTML scrape (uddg redirect decode)
+    anthropic-like.js      # shared: DeepSeek + Anthropic (Messages API + web_search_* server tool)
+    openai.js              # OpenAI /responses + web_search tool (url_citation parsing)
+tests/
+  parse.test.js            # 12 unit tests for each backend's pure parse fn
+  provider.test.js         # 5 fan-out tests (merge/dedup, abort demotion, all-fail, maxResults cap)
+```
+
+## Test | 测试
 
 ```bash
-export EXA_API_KEY=...            # exa 提额（可选）
-export DEEPSEEK_API_KEY=...       # deepseek 后端
-export ANTHROPIC_API_KEY=...      # anthropic 后端
-export ANTHROPIC_BASE_URL=...     # 自定义 anthropic 兼容端点
-export OPENAI_API_KEY=...         # openai/codex 后端
-export OPENAI_BASE_URL=...        # 自定义 openai 兼容端点
-export DSH_WEB_SEARCH_PROVIDER=unified   # 亦可直接钉住选择
+node --test tests/parse.test.js tests/provider.test.js
 ```
 
-## 插件格式速记
+17/17 pass.
 
-```js
-export const name = "unified-search";      // 诊断名
-export const inject = ["web"];             // 依赖 ctx.web
-export function apply(ctx, config) {
-  installSettingsSection(ctx, settingsNamespace("unified-search"), Config, config, …);
-  ctx.web.registerSearchProvider(new UnifiedSearchProvider(…));  // {id, available(), search()}
-}
-```
+## License | 许可
 
-`WebSearchResult = { content?, sources: [{url, title?, snippet?, publishedAt?}], truncated }`。
-
-## License
-
-MIT © 2026 Xu198440
+MIT © 2026 240xu
