@@ -1,7 +1,7 @@
 {
-  "name": "dsh-unified-search",
-  "version": "1.0.0",
-  "description": "Unified free web search provider for DeepSeek Harness (ctx.web): Exa + Parallel + DuckDuckGo (keyless, opencode-sourced), DeepSeek / Anthropic / OpenAI (key-gated via Settings credentials). Registers provider id \"unified\" so the built-in web_search tool works with zero config.",
+  "name": "dsh-websearch",
+  "version": "2.0.0",
+  "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search tool.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -24,6 +24,11 @@
     "mcp",
     "exa",
     "parallel",
+    "brave",
+    "tavily",
+    "serper",
+    "searxng",
+    "mojeek",
     "claude",
     "codex",
     "cordis"
@@ -35,7 +40,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/240xu/dsh-unified-search.git"
+    "url": "git+https://github.com/240xu/dsh-websearch.git"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-web": "*",

@@ -193,3 +193,206 @@ test("parseOpenAIResponses: dedupes by url, caps maxResults", () => {
   const got = parseOpenAIResponses(json, 3);
   assert.equal(got.length, 3);
 });
+
+
+// ===== NEW BACKEND TESTS (v2.0) =====
+
+import { parseBraveResult } from "../lib/backends/brave.js";
+import { parseTavilyResult } from "../lib/backends/tavily.js";
+import { parseSerperResult } from "../lib/backends/serper.js";
+import { parseSearxngResult } from "../lib/backends/searxng.js";
+import { parseMojeekResult } from "../lib/backends/mojeek.js";
+
+test("parseBraveResult: human-readable blocks → sources", () => {
+  const data = {
+    web: {
+      results: [
+        { url: "https://nodejs.org", title: "Node.js 24", description: "Faster startup", age: "2025-04-22" },
+        { url: "https://deno.com", title: "Deno 2", description: "One thing" },
+        { title: "No URL" }, // should be skipped
+      ],
+    },
+  };
+  const got = parseBraveResult(data, 8);
+  assert.equal(got.length, 2);
+  assert.equal(got[0].url, "https://nodejs.org");
+  assert.equal(got[0].title, "Node.js 24");
+  assert.equal(got[0].snippet, "Faster startup");
+  assert.equal(got[0].publishedAt, "2025-04-22");
+  assert.equal(got[1].url, "https://deno.com");
+  assert.equal(got[1].snippet, "One thing");
+});
+
+test("parseBraveResult: empty/non-object → []", () => {
+  assert.deepEqual(parseBraveResult({}, 8), []);
+  assert.deepEqual(parseBraveResult({ web: {} }, 8), []);
+  assert.deepEqual(parseBraveResult({ web: { results: [] } }, 8), []);
+});
+
+test("parseBraveResult: caps at maxResults", () => {
+  const data = {
+    web: {
+      results: Array.from({ length: 20 }, (_, i) => ({
+        url: `https://x${i}.com`,
+        title: "x",
+        description: "desc",
+      })),
+    },
+  };
+  const got = parseBraveResult(data, 5);
+  assert.equal(got.length, 5);
+});
+
+test("parseTavilyResult: results + answer → sources", () => {
+  const data = {
+    answer: "AI generated summary",
+    results: [
+      { url: "https://a.com", title: "A", content: "content A", score: 0.9 },
+      { url: "https://b.com", title: "B", content: "content B", score: 0.8 },
+    ],
+  };
+  const got = parseTavilyResult(data, 8);
+  assert.equal(got.length, 3); // answer + 2 results
+  assert.equal(got[0].url, "tavily://answer");
+  assert.equal(got[0].title, "Tavily AI Answer");
+  assert.equal(got[0].snippet, "AI generated summary");
+  assert.equal(got[1].url, "https://a.com");
+  assert.equal(got[1].title, "A");
+  assert.equal(got[1].snippet, "content A");
+  assert.equal(got[2].url, "https://b.com");
+});
+
+test("parseTavilyResult: without answer", () => {
+  const data = {
+    results: [{ url: "https://a.com", title: "A", content: "content A" }],
+  };
+  const got = parseTavilyResult(data, 8);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].url, "https://a.com");
+});
+
+test("parseTavilyResult: caps at maxResults", () => {
+  const data = {
+    answer: "answer",
+    results: Array.from({ length: 20 }, (_, i) => ({
+      url: `https://x${i}.com`,
+      title: "x",
+      content: "desc",
+    })),
+  };
+  const got = parseTavilyResult(data, 5);
+  assert.equal(got.length, 5); // answer + 4 results = 5
+});
+
+test("parseTavilyResult: empty → []", () => {
+  assert.deepEqual(parseTavilyResult({}, 8), []);
+  assert.deepEqual(parseTavilyResult({ results: [] }, 8), []);
+});
+
+test("parseSerperResult: organic results → sources", () => {
+  const data = {
+    organic: [
+      { link: "https://a.com", title: "A", snippet: "snippet A", position: 1 },
+      { link: "https://b.com", title: "B", snippet: "snippet B", position: 2 },
+      { link: "https://c.com", title: "C" }, // no snippet
+    ],
+    news: [
+      { link: "https://news.com", title: "News", snippet: "news snippet", date: "2024-01-01" },
+    ],
+  };
+  const got = parseSerperResult(data, 8);
+  assert.equal(got.length, 4);
+  assert.equal(got[0].url, "https://a.com");
+  assert.equal(got[0].snippet, "snippet A");
+  assert.equal(got[3].url, "https://news.com");
+  assert.equal(got[3].publishedAt, "2024-01-01");
+});
+
+test("parseSerperResult: empty → []", () => {
+  assert.deepEqual(parseSerperResult({}, 8), []);
+  assert.deepEqual(parseSerperResult({ organic: [] }, 8), []);
+});
+
+test("parseSerperResult: caps at maxResults", () => {
+  const data = {
+    organic: Array.from({ length: 20 }, (_, i) => ({
+      link: `https://x${i}.com`,
+      title: "x",
+      snippet: "desc",
+    })),
+  };
+  const got = parseSerperResult(data, 5);
+  assert.equal(got.length, 5);
+});
+
+test("parseSearxngResult: results → sources", () => {
+  const data = {
+    results: [
+      { url: "https://a.com", title: "A", content: "content A", engine: "google" },
+      { url: "https://b.com", title: "B", content: "content B", engine: "bing" },
+      { title: "No URL" }, // skipped
+    ],
+  };
+  const got = parseSearxngResult(data, 8);
+  assert.equal(got.length, 2);
+  assert.equal(got[0].url, "https://a.com");
+  assert.equal(got[0].title, "A");
+  assert.equal(got[0].snippet, "content A");
+  assert.equal(got[0].sourceEngine, "google");
+});
+
+test("parseSearxngResult: empty → []", () => {
+  assert.deepEqual(parseSearxngResult({}, 8), []);
+  assert.deepEqual(parseSearxngResult({ results: [] }, 8), []);
+});
+
+test("parseSearxngResult: caps at maxResults", () => {
+  const data = {
+    results: Array.from({ length: 20 }, (_, i) => ({
+      url: `https://x${i}.com`,
+      title: "x",
+      content: "desc",
+      engine: "google",
+    })),
+  };
+  const got = parseSearxngResult(data, 5);
+  assert.equal(got.length, 5);
+});
+
+test("parseMojeekResult: response.results → sources", () => {
+  const data = {
+    response: {
+      results: [
+        { url: "https://a.com", title: "A", desc: "desc A", last_updated: "2024-01-01" },
+        { url: "https://b.com", title: "B", desc: "desc B" },
+        { title: "No URL" }, // skipped
+      ],
+    },
+  };
+  const got = parseMojeekResult(data, 8);
+  assert.equal(got.length, 2);
+  assert.equal(got[0].url, "https://a.com");
+  assert.equal(got[0].title, "A");
+  assert.equal(got[0].snippet, "desc A");
+  assert.equal(got[0].publishedAt, "2024-01-01");
+});
+
+test("parseMojeekResult: empty → []", () => {
+  assert.deepEqual(parseMojeekResult({}, 8), []);
+  assert.deepEqual(parseMojeekResult({ response: {} }, 8), []);
+  assert.deepEqual(parseMojeekResult({ response: { results: [] } }, 8), []);
+});
+
+test("parseMojeekResult: caps at maxResults", () => {
+  const data = {
+    response: {
+      results: Array.from({ length: 20 }, (_, i) => ({
+        url: `https://x${i}.com`,
+        title: "x",
+        desc: "desc",
+      })),
+    },
+  };
+  const got = parseMojeekResult(data, 5);
+  assert.equal(got.length, 5);
+});
