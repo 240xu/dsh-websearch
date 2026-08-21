@@ -30,52 +30,61 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 
 ## Install | 安装
 
-Drop into any node_modules dir that the dsh loader can resolve:
+### 方式一：作为 profile 依赖安装（推荐，规范做法）
 
 ```bash
-cp -r dsh-websearch /data/data/com.termux/files/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/
+cd ~/.dsh/profiles/web
+# 在 package.json 的 dependencies 里加入：
+#   "@deepseek-ai/dsh-websearch": "file:/path/to/dsh-websearch"
+pnpm install
 ```
 
-Then add this block to `~/.dsh/profiles/<profile>/cordis.patch.yml` (see [`examples/cordis.patch.yml`](examples/cordis.patch.yml)):
+插件自带 `dsh.bundle` 元数据（package.json 声明 `"dsh": {"bundle": {"patch": "./cordis.patch.yml"}}`），把它加入 profile package.json 的 `dsh.profile.bundles` 列表后即自动注册，**无需**在 cordis.patch.yml 手写条目。
+
+只需在 `~/.dsh/profiles/web/cordis.patch.yml` 里把内置 web_search 工具指到 unified provider：
 
 ```yaml
-- id: unified-search
-  name: "@deepseek-ai/dsh-websearch"
-- id: web-search-deepseek
-  name: "@deepseek-ai/dsh-web-search-deepseek"
-  disabled: true
 - id: web
-  name: "@deepseek-ai/dsh-web"
+  name: '@deepseek-ai/dsh-web'
   config:
     searchProvider: unified
+- id: web-search-deepseek
+  name: '@deepseek-ai/dsh-web-search-deepseek'
+  disabled: true
 ```
 
-Restart `dsh web`. The built-in `web_search` tool now resolves through **unified**.
+重启 `dsh web` 即生效。
 
 ## Settings | 配置
 
-The plugin installs a `settings:` section keyed `web.unified-search`. Override the enabled-backends list, numResults, base URLs, model names, and credential references per key-gated backend there. Defaults live in [`lib/index.js`](lib/index.js) (`Config` / `resolveOptions`).
+插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），全部字段扁平化、开箱可编辑：
 
-### Settings Panel GUI
+**全局**
 
-在 DSH Web GUI 的 Settings 面板中，会自动出现 **"Unified Search"** 板块，包含：
-
-- **后端表格**：启用 ✅ | 名称 | 类型 (keyless/credential/mcp) | API Key (密码框) | Base URL | Model
-- **每行可拖拽排序**——决定 fan-out 优先级
-- **全局设置**：默认结果数、并发数、超时时间
-
-### Env-var fallbacks (when the settings section is empty or omitted)
-
-| backend | env var | when absent |
+| 字段 | 默认 | 说明 |
 |---|---|---|
-| deepseek | `DEEPSEEK_API_KEY` | backend stays unavailable (keyless-only set runs) |
-| anthropic | `ANTHROPIC_API_KEY` | same |
-| openai | `OPENAI_API_KEY` | same |
-| brave | `BRAVE_API_KEY` | same |
-| tavily | `TAVILY_API_KEY` | same |
-| serper | `SERPER_API_KEY` | same |
-| mojeek | `MOJEEK_API_KEY` | same |
-| global override of backend set | `DSH_UNIFIED_SEARCH_BACKENDS` (comma-separated ids) | falls back to the keyless-only default |
+| `numResults` | 8 | 每次搜索返回结果数（1-50） |
+| `concurrency` | 6 | 并发后端数（1-10） |
+| `backendTimeoutMs` | 30000 | 单后端超时毫秒 |
+
+**11 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai`（默认关）
+
+**API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
+
+| 字段 | 默认引用 |
+|---|---|
+| `braveApiKeyEnv` | `BRAVE_API_KEY` |
+| `tavilyApiKeyEnv` | `TAVILY_API_KEY` |
+| `serperApiKeyEnv` | `SERPER_API_KEY` |
+| `mojeekApiKeyEnv` | `MOJEEK_API_KEY` |
+| `deepseekApiKeyEnv` | `DEEPSEEK_API_KEY` |
+| `anthropicApiKeyEnv` | `ANTHROPIC_API_KEY` |
+| `openaiApiKeyEnv` | `OPENAI_API_KEY` |
+| `searxngApiKeyEnv` | `SEARXNG_API_KEY`（私有实例可选） |
+
+**Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
+
+环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
 ## Design | 设计
 
