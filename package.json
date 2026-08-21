@@ -8,7 +8,8 @@
     ".": {
       "default": "./lib/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
   },
   "files": [
     "lib",
@@ -54,6 +55,16 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "slots",
+        "locale",
+        "connection",
+        "remote",
+        "settingsScope"
+      ],
+      "platform": "web"
     }
   }
 }
