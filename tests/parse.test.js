@@ -252,14 +252,13 @@ test("parseTavilyResult: results + answer → sources", () => {
     ],
   };
   const got = parseTavilyResult(data, 8);
-  assert.equal(got.length, 3); // answer + 2 results
-  assert.equal(got[0].url, "tavily://answer");
-  assert.equal(got[0].title, "Tavily AI Answer");
-  assert.equal(got[0].snippet, "AI generated summary");
-  assert.equal(got[1].url, "https://a.com");
-  assert.equal(got[1].title, "A");
-  assert.equal(got[1].snippet, "content A");
-  assert.equal(got[2].url, "https://b.com");
+  // answer now surfaces as result.content per the seam contract, not a fake source
+  assert.equal(got.sources.length, 2);
+  assert.equal(got.content, "AI generated summary");
+  assert.equal(got.sources[0].url, "https://a.com");
+  assert.equal(got.sources[0].title, "A");
+  assert.equal(got.sources[0].snippet, "content A");
+  assert.equal(got.sources[1].url, "https://b.com");
 });
 
 test("parseTavilyResult: without answer", () => {
@@ -267,8 +266,9 @@ test("parseTavilyResult: without answer", () => {
     results: [{ url: "https://a.com", title: "A", content: "content A" }],
   };
   const got = parseTavilyResult(data, 8);
-  assert.equal(got.length, 1);
-  assert.equal(got[0].url, "https://a.com");
+  assert.equal(got.sources.length, 1);
+  assert.equal(got.content, undefined);
+  assert.equal(got.sources[0].url, "https://a.com");
 });
 
 test("parseTavilyResult: caps at maxResults", () => {
@@ -281,12 +281,14 @@ test("parseTavilyResult: caps at maxResults", () => {
     })),
   };
   const got = parseTavilyResult(data, 5);
-  assert.equal(got.length, 5); // answer + 4 results = 5
+  // maxResults bounds sources only; the answer rides in content, not counted
+  assert.equal(got.sources.length, 5);
+  assert.equal(got.content, "answer");
 });
 
 test("parseTavilyResult: empty → []", () => {
-  assert.deepEqual(parseTavilyResult({}, 8), []);
-  assert.deepEqual(parseTavilyResult({ results: [] }, 8), []);
+  assert.deepEqual(parseTavilyResult({}, 8).sources, []);
+  assert.deepEqual(parseTavilyResult({ results: [] }, 8).sources, []);
 });
 
 test("parseSerperResult: organic results → sources", () => {

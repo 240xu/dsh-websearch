@@ -162,3 +162,31 @@ test("provider: respects maxResults cap on merged output", async () => {
   const result = await provider.search({ query: "q", maxResults: 5 });
   assert.ok(result.sources.length <= 5, "should cap at maxResults=5");
 });
+
+test("provider: propagates backend content (e.g. Tavily answer) into result.content", async () => {
+  const contentBackend = {
+    id: "answery",
+    requiresCredential: false,
+    available: () => true,
+    async search() {
+      return { sources: [{ url: "https://a.com", title: "A" }], content: "AI summary of the query" };
+    },
+  };
+  const plainBackend = {
+    id: "plain",
+    requiresCredential: false,
+    available: () => true,
+    async search() {
+      return { sources: [{ url: "https://b.com", title: "B" }] };
+    },
+  };
+
+  const provider = createUnifiedSearchProvider({
+    ctx: {},
+    resolveOptions: () => ({ enabledBackends: ["answery", "plain"], numResults: 5, backends: {} }),
+    backends: { answery: contentBackend, plain: plainBackend },
+  });
+  const r = await provider.search({ query: "q" });
+  assert.equal(r.content, "AI summary of the query");
+  assert.equal(r.sources.length, 2);
+});
