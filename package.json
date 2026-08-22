@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-websearch",
+  "name": "dsh-websearch",
   "version": "2.0.0",
   "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search tool.",
   "type": "module",

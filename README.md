@@ -35,7 +35,7 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 ```bash
 cd ~/.dsh/profiles/web
 # 在 package.json 的 dependencies 里加入：
-#   "@deepseek-ai/dsh-websearch": "file:/path/to/dsh-websearch"
+#   "dsh-websearch": "file:/path/to/dsh-websearch"
 pnpm install
 ```
 
