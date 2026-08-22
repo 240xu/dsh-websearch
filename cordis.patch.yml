@@ -1,3 +1,3 @@
 - insert:
     - id: dsh-websearch
-      name: dsh-websearch
+      name: '@240xu/dsh-websearch'

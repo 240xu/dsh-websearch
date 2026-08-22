@@ -1,4 +1,4 @@
-# dsh-websearch
+# @240xu/dsh-websearch
 
 > Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to eleven backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
 
@@ -35,7 +35,7 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 ```bash
 cd ~/.dsh/profiles/web
 # 在 package.json 的 dependencies 里加入：
-#   "dsh-websearch": "file:/path/to/dsh-websearch"
+#   "@240xu/dsh-websearch": "file:/path/to/@240xu/dsh-websearch"
 pnpm install
 ```
 
