@@ -17,7 +17,7 @@
 ## GitHub push 决策
 
 ### 事实
-1. 用户的 240xu PAT `ghp_4if72UTy7ecy...` 失效 → GitHub API 401。
+1. 用户的 240xu PAT `ghp_*(已撤销)` 失效 → GitHub API 401。
 2. `240xu` (id 288388160) 与 `gh218` (id 317147606) 是两个**独立 GitHub 账号**,不是别名。两者各有独立 repos。
 3. 本机 `gh` CLI 登录账号是 `gh218`(token `gho_...`, scopes `gist read:org repo`)。
 4. 上轮创建仓库请求(用 gh218 的 oauth token)成功在 gh218 名下创建了 `dsh-unified-search` 仓库。
