@@ -1,5 +1,8 @@
 # @240xu/dsh-websearch
 
+[![npm version](https://img.shields.io/npm/v/@240xu/dsh-websearch.svg)](https://www.npmjs.com/package/@240xu/dsh-websearch)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 > Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to eleven backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
 
 A pure-Cordis drop-in: registers ONE provider at `ctx.web` so the `dsh-web` selection rule never fires `WEB_PROVIDER_AMBIGUOUS`. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek) auto-activate once their key is supplied via the credentials service or env.
@@ -56,6 +59,10 @@ pnpm install
 重启 `dsh web` 即生效。
 
 ## Settings | 配置
+
+> v2.0.3 起，配置界面位于 **Settings → 左侧栏「搜索 / Web Search」**（顶级分区，与通用/模型/插件同级）。
+> 每个 API Key 字段旁有 **「获取 Key ↗」** 直达对应平台控制台；保存即写入凭证库并立即生效。
+
 
 插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），全部字段扁平化、开箱可编辑：
 

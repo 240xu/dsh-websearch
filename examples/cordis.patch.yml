@@ -1,17 +1,25 @@
-# ── dsh-websearch v2.0: unified free web search ───────────────────────
-# Registers provider id "unified" that fans out to 11 backends concurrently:
-#   keyless:    exa, parallel, ddg, searxng
-#   key-gated:  deepseek, anthropic, openai, brave, tavily, serper, mojeek
-#               (activate when their API key is set via Settings > Unified Search)
+# dsh-websearch v2.0.3 — user-side profile patch example
 #
-# web-search-deepseek stays disabled because the unified plugin supersedes it.
-# web.searchProvider pins the built-in web_search tool onto the unified provider.
-- id: unified-search
-  name: "@deepseek-ai/dsh-websearch"
+# The plugin itself is registered by its own bundle manifest
+# (dsh.bundle in package.json + cordis.patch.yml at the repo root),
+# so after installing it there is NOTHING to add for the plugin row.
+#
+# What you DO need in your profile patch: pin the built-in web_search
+# tool onto the unified provider and disable the superseded official one.
+
 - id: web-search-deepseek
-  name: "@deepseek-ai/dsh-web-search-deepseek"
+  name: '@deepseek-ai/dsh-web-search-deepseek'
   disabled: true
 - id: web
-  name: "@deepseek-ai/dsh-web"
+  name: '@deepseek-ai/dsh-web'
   config:
     searchProvider: unified
+
+# Install:
+#   dsh plugin --profile web add github:240xu/dsh-websearch
+# or (after npm publish):
+#   dsh plugin --profile web add @240xu/dsh-websearch
+#
+# Then open Settings -> Web Search to toggle backends, store API keys
+# (each field links straight to the provider's key dashboard), and tune
+# concurrency / timeouts.
