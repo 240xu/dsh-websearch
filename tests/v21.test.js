@@ -215,3 +215,23 @@ test("brave: freshness param + safesearch off when configured", async () => {
   assert.equal(u.searchParams.get("freshness"), "pd");
   assert.equal(u.searchParams.get("safesearch"), "off");
 });
+
+// ---------- ddg latent-crash regression (throwIfSearchAborted was used but
+// never imported since the v2.0 abort-guard refactor — every real call died) ----------
+test("ddg: search executes end-to-end with mocked HTML", async () => {
+  const html = '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fok.example%2Fx&amp;rut=abc">Result Title</a>' +
+    '<a class="result__snippet" href="#">A snippet</a>';
+  mockFetch(() => ({ ok: true, status: 200, text: async () => html }));
+  const { ddgBackend } = await import("../lib/backends/ddg.js");
+  const out = await ddgBackend.search({ query: "q", maxResults: 5 }, undefined, {}, {});
+  assert.equal(out.sources.length, 1);
+  assert.equal(out.sources[0].url, "https://ok.example/x");
+  assert.equal(out.sources[0].title, "Result Title");
+});
+
+test("ddg: recency filter adds df form field", async () => {
+  mockFetch(() => ({ ok: true, status: 200, text: async () => "" }));
+  const { ddgBackend } = await import("../lib/backends/ddg.js");
+  await ddgBackend.search({ query: "q", maxResults: 3, filters: { recency: "week" } }, undefined, {}, {});
+  assert.ok(calls[0].init.body.includes("df=w"));
+});

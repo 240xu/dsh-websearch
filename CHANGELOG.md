@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.1 - 2026-08-25
+
+### Fixed
+
+- ddg.js crashed on EVERY real search (throwIfSearchAborted is not defined):
+  the v2.0 abort-guard refactor added the call but never the import, and no
+  test executed the backend end-to-end so it slipped through. Two regression
+  tests now run ddgBackend.search against mocked HTML.
+
 ## 2.1.0 - 2026-08-25
 
 ### Added
@@ -45,3 +54,4 @@
 
 - Five new backends (Brave, Tavily, Serper, SearXNG, Mojeek) on the unified
   fan-out architecture; GUI metadata config schema.
+
