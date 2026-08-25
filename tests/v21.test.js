@@ -235,3 +235,42 @@ test("ddg: recency filter adds df form field", async () => {
   await ddgBackend.search({ query: "q", maxResults: 3, filters: { recency: "week" } }, undefined, {}, {});
   assert.ok(calls[0].init.body.includes("df=w"));
 });
+
+// ---------- failure enumeration & actionable all-fail message ----------
+
+test("all-fail error enumerates each backend's own reason", async () => {
+  const boom = {
+    id: "boom",
+    requiresCredential: false,
+    available() { return true; },
+    async search() { throw new WebError("boom exploded", "WEB_PROVIDER_ERROR"); },
+  };
+  const meh = {
+    id: "meh",
+    requiresCredential: false,
+    available() { return true; },
+    async search() { throw new WebError("quota exhausted", "WEB_PROVIDER_ERROR"); },
+  };
+  const { provider } = makeProvider({ boom, meh });
+  await assert.rejects(
+    provider.search({ query: "q", maxResults: 5 }),
+    (err) => err instanceof WebError
+      && /all enabled backends failed .2./.test(err.message)
+      && /boom: boom exploded/.test(err.message)
+      && /meh: quota exhausted/.test(err.message),
+  );
+});
+
+test("all-key-missing failure carries settings guidance", async () => {
+  const keyed = {
+    id: "keyed",
+    requiresCredential: true,
+    available() { return true; },
+    async search() { throw new WebError("keyed: API key not configured", "WEB_PROVIDER_UNAVAILABLE"); },
+  };
+  const { provider } = makeProvider({ keyed });
+  await assert.rejects(
+    provider.search({ query: "q", maxResults: 5 }),
+    (err) => /Settings > Web Search/.test(err.message) && /missing its API key/.test(err.message),
+  );
+});

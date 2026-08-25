@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.2.0 - 2026-08-25
+
+### Fixed (P0)
+
+- Session-log landmine removed: per-backend request/outcome diagnostics no
+  longer append custom event types to the session ledger. The session event
+  vocabulary is a closed generated set and session.append() cannot mark an
+  envelope ignorable, so ANY session that ran a search was refused by the
+  persistence read path on next load (writes succeeded, reads failed).
+  Diagnostics now go to the host logger (ctx.logger), which is what
+  out-of-repo plugins must use.
+
+### Changed (UX)
+
+- All-backends-failed errors now enumerate each backend's own reason and,
+  when every enabled backend lacks its key, point at Settings > Web Search.
+- Settings card: API-key inputs detect env-shadowed references via
+  credentials.describe().writable - they render read-only with an
+  "provided by env" badge instead of failing a doomed write.
+- Per-key save failures are isolated and named instead of failing the whole
+  card silently; SETTINGS_CONFLICT writes surface a retry banner.
+
+### Tests
+
+- Failure-enumeration, key-missing-guidance and ddg end-to-end regression
+  coverage (68 total).
+
 ## 2.1.1 - 2026-08-25
 
 ### Fixed
