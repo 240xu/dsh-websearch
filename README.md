@@ -73,6 +73,13 @@ pnpm install
 | `numResults` | 8 | 每次搜索返回结果数（1-50） |
 | `concurrency` | 6 | 并发后端数（1-10） |
 | `backendTimeoutMs` | 30000 | 单后端超时毫秒 |
+| `recency` | any | 时间范围过滤：day / week / month / year（映射到各后端原生参数） |
+| `language` | 空 | 搜索语言，如 en、zh-CN（SearXNG/Brave/Serper 支持） |
+| `safeSearch` | true | 安全搜索开关（SearXNG/Brave 支持） |
+| `dedupStrategy` | url | url 仅按链接去重；url+title 额外合并同标题的转载镜像 |
+| `rerank` | false | 按查询词相关性重排序（确定性；并列时保持后端优先级） |
+
+**v2.1 结果策略**：设置面板新增「结果策略」分区。时间/语言过滤按各后端能力自动映射——Brave `freshness/country/search_lang`、Tavily `time_range`、Serper `tbs/hl/gl`（Google 日期语法）、SearXNG `time_range/language`、DDG `df`；不支持的后端自动忽略对应维度。内部超时以真实原因失败（backend "<id>" timed out after Nms），不再被静默降级为取消；Mojeek 的 API Key 改走 Authorization 头，不再出现在 URL 中。
 
 **11 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai`（默认关）
 
@@ -98,7 +105,9 @@ pnpm install
 - **One provider, no ambiguity**: a single `registeredSearchProvider({id:"unified"})` — the `dsh-web` seam's selection rule picks it unambiguously, and `search()` caps `maxResults` itself.
 - **`Promise.allSettled` fan-out**: every enabled + available backend fires concurrently; a single backend failure is demoted to a soft `null` so the rest still contribute — only when ALL fail does the provider throw `WEB_PROVIDER_ERROR`.
 - **Per-backend abort demotion**: a single backend aborting becomes soft-null; the provider only rethrows `WEB_ABORTED` when the caller's own `AbortSignal` fires.
-- **URL dedup + merge**: results across backends are merged and deduped by case-insensitive URL; missing title/snippet/publishedAt from one backend get filled in from another (e.g. Exa's title + Parallel's excerpt).
+- **Dedup strategies**: `url` keeps the historical URL-key merge with cross-backend field fill-in; `url+title` additionally collapses same-story syndicated mirrors (title Jaccard >= 0.9, CJK-aware tokenizer) while still enriching the kept entry.
+- **Deterministic rerank (optional)**: query-term overlap scoring (title x3 / snippet x2 / URL x1); stable ties preserve fan-out priority — same input always yields the same order.
+- **Honest timeouts**: each backend runs under an internal abort controller merged into the caller signal; when only the internal timer fires, the failure is reclassified as WEB_PROVIDER_ERROR ("backend <id> timed out") instead of being masked as a user cancellation.
 - **Concurrency & Timeout Control**: `concurrency` (default 6) limits simultaneous calls; `backendTimeoutMs` (default 30s) caps each backend.
 - **Streamable-http MCP, custom handshake**: `lib/util/mcp-client.js` implements `initialize → notifications/initialized → tools/call` with `Mcp-Session-Id` header caching against Exa and Parallel — no dependency on the full MCP SDK.
 - **hooks.recordRequest/recordOutcome bridge**: each backend routes its request/outcome to `lib/util/log.js` which records `web/unified-search-backend-request` / `…backend-outcome` events onto the active DSH session via `ctx.get("agents")?.currentInitiator()?.session.append(...)` (mirrors `dsh-web-search-deepseek`).
