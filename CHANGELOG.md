@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.4.0 - 2026-08-25
+
+Multi-judge review round: 5 independent reviewers; findings cross-validated before fixing.
+
+### Fixed
+- Panel: SearXNG no longer misgrouped as key-requiring (optionalKey flag); the false
+  missing-key warning is gone; optional private-instance keys moved to their own section.
+- rank.js rerank URL-tokenizer stripped uppercase before lowercasing, so URL match
+  weight silently failed on capitalized URLs.
+- provider: numResults now propagates into every backend fetch (it previously only
+  applied to the final slice).
+- provider: allKeyMissing guidance also fires for WEB_PROVIDER_CREDENTIAL_MISSING
+  (deepseek/anthropic/openai paths).
+- parallel.js outcome recorded after the isError check (mirrors the exa fix).
+- ~400 lines of dead code removed (util/rpc.js legacy MCP client + duplicate
+  backends/index.js registry).
+
+### Hardened (security judge findings)
+- baseURL trust-boundary guard: https enforced (plain http only for private hosts),
+  credentials-in-URL rejected - API keys can no longer follow a misconfigured endpoint.
+- Server-controlled error bodies truncated to 300 chars before entering errors/logs;
+  host-log outcome payloads capped at 500 chars.
+- Result URLs scheme-whitelisted to http(s) at merge time (javascript:/data: from
+  poisoned backends never reach consumers); DDG uddg decoding covered transitively.
+- redirect:error on all REST backends (previously inconsistent).
+- mcp-client: SSE multi-data-line envelopes parsed; notification response drained;
+  parallel session id no longer leaks pid (crypto.randomUUID).
+
+### UX
+- Read-only scope banner with disabled save; toggle writes surface conflict/failure
+  instead of silent rejection; validation failures name the offending fields; an all-off
+  state shows the fallback hint; telemetry line includes truncated failure reason.
+- README: stale session.append design text replaced with the host-logger reality;
+  availability semantics corrected; test command generalized.
 ## 2.3.0 - 2026-08-25
 
 ### Added

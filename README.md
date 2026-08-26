@@ -29,7 +29,7 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` | Anthropic Messages + `web_search_20250305`, model `claude-sonnet-4-6` | Claude Code 同机制 |
 | `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` | Responses API native `web_search` tool, parse `url_citation` annotations | Codex 同机制 |
 
-**Default enabled set**: `["exa", "parallel", "ddg", "searxng"]` — all keyless. The key-gated backends only join when their `available()` returns true (key present + baseURL reachable).
+> 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
 
 ### SearXNG 实例 | Public instances
 
@@ -125,7 +125,7 @@ pnpm install
 - **Honest timeouts**: each backend runs under an internal abort controller merged into the caller signal; when only the internal timer fires, the failure is reclassified as WEB_PROVIDER_ERROR ("backend <id> timed out") instead of being masked as a user cancellation.
 - **Concurrency & Timeout Control**: `concurrency` (default 6) limits simultaneous calls; `backendTimeoutMs` (default 30s) caps each backend.
 - **Streamable-http MCP, custom handshake**: `lib/util/mcp-client.js` implements `initialize → notifications/initialized → tools/call` with `Mcp-Session-Id` header caching against Exa and Parallel — no dependency on the full MCP SDK.
-- **hooks.recordRequest/recordOutcome bridge**: each backend routes its request/outcome to `lib/util/log.js` which records `web/unified-search-backend-request` / `…backend-outcome` events onto the active DSH session via `ctx.get("agents")?.currentInitiator()?.session.append(...)` (mirrors `dsh-web-search-deepseek`).
+- **Host-logger diagnostics**: each backend routes request/outcome through lib/util/log.js to the host logger (ctx.logger), best-effort and never thrown - deliberately NOT session events: the session event vocabulary is a closed set third-party plugins must not extend (an unknown envelope type makes the whole session log unreadable).
 
 ## Architecture | 架构
 
@@ -157,7 +157,7 @@ tests/
 ## Test | 测试
 
 ```bash
-node --test tests/parse.test.js tests/provider.test.js
+node --test tests/
 ```
 
 33/33 pass.
