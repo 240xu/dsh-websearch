@@ -187,6 +187,7 @@ test("provider: propagates backend content (e.g. Tavily answer) into result.cont
     backends: { answery: contentBackend, plain: plainBackend },
   });
   const r = await provider.search({ query: "q" });
-  assert.equal(r.content, "AI summary of the query");
+  // telemetry line (default on) appends after the propagated answer
+  assert.ok(r.content.startsWith("AI summary of the query\n\n[websearch backends] "));
   assert.equal(r.sources.length, 2);
 });

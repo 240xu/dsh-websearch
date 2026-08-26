@@ -274,3 +274,33 @@ test("all-key-missing failure carries settings guidance", async () => {
     (err) => /Settings > Web Search/.test(err.message) && /missing its API key/.test(err.message),
   );
 });
+test("provider: resultTelemetry=false keeps content pristine", async () => {
+  const contentBackend = {
+    id: "answery",
+    requiresCredential: false,
+    available: () => true,
+    async search() {
+      return { sources: [{ url: "https://a.com", title: "A" }], content: "AI summary of the query" };
+    },
+  };
+  const provider = createUnifiedSearchProvider({
+    ctx: {},
+    resolveOptions: () => ({ enabledBackends: ["answery"], numResults: 5, backends: {}, resultTelemetry: false }),
+    backends: { answery: contentBackend },
+  });
+  const r = await provider.search({ query: "q" });
+  assert.equal(r.content, "AI summary of the query");
+});
+
+test("provider: telemetry line lists per-backend status and duration", async () => {
+  const okBe = staticBackend("okbe", [{ url: "https://ok.example", title: "OK" }]);
+  const badBe = {
+    id: "badbe",
+    requiresCredential: false,
+    available: () => true,
+    async search() { throw new WebError("down", "WEB_PROVIDER_ERROR"); },
+  };
+  const { provider } = makeProvider({ okBe, badBe });
+  const res = await provider.search({ query: "q", maxResults: 5 });
+  assert.match(res.content, /\[websearch backends\] okBe ✓\d+ms\/1 · badBe ✗\d+ms/);
+});

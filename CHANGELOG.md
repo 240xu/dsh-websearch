@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.0 - 2026-08-25
+
+### Added
+
+- Result health telemetry (default on): every search appends a compact
+  [websearch backends] line (per-backend status + duration) to result.content so
+  the agent can self-diagnose and guide the user; resultTelemetry=false opts out.
+- SearXNG network failures hint at switching searxngBaseURL; README documents a
+  curated public-instance table.
+- Settings panel: telemetry toggle in the shaping section.
+
+
 ## 2.2.0 - 2026-08-25
 
 ### Fixed (P0)
