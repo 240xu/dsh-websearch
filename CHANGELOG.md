@@ -1,5 +1,69 @@
 # Changelog
 
+## 2.7.2 - 2026-09-27
+
+- Settings: the six v2.7 fields carry user-language labels at the schema layer
+  (meta.label + top-level .label, units in the tail — e.g. "缓存有效期（秒）"),
+  and descriptions now open with the human-readable name (fe-ui W1 remainder;
+  on-device rendering tracked as visual-check V5).
+
+## 2.7.1 - 2026-09-26
+
+Review fixes (arch-review P1-1 + P2×3, fe-ui W1):
+
+- Fixed: cache key now includes the enabledBackends selection set — switching
+  the backend mix no longer serves a stale result from the old combination.
+- Hardened: the cache-hit path re-applies the URL scheme whitelist (a tampered
+  cache file cannot smuggle javascript:/data: sources to the model).
+- Fixed: history record() serializes through an in-process promise chain (no
+  lost updates on concurrent search completions); /api/websearch/* routes sit
+  behind a trust fence (loopback Host + same-site browser context).
+- Changed: breakerCooldownMs=0 now explicitly disables the cooldown window
+  (it previously fell back to 60s); user-language settings labels with
+  cache/breaker/history grouping; window event dsh-websearch:open-settings
+  (ready flag + ack) for devkit command interop.
+
+## 2.7.0 - 2026-09-25
+
+Three opt-out-by-default features; the v2.6.0 prompting layer is untouched.
+
+### Added
+- Disk result cache (lib/cache.js): keyed on shaped query + filters +
+  maxResults + enabled backends; TTL 900s, 200-entry cap with oldest-by-mtime
+  eviction; atomic tmp+rename writes under $DSH_HOME/cache/websearch/results/;
+  hits skip the fan-out entirely and append a "[websearch cache] cache hit,
+  age Ns" note. Settings: cacheEnabled / cacheTtl.
+- Backend circuit breaker (lib/breaker.js): 3 consecutive failures cool a
+  backend for 60s (telemetry: "id ⏸cooled Ns"); state folds into the shared
+  health entry (failCount/cooledUntil); fail-open when every candidate is
+  cooled — the breaker can only make search faster, never worse.
+  Settings: breakerEnabled / breakerThreshold / breakerCooldownMs.
+- Search history API (lib/history.js): append-only ring of 50
+  {query, time, resultCount, backendsOk, backendsTotal} in history.json;
+  GET /api/websearch/history (read-only) + POST /api/websearch/history/clear.
+  Settings: historyEnabled.
+
+## 2.6.0 - 2026-09-24
+
+Systematic search prompting (lib/prompting.js), per Tavily/Exa/Anthropic/OpenAI
+official guidance:
+
+- Deterministic query shaping before fan-out: conversational filler stripped
+  (EN+ZH), whitespace compressed, 1500-char clamp; entities/versions/dates
+  never rewritten.
+- Result-presentation header at the top of the model-visible content: cite the
+  URL for every fact, prefer official/primary and newer sources, ignore
+  off-topic snippets; language auto-selected (zh/en).
+- Telemetry line self-labeled "(diagnostic only, not a source)" so models do
+  not mistake backend health telemetry for result sources.
+
+## 2.5.0 - 2026-09-20
+
+- Read-only GET /api/unified-search/health: enabled/keyless/reachable per
+  backend from the last real search's telemetry — never probes anything
+  (quota safety), error strings truncated + token-redacted.
+- Module-level per-search backend telemetry capture powering the health route.
+
 ## 2.4.0 - 2026-08-25
 
 Multi-judge review round: 5 independent reviewers; findings cross-validated before fixing.
