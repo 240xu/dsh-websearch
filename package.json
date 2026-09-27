@@ -1,7 +1,7 @@
 {
   "name": "@240xu/dsh-websearch",
-  "version": "2.6.0",
-  "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search tool.. v2.6.0: systematic search prompting — deterministic query shaping (filler-strip, 1500-char clamp), result-presentation header with source-citation requirements (Anthropic web-search / OpenAI grounding guidance), telemetry self-labeled diagnostic-only.",
+  "version": "2.7.0",
+  "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search tool. v2.7.0: disk result cache (TTL 900s, 200 entries, atomic tmp+rename), per-backend circuit breaker (3 consecutive failures -> 60s cooldown, fail-open when all cooled), append-only search history API (GET /api/websearch/history, ring of 50).",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

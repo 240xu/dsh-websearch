@@ -115,6 +115,31 @@ pnpm install
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
+## v2.7.0 新增 | What's new in v2.7.0
+
+三大增量功能，全部经设置开关控制、默认为保守值，且不改变既有结果语义（v2.6.0 提示词原样保留）：
+
+### 1. 搜索结果磁盘缓存（默认开）
+
+- 相同 **(整形后查询 + filters + maxResults)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
+- 命中时 `content` 追加一行 `[websearch cache] cache hit, age Ns`。
+- 存储位置：`$DSH_HOME/cache/websearch/results/`，单条目一个 JSON 文件，tmp+rename 原子写，超出上限按最旧淘汰；任何 fs 错误都被吞掉，缓存坏了绝不影响搜索。
+- 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900）。
+
+### 2. 后端熔断器（默认开，保守阈值）
+
+- 同一后端**连续失败 3 次**进入 **60s 冷却**；冷却期内 eligible 选择直接跳过该后端，遥测行标注 `id ⏸cooled Ns`。
+- 状态与 `recordBackendHealth` 共用（健康条目新增 `failCount` / `openUntil` 字段），任意一次成功立即复位。
+- **Fail-open 兜底**：若所有候选后端都处于冷却期，则全部放行照常扇出——熔断器永远只会让搜索更快，不会让它更差。
+- 设置：`breakerEnabled`（默认 true）、`breakerThreshold`（默认 3）、`breakerCooldownMs`（默认 60000）。
+
+### 3. 搜索历史 API（默认开，只追加 / 只读暴露）
+
+- 每次搜索（含缓存命中）追加一条记录，环形上限 50 条，新在前；文件 `$DSH_HOME/cache/websearch/history.json`，写前原子替换。
+- `GET /api/websearch/history` → `{ ok, entries: [{ query, time, resultCount, backendsOk, backendsTotal }] }`（只读，无凭证、无 URL）。
+- `POST /api/websearch/history/clear` → `{ ok, cleared: true }` 显式清空。
+- 设置：`historyEnabled`（默认 true）。
+
 ## Design | 设计
 
 - **One provider, no ambiguity**: a single `registeredSearchProvider({id:"unified"})` — the `dsh-web` seam's selection rule picks it unambiguously, and `search()` caps `maxResults` itself.
@@ -160,7 +185,7 @@ tests/
 node --test tests/
 ```
 
-33/33 pass.
+v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）。
 
 ## License | 许可
 

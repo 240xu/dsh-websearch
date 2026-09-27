@@ -22,43 +22,8 @@ import {
 } from "./util/log.js";
 import { dedupeSources, rerankSources } from "./util/rank.js";
 import { normalizeFilters } from "./util/filters.js";
-import { shapeQuery, resultHeader, TELEMETRY_TAG } from "./prompting.js";
-import { cacheKeyFor } from "./cache.js";
-import { foldBreaker, isCooled, cooledAnnotation } from "./breaker.js";
 
 const PROVIDER_ID = "unified";
-
-// Module-level per-backend health telemetry (id -> entry), updated on every
-// backend completion during a real search. Purely passive: nothing writes here
-// outside search(), so the read-only /api/unified-search/health route can
-// report the LAST known reachability without firing probes or burning quota.
-// Entry shape: { ok: boolean, at: ms, ms: duration, count?: number,
-//                error?: string (already truncated to 80), lastOkAt: ms|null }
-const latestBackendHealth = new Map();
-
-/** Read-only access for the health route (never mutate the returned map). */
-export function getLatestBackendHealth() {
-  return latestBackendHealth;
-}
-
-function recordBackendHealth(id, entry, breakerCfg) {
-  const prev = latestBackendHealth.get(id);
-  const breaker = foldBreaker(prev, entry.ok === true, entry.at, breakerCfg ?? undefined);
-  latestBackendHealth.set(id, {
-    ...entry,
-    lastOkAt: entry.ok === true ? entry.at : (prev && prev.lastOkAt) || null,
-    failCount: breaker.failCount,
-    openUntil: breaker.openUntil,
-  });
-}
-
-/**
- * Read-only access to one backend's breaker state (failCount / openUntil).
- */
-export function getBackendBreaker(id) {
-  const e = latestBackendHealth.get(id);
-  return e ? { failCount: e.failCount ?? 0, openUntil: e.openUntil ?? 0 } : { failCount: 0, openUntil: 0 };
-}
 
 /**
  * Simple concurrency limiter using a semaphore pattern.
@@ -95,7 +60,7 @@ function createLimiter(concurrency) {
  * @param {Function} deps.resolveOptions  () => resolved options snapshot
  * @param {object} deps.backends     keyed backend registry
  */
-export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cache, history }) {
+export function createUnifiedSearchProvider({ ctx, resolveOptions, backends }) {
   return {
     id: PROVIDER_ID,
 
@@ -127,74 +92,20 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
       ...(request?.filters ?? {}),
       });
         let effReq = { ...request, maxResults: Math.max(1, Number(request?.maxResults) || opts.numResults || 8) };
-      // 系统性查询整形（Tavily/Exa best practices）：扇出前对口语化查询做
-      // 确定性归一 —— 剥离寒暄前缀、压缩空白、截断到 1500 字符；
-      // 专名/版本号/日期原样保留，不改写语义。
-      effReq.query = shapeQuery(effReq.query);
       if (Object.keys(filters).length > 0) effReq = { ...effReq, filters };
       const maxResults = effReq.maxResults;
       const concurrency = opts.concurrency ?? 6;
       const backendTimeoutMs = opts.backendTimeoutMs ?? 30000;
 
-      // v2.7.0 disk cache: keyed on (shaped query + filters + maxResults).
-      // A hit short-circuits the fan-out entirely; sources are byte-identical
-      // to the first search and content carries a "cache hit, age Ns" note.
-      // Cache failures never break the search (cache API never throws).
-      const cacheEnabled = opts.cacheEnabled === true && cache;
-      let cacheKey = null;
-      if (cacheEnabled) {
-        cacheKey = cacheKeyFor({ query: effReq.query, filters, maxResults });
-        const hit = cache.get(cacheKey);
-        if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
-          let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
-          const cacheNote = `[websearch cache] cache hit, age ${hit.age}s`;
-          hitContent = hitContent === undefined ? cacheNote : hitContent + "\n\n" + cacheNote;
-          history?.record({
-            query: request?.query,
-            time: Date.now(),
-            resultCount: hit.value.sources.length,
-            backendsOk: 0,
-            backendsTotal: 0,
-          });
-          return {
-            sources: hit.value.sources,
-            ...(hitContent !== undefined ? { content: hitContent } : {}),
-            truncated: hit.value.truncated === true,
-          };
-        }
-      }
-
-      // Pick enabled & available backends. With the breaker enabled, a
-      // backend inside its 60s cooldown window is skipped (annotated in
-      // telemetry as "id ⏸cooled"). Fail-open: if EVERY candidate is cooled,
-      // run them all anyway — the breaker must never make search worse than
-      // no breaker.
-      const breakerCfg = opts.breakerEnabled === false ? null : {
-        threshold: opts.breakerThreshold,
-        cooldownMs: opts.breakerCooldownMs,
-      };
-      const nowMs = Date.now();
-      const candidates = [];
+      // Pick enabled & available backends.
+      const eligible = [];
       for (const id of opts.enabledBackends) {
         const be = backends[id];
         if (!be) continue;
         const beOpts = opts.backends?.[id] ?? {};
         const avail = be.available(beOpts);
         if (!avail) continue;
-        candidates.push({ id, backend: be, beOpts });
-      }
-      const cooled = new Map();
-      let eligible = candidates;
-      if (breakerCfg) {
-        const active = candidates.filter((c) => {
-          if (isCooled(latestBackendHealth.get(c.id), nowMs)) {
-            cooled.set(c.id, latestBackendHealth.get(c.id));
-            return false;
-          }
-          return true;
-        });
-        if (active.length > 0) eligible = active;
-        else cooled.clear(); // all cooled -> fail-open
+        eligible.push({ id, backend: be, beOpts });
       }
 
       if (eligible.length === 0) {
@@ -241,13 +152,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
           .then(
             (value) => {
               telemetry.push({ id, ok: true, ms: Date.now() - startedAtMs, count: value?.sources?.length ?? 0 });
-              recordBackendHealth(id, { ok: true, at: Date.now(), ms: Date.now() - startedAtMs, count: value?.sources?.length ?? 0 }, breakerCfg);
               return value;
             },
             (err) => {
-              const msg = String(err instanceof Error ? err.message : err).slice(0, 80);
-              telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: msg });
-              recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg);
+              telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: String(err instanceof Error ? err.message : err).slice(0, 80) });
               throw err;
             },
           )
@@ -332,37 +240,11 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
       // If we got ANY sources, return them even if some backends failed.
       if (ordered.length > 0) {
         const sources = ordered.slice(0, maxResults);
-        // 结果呈现头（Anthropic web-search / OpenAI grounding 官方指引）：
-        // 置于结果块最前，要求逐条引用来源 URL、优先官方/一手与较新来源；
-        // 语言按查询文本自动选择（含 CJK 用中文头）。可用
-        // opts.resultHeader === false 关闭。
         let outContent = mergedContent;
-        if (opts.resultHeader !== false && (sources.length > 0 || outContent !== undefined)) {
-          const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
-          outContent = outContent === undefined ? header : header + "\n\n" + outContent;
-        }
-        // Store the pre-telemetry core (sources + headered content) so a cache
-        // hit reproduces the exact sources and the model-facing header.
-        if (cacheKey && cache) {
-          cache.set(cacheKey, { sources, content: outContent, truncated: ordered.length > maxResults });
-        }
-        history?.record({
-          query: request?.query,
-          time: Date.now(),
-          resultCount: sources.length,
-          backendsOk: telemetry.filter((t) => t.ok).length,
-          backendsTotal: telemetry.length,
-        });
-        if (opts.resultTelemetry !== false && (telemetry.length > 0 || cooled.size > 0)) {
-          const cooledParts = [];
-          for (const [cid, centry] of cooled) {
-            const ann = cooledAnnotation(centry, Date.now()) || "⏸cooled";
-            cooledParts.push(cid + " " + ann);
-          }
-          const parts = telemetry
+        if (opts.resultTelemetry !== false && telemetry.length > 0) {
+          const line = "[websearch backends] " + telemetry
             .map((t) => t.id + (t.ok ? " ✓" : " ✗") + t.ms + "ms" + (t.ok ? "/" + t.count : (t.error ? " (" + String(t.error).slice(0, 40) + ")" : "")))
-            .concat(cooledParts);
-          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
+            .join(" · ");
           outContent = outContent === undefined ? line : outContent + "\n\n" + line;
         }
         return {
