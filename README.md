@@ -143,7 +143,7 @@ pnpm install
 ### 2. 后端熔断器（默认开，保守阈值）
 
 - 同一后端**连续失败 3 次**进入 **60s 冷却**；冷却期内 eligible 选择直接跳过该后端，遥测行标注 `id ⏸cooled Ns`。
-- 状态与 `recordBackendHealth` 共用（健康条目新增 `failCount` / `openUntil` 字段），任意一次成功立即复位。
+- 状态与 `recordBackendHealth` 共用（健康条目新增 `failCount` / `cooledUntil` 字段），任意一次成功立即复位。
 - **Fail-open 兜底**：若所有候选后端都处于冷却期，则全部放行照常扇出——熔断器永远只会让搜索更快，不会让它更差。
 - 设置：`breakerEnabled`（默认 true）、`breakerThreshold`（默认 3）、`breakerCooldownMs`（默认 60000）。
 
@@ -200,6 +200,15 @@ node --test tests/
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）。
+
+## 权威依据与取舍 | Authoritative sources & design trade-offs
+
+v2.7.0 缓存/熔断/历史三项的依据与刻意取舍（含查证过的反例）：
+
+1. **熔断器（Circuit Breaker）**：出处 Michael T. Nygard《Release It!》(Pragmatic Bookshelf, 2007) 与 Microsoft Azure Architecture Center「Circuit Breaker pattern」https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker 。经典状态机是 Closed → Open → Half-Open（半开态放行少量探测请求）。**本插件刻意省略半开态**：冷却到期即视为 Closed（下一次真实搜索就是探测），失败则立即重新开窗——因为这里的"请求"是一次多后端扇出中的单个后端调用，探测请求必然真实发生且失败成本只是一次软降级，无需额外探测计数器；同时保留 fail-open 兜底（全部冷却时放行），比经典模式更保守。
+2. **缓存失效（TTL-only vs 事件驱动）**：Cloudflare「Retention vs Freshness (TTL)」https://developers.cloudflare.com/cache/concepts/retention-vs-freshness/ 与「Revalidation」https://developers.cloudflare.com/cache/concepts/revalidation/ 。搜索结果没有可靠的原站变更信号可订阅（网页索引持续变化），事件驱动失效无锚点；TTL-only + 把 TTL 做成设置项（默认 900s）+ key 纳入后端组合，是"可接受的最终一致性"。取舍：900s 内索引更新不可见——对搜索场景可接受，且用户可调低。
+3. **原子写（tmp + renameSync）**：POSIX 上 rename(2) 原子替换（Node 文档：newPath 已存在时覆盖）；Windows 上 libuv 将 fs.rename 映射为 MoveFileExW(MOVEFILE_REPLACE_EXISTING)（libuv#283 https://github.com/joyent/libuv/issues/283 ，LWN 讨论 https://lwn.net/Articles/682988/ 指出 MS 文档不承诺该调用的原子性）。**结论：POSIX 双端原子；Windows 实践上等价但官方文档不背书**——因此本插件在写入端额外做了兜底：读端永远校验 JSON 完整性、坏条目按 miss 处理并删除，即使 Windows 上出现半写状态也不会返回坏数据。
+4. **搜索历史隐私**：Article 29 Working Party 意见书 WP148 https://ec.europa.eu/justice/article-29/documentation/opinion-recommendation/files/2008/wp148_en.pdf 认定查询日志（query + 时间 + 来源标识）属个人数据；EFF 六条自保建议 https://w2.eff.org/Privacy/search/searchtips.pdf 的第一条是"别在搜索词里放 PII"——说明 query 天然可能携带 PII（人名、账号、地址）。本插件的取舍：历史只存 {query, time, resultCount, backendsOk/Total}（无 IP、无 cookie、无结果 URL）、环形 50 条自动滚动即短保留、本机存储不出网、提供 historyEnabled 开关与 POST clear 端点。**未做 query 脱敏**：脱敏会破坏"查看最近搜了什么"的核心用途，且本机单用户场景下该数据本就在 DSH 会话日志里存在；若未来历史跨设备同步，脱敏/加密是上线前置条件。
 
 ## License | 许可
 

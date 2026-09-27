@@ -78,7 +78,7 @@ test("v2.7.0 breaker: 3 consecutive failures open cooldown; cooled backend skipp
   assert.equal(be.callCount(), 3, "flaky called exactly 3 times before opening");
   const health = getLatestBackendHealth().get("flaky");
   assert.equal(health.failCount, 3, "failCount folded into health entry");
-  assert.ok(health.openUntil > Date.now(), "openUntil in the future");
+  assert.ok(health.cooledUntil > Date.now(), "cooledUntil in the future");
 
   // 4th search: flaky is cooled and must be skipped entirely.
   const r4 = await provider.search({ query: "breaker probe 4", maxResults: 8 }, undefined);
@@ -87,5 +87,5 @@ test("v2.7.0 breaker: 3 consecutive failures open cooldown; cooled backend skipp
   assert.match(r4.content, /steady ✓/, "healthy backend still reported");
   // breaker state readable
   const b = (await import("../lib/provider.js")).getBackendBreaker("flaky");
-  assert.ok(b.openUntil > Date.now());
+  assert.ok(b.cooledUntil > Date.now());
 });
