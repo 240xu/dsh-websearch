@@ -187,7 +187,9 @@ test("provider: propagates backend content (e.g. Tavily answer) into result.cont
     backends: { answery: contentBackend, plain: plainBackend },
   });
   const r = await provider.search({ query: "q" });
-  // telemetry line (default on) appends after the propagated answer
-  assert.ok(r.content.startsWith("AI summary of the query\n\n[websearch backends] "));
+  // result-presentation header (v2.6.0) prepends before the propagated answer;
+  // telemetry line (default on) appends after it, self-labeled diagnostic-only.
+  assert.ok(r.content.startsWith("Web search results (merged from multiple engines"));
+  assert.ok(r.content.includes("AI summary of the query\n\n[websearch backends] (diagnostic only, not a source) "));
   assert.equal(r.sources.length, 2);
 });

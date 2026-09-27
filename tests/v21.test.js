@@ -289,7 +289,8 @@ test("provider: resultTelemetry=false keeps content pristine", async () => {
     backends: { answery: contentBackend },
   });
   const r = await provider.search({ query: "q" });
-  assert.equal(r.content, "AI summary of the query");
+  // v2.6.0: result-presentation header prepends before the backend content.
+  assert.equal(r.content, "Web search results (merged from multiple engines, deduplicated by URL). Each entry: [n] title \u2014 URL. Prefer official / primary sources; prefer newer results for fast-moving topics; ignore entries whose snippet does not actually answer the question. Cite the URL for every fact you take from a result.\n\nAI summary of the query");
 });
 
 test("provider: telemetry line lists per-backend status and duration", async () => {
@@ -302,5 +303,5 @@ test("provider: telemetry line lists per-backend status and duration", async () 
   };
   const { provider } = makeProvider({ okBe, badBe });
   const res = await provider.search({ query: "q", maxResults: 5 });
-  assert.match(res.content, /\[websearch backends\] okBe ✓\d+ms\/1 · badBe ✗\d+ms/);
+  assert.match(res.content, /\[websearch backends\] \(diagnostic only, not a source\) okBe ✓\d+ms\/1 · badBe ✗\d+ms/);
 });
