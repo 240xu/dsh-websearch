@@ -1,6 +1,6 @@
 {
   "name": "@240xu/dsh-websearch",
-  "version": "2.7.1",
+  "version": "2.7.2",
   "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search tool. v2.7.0: disk result cache, per-backend circuit breaker, append-only search history API. v2.7.1 review fixes: cache key includes enabledBackends, scheme whitelist on cache-hit path, serialized history writes, trust fence on /api/websearch/* routes, cooldownMs=0 disables breaker window, user-language settings labels.",
   "type": "module",
   "main": "lib/index.js",

@@ -115,6 +115,10 @@ pnpm install
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
+## v2.7.2 补丁 | What's new in v2.7.2
+
+- 设置项 label：6 个新设置项在 schema 层挂用户语言 label（含单位尾注，如「缓存有效期（秒）」），宿主渲染不再回退 camelCase 键名；description 同步以人话名称开头（真机渲染行为归视觉待办 V5）。
+
 ## v2.7.1 评审修复 | What's new in v2.7.1
 
 - **缓存 key 加入 enabledBackends 选择集**（arch-review P1-1）：切换后端组合后立即拿到与新配置一致的结果，不再吃旧组合缓存。
