@@ -59,6 +59,18 @@ const T0 = 1_000_000;
   assert.equal(isCooled(r, T0 + 60_000), true, "still cooled at the OLD expiry");
 }
 
+// 6b. cooldownMs=0 is an explicit "disabled" (never cooled), not a 60s fallback.
+{
+  let prev;
+  for (let i = 0; i < 5; i++) prev = foldBreaker(prev, false, T0 + i, { threshold: 3, cooldownMs: 0 });
+  assert.equal(prev.failCount, 5);
+  assert.equal(isCooled(prev, T0 + 10), false, "zero cooldown never opens a window");
+  // null/undefined still falls back to the default
+  let d;
+  for (let i = 0; i < 3; i++) d = foldBreaker(d, false, T0 + i, { threshold: 3, cooldownMs: undefined });
+  assert.equal(d.openUntil, T0 + 2 + BREAKER_DEFAULTS.cooldownMs, "missing cooldown uses default");
+}
+
 // 7. cooled annotation format.
 {
   const entry = { openUntil: T0 + 30_000 };

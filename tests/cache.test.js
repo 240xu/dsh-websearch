@@ -52,14 +52,23 @@ const dir = mkdtempSync(join(tmpdir(), "dsh-ws-cache-"));
   assert.ok(existsSync(join(dir, "k-atomic.json")));
 }
 
-// 5. key canonicalization: same (query, filters, maxResults) -> same key;
-//    different filters/maxResults -> different key. Query is pre-shaped.
+// 5. key canonicalization: same (query, filters, maxResults, backends) ->
+//    same key; each differing dimension -> different key. Query is pre-shaped.
 {
-  const a = cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 8 });
-  const b = cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 8 });
+  const a = cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 8, backends: ["exa", "ddg"] });
+  const b = cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 8, backends: ["exa", "ddg"] });
   assert.equal(a, b, "deterministic key");
-  assert.notEqual(a, cacheKeyFor({ query: "dsh plugin", filters: {}, maxResults: 8 }), "filters in key");
-  assert.notEqual(a, cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 5 }), "maxResults in key");
+  assert.notEqual(a, cacheKeyFor({ query: "dsh plugin", filters: {}, maxResults: 8, backends: ["exa", "ddg"] }), "filters in key");
+  assert.notEqual(a, cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 5, backends: ["exa", "ddg"] }), "maxResults in key");
+  // arch-review P1-1: switching the backend mix must change the key,
+  // regardless of order in the list.
+  assert.notEqual(a, cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 8, backends: ["exa"] }), "enabledBackends in key");
+  assert.notEqual(a, cacheKeyFor({ query: "dsh plugin", filters: { recency: "week" }, maxResults: 8, backends: ["exa", "ddg", "brave"] }), "backend mix in key");
+  assert.equal(
+    cacheKeyFor({ query: "q", backends: ["exa", "ddg"] }),
+    cacheKeyFor({ query: "q", backends: ["ddg", "exa"] }),
+    "backend order-insensitive",
+  );
   assert.equal(a.length, 32, "truncated sha256 hex");
 }
 

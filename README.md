@@ -115,13 +115,23 @@ pnpm install
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
+## v2.7.1 评审修复 | What's new in v2.7.1
+
+- **缓存 key 加入 enabledBackends 选择集**（arch-review P1-1）：切换后端组合后立即拿到与新配置一致的结果，不再吃旧组合缓存。
+- **缓存命中路径复用 URL scheme 白名单**（纵深防御）：被篡改的缓存文件里的 javascript:/data: 条目在命中时同样被过滤。
+- **history 并发写串行化**：record() 经进程内 promise 链串行，杜绝并发搜索完成时的丢失更新；单条写入仍为 tmp+rename 原子替换。
+- **history 路由信任围栏**：两条 /api/websearch/* 路由要求回环 Host（防 DNS rebinding）+ same-site 浏览器上下文（防跨站 text/plain CSRF）；无头客户端（curl）放行只读 GET。
+- **熔断冷却时长支持 0**：`breakerCooldownMs=0` 显式关闭冷却（此前静默回退 60s）。
+- **设置文案**：6 个新设置项改用户语言并按【缓存】/【熔断】/【历史】分组，单位（秒/毫秒）写入说明。
+- **互操作**：新增 window 事件 `dsh-websearch:open-settings`（devkit 命令联动）；收到时经 devkit toast 提示设置路径（宿主无分区跳转 API）。
+
 ## v2.7.0 新增 | What's new in v2.7.0
 
 三大增量功能，全部经设置开关控制、默认为保守值，且不改变既有结果语义（v2.6.0 提示词原样保留）：
 
 ### 1. 搜索结果磁盘缓存（默认开）
 
-- 相同 **(整形后查询 + filters + maxResults)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
+- 相同 **(整形后查询 + filters + maxResults + 启用后端集合)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
 - 命中时 `content` 追加一行 `[websearch cache] cache hit, age Ns`。
 - 存储位置：`$DSH_HOME/cache/websearch/results/`，单条目一个 JSON 文件，tmp+rename 原子写，超出上限按最旧淘汰；任何 fs 错误都被吞掉，缓存坏了绝不影响搜索。
 - 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900）。
