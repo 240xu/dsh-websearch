@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.7.3 - 2026-09-29
+
+Compatibility fixes from the six-package compat audit:
+
+- Fixed (P0): the client settings card no longer hard-crashes on DSH 0.1.7 —
+  settingsScope access is feature-detected (0.1.5 unchanged; 0.1.7 degrades to
+  a console.warn breadcrumb with the shim/config guidance).
+- Changed (P1): the server-side settings section no longer silently no-ops on
+  the 0.1.7 SettingsForms line — one-time console.warn; search itself is
+  unaffected via cordis config.
+- Added: engines "node": ">=20.3" (AbortSignal.any).
+- Changed: package description slimmed; version history lives in CHANGELOG.md.
+
 ## 2.7.2 - 2026-09-27
 
 - Settings: the six v2.7 fields carry user-language labels at the schema layer

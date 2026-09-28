@@ -115,6 +115,13 @@ pnpm install
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
+## v2.7.3 兼容修复 | What's new in v2.7.3
+
+- **DSH 0.1.7 客户端兼容（P0）**：settingsScope 客户端服务在 0.1.7 被移除；现改为 feature-detect——0.1.5（或装 dsh-settings-scope-shim）行为不变，0.1.7 无 shim 时设置卡片优雅停用（console.warn 指引），客户端不再静默全死。
+- **DSH 0.1.7 服务端（P1）**：SettingsForms 无 installSection，原 typeof 守卫静默跳过；现输出一次性 console.warn（搜索功能经 cordis config 不受影响），SettingsForms 迁移已立牌。
+- **engines**：声明 `node >= 20.3`（AbortSignal.any 实测需求，Node 18/20.0-20.2 首次搜索即 TypeError）。
+- description 瘦身（版本历史移回本文件/CHANGELOG.md）。
+
 ## v2.7.2 补丁 | What's new in v2.7.2
 
 - 设置项 label：6 个新设置项在 schema 层挂用户语言 label（含单位尾注，如「缓存有效期（秒）」），宿主渲染不再回退 camelCase 键名；description 同步以人话名称开头（真机渲染行为归视觉待办 V5）。
