@@ -11,6 +11,9 @@ Compatibility fixes from the six-package compat audit:
   the 0.1.7 SettingsForms line — one-time console.warn; search itself is
   unaffected via cordis config.
 - Added: engines "node": ">=20.3" (AbortSignal.any).
+- Fixed (P2): the cache/history store directory falls back to os.homedir()
+  instead of process.env.HOME — HOME is usually unset on Windows, which made
+  the store path relative and silently disabled cache/history.
 - Changed: package description slimmed; version history lives in CHANGELOG.md.
 
 ## 2.7.2 - 2026-09-27

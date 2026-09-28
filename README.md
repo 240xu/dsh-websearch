@@ -121,6 +121,7 @@ pnpm install
 - **DSH 0.1.7 服务端（P1）**：SettingsForms 无 installSection，原 typeof 守卫静默跳过；现输出一次性 console.warn（搜索功能经 cordis config 不受影响），SettingsForms 迁移已立牌。
 - **engines**：声明 `node >= 20.3`（AbortSignal.any 实测需求，Node 18/20.0-20.2 首次搜索即 TypeError）。
 - description 瘦身（版本历史移回本文件/CHANGELOG.md）。
+- **Windows 双端（P2）**：缓存/历史目录回退改用 `os.homedir()`（此前 `process.env.HOME` 在 Windows 通常未设 → 相对路径 → 缓存静默失效）。
 
 ## v2.7.2 补丁 | What's new in v2.7.2
 
