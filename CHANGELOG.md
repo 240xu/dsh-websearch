@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.8.1 - 2026-09-29
+
+DSH 0.2.0 SettingsForms adapter (ruling in dsh-plugin-hub/docs/reviews/
+cross-settings-forms.md):
+
+- Added: Config carries meta.volatile — the 0.2.0 settings service
+  auto-generates its form from the plugin's Config but only fields under a
+  volatile ancestor; without the mark the websearch form was empty. The whole
+  Config is now the 0.2.0 Settings panel form.
+- Removed: the "no installSection" console.warn on the 0.2.0 line (the
+  auto-generated form IS the section; the warning contradicted the visible
+  UI). The 0.1.5 installSection path is unchanged.
+- Changed: descriptions added to all remaining bare fields (7 ×ApiKeyEnv,
+  8 ×BaseURL, 3 ×Model) — meta.description is the only user-visible label
+  lever on the 0.2.0 form renderer.
+- Guard tests: Config.meta.volatile stays true; every top-level field has a
+  non-empty description; RT volatileForm replication includes all fields.
+
 ## 2.8.0 - 2026-09-29
 
 "Search wider, search deeper" — retrieval-depth upgrade, all feature-gated

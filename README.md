@@ -115,6 +115,12 @@ pnpm install
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
+## v2.8.1 SettingsForms 适配 | What's new in v2.8.1
+
+- **0.2.0 设置面板表单**：Config 标记 `meta.volatile`——0.2.0 SettingsForms 从插件 Config 自动生成表单，但 volatileForm 只保留 volatile 字段（此前 websearch 表单为空）；现整棵 Config 成为 0.2.0 表单。裁决与考证见 dsh-plugin-hub/docs/reviews/cross-settings-forms.md。
+- 删除 0.2.0 线上与可见 UI 自相矛盾的 "no installSection" console.warn（0.1.5 路径不变）。
+- 补齐全部裸字段（×ApiKeyEnv/×BaseURL/×Model）的 description——0.2.0 表单渲染唯一用户可见文案来自 meta.description。
+
 ## v2.8.0 查全查多 | What's new in v2.8.0
 
 面向「查的多一点、查的全一点」的检索深度升级，全部 feature-gated、默认关：

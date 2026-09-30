@@ -1,3 +1,13 @@
+# Bundle patch layer:
+# 1. insert the plugin row (registers the unified search provider)
+# 2. wire the built-in web_search tool to the unified provider (the plugin's
+#    whole reason to exist — previously a manual cordis.patch.yml edit, now
+#    automatic; revert = remove this row or disable the plugin, the base
+#    default (deepseek-official) is one yaml line away).
 - insert:
     - id: dsh-websearch
       name: '@240xu/dsh-websearch'
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: unified
