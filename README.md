@@ -115,6 +115,30 @@ pnpm install
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
+## v2.8.0 查全查多 | What's new in v2.8.0
+
+面向「查的多一点、查的全一点」的检索深度升级，全部 feature-gated、默认关：
+
+### 1. multiQuery 多查询 RRF 融合（`multiQueryEnabled`，默认关）
+
+- 门控启发式（刻意从严）：查询长度 > 60 字符，或含 `vs / and / 比较 / 对比 / 和` 分隔词，才触发；简单查询单扇出，行为与旧版完全一致（arXiv:2404.01037：盲目多查询会劣化）。
+- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 11 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
+- 遥测行合并各变体并截断至 12 条，避免淹没结果。
+
+### 2. deepCoverage 深度覆盖（`deepCoverage`，默认关）
+
+- 每后端请求条数上调至 `ceil(maxResults × 1.5)`，全局去重后仍按 maxResults 截断——牺牲带宽换覆盖面。
+- 后端能力适配（feature-detect，不破坏旧参数）：Tavily 自动切 `search_depth: advanced`（2 credits，多 snippet/URL）；SearXNG 类目扩为 `general,news,it`（Search API `categories` 逗号列表）。
+- Exa：`inferExaCategory` 从查询推断 data category（github / research paper / news，仅高置信注入）。
+
+### 3. 运维可观测（P2）
+
+- `GET /api/websearch/history` 响应新增 `backends` 字段：每后端最近真实成败/延迟/熔断状态（`{id, ok, ms, at, failCount, cooled}`，无错误串无凭证），兜底冗余度可观测。
+
+### 4. per-backend 超时上限（P2）
+
+- `ddg` / `searxng` 专属超时上限 5s（`min(5s, backendTimeoutMs)`，全局默认仍 30s、配置更短则以配置为准）——不可达后端不再拖住整个扇出尾。实测见 docs/real-call-2.8.0.md。
+
 ## v2.7.3 兼容修复 | What's new in v2.7.3
 
 - **DSH 0.1.7 客户端兼容（P0）**：settingsScope 客户端服务在 0.1.7 被移除；现改为 feature-detect——0.1.5（或装 dsh-settings-scope-shim）行为不变，0.1.7 无 shim 时设置卡片优雅停用（console.warn 指引），客户端不再静默全死。
@@ -216,7 +240,9 @@ v2.7.0 缓存/熔断/历史三项的依据与刻意取舍（含查证过的反�
 1. **熔断器（Circuit Breaker）**：出处 Michael T. Nygard《Release It!》(Pragmatic Bookshelf, 2007) 与 Microsoft Azure Architecture Center「Circuit Breaker pattern」https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker 。经典状态机是 Closed → Open → Half-Open（半开态放行少量探测请求）。**本插件刻意省略半开态**：冷却到期即视为 Closed（下一次真实搜索就是探测），失败则立即重新开窗——因为这里的"请求"是一次多后端扇出中的单个后端调用，探测请求必然真实发生且失败成本只是一次软降级，无需额外探测计数器；同时保留 fail-open 兜底（全部冷却时放行），比经典模式更保守。
 2. **缓存失效（TTL-only vs 事件驱动）**：Cloudflare「Retention vs Freshness (TTL)」https://developers.cloudflare.com/cache/concepts/retention-vs-freshness/ 与「Revalidation」https://developers.cloudflare.com/cache/concepts/revalidation/ 。搜索结果没有可靠的原站变更信号可订阅（网页索引持续变化），事件驱动失效无锚点；TTL-only + 把 TTL 做成设置项（默认 900s）+ key 纳入后端组合，是"可接受的最终一致性"。取舍：900s 内索引更新不可见——对搜索场景可接受，且用户可调低。
 3. **原子写（tmp + renameSync）**：POSIX 上 rename(2) 原子替换（Node 文档：newPath 已存在时覆盖）；Windows 上 libuv 将 fs.rename 映射为 MoveFileExW(MOVEFILE_REPLACE_EXISTING)（libuv#283 https://github.com/joyent/libuv/issues/283 ，LWN 讨论 https://lwn.net/Articles/682988/ 指出 MS 文档不承诺该调用的原子性）。**结论：POSIX 双端原子；Windows 实践上等价但官方文档不背书**——因此本插件在写入端额外做了兜底：读端永远校验 JSON 完整性、坏条目按 miss 处理并删除，即使 Windows 上出现半写状态也不会返回坏数据。
-4. **搜索历史隐私**：Article 29 Working Party 意见书 WP148 https://ec.europa.eu/justice/article-29/documentation/opinion-recommendation/files/2008/wp148_en.pdf 认定查询日志（query + 时间 + 来源标识）属个人数据；EFF 六条自保建议 https://w2.eff.org/Privacy/search/searchtips.pdf 的第一条是"别在搜索词里放 PII"——说明 query 天然可能携带 PII（人名、账号、地址）。本插件的取舍：历史只存 {query, time, resultCount, backendsOk/Total}（无 IP、无 cookie、无结果 URL）、环形 50 条自动滚动即短保留、本机存储不出网、提供 historyEnabled 开关与 POST clear 端点。**未做 query 脱敏**：脱敏会破坏"查看最近搜了什么"的核心用途，且本机单用户场景下该数据本就在 DSH 会话日志里存在；若未来历史跨设备同步，脱敏/加密是上线前置条件。
+4b. **查全查多（v2.8.0）**：Tavily Search API（`search_depth: advanced` 2 credits、`max_results` 0-20、`include_answer`、topic=news 时间加权）https://docs.tavily.com/api-reference/endpoint/search ；Exa Search API（type 分类检索、category 枚举、livecrawl；注意 2026 版 coding-agent 指南声明 neural 为 legacy 术语、且告诫勿臆造 category 值——本插件只注入 OpenAPI 枚举内的高置信值）https://exa.ai/docs/reference/search-api-guide-for-coding-agents 与 https://github.com/exa-labs/openapi-spec/blob/master/exa-openapi-spec.yaml ；SearXNG Search API（`categories` 逗号多类目、`language`）https://docs.searxng.org/dev/search_api.html ；Brave Search API（`freshness`、`result_filter`，本轮仅调研未接线）https://api-dashboard.search.brave.com/app/documentation 。多查询融合：RRF 出自 Cormack et al. 2009，RAG-Fusion 实现 https://github.com/Raudaschl/rag-fusion ；HyDE https://arxiv.org/abs/2212.10496 ；**门控依据** arXiv:2404.01037（盲目多查询劣化）——因此 multiQuery 默认关、启发式从严、原查询全权重参与。
+4c. **per-backend 超时**：不可达主机的 TCP 连接失败不受应用层超时保护，只能靠 abort 计时器兜底；ddg（HTML 抓取）与 SearXNG（公共实例无 SLA）是拖尾主力，5s 上限取「P50 成功延迟的一个数量级」。
+4d. **搜索历史隐私**：Article 29 Working Party 意见书 WP148 https://ec.europa.eu/justice/article-29/documentation/opinion-recommendation/files/2008/wp148_en.pdf 认定查询日志（query + 时间 + 来源标识）属个人数据；EFF 六条自保建议 https://w2.eff.org/Privacy/search/searchtips.pdf 的第一条是"别在搜索词里放 PII"——说明 query 天然可能携带 PII（人名、账号、地址）。本插件的取舍：历史只存 {query, time, resultCount, backendsOk/Total}（无 IP、无 cookie、无结果 URL）、环形 50 条自动滚动即短保留、本机存储不出网、提供 historyEnabled 开关与 POST clear 端点。**未做 query 脱敏**：脱敏会破坏"查看最近搜了什么"的核心用途，且本机单用户场景下该数据本就在 DSH 会话日志里存在；若未来历史跨设备同步，脱敏/加密是上线前置条件。
 
 ## License | 许可
 

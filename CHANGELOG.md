@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.8.0 - 2026-09-29
+
+"Search wider, search deeper" — retrieval-depth upgrade, all feature-gated
+(both new switches default OFF; see README "权威依据与取舍" for sources).
+
+### Added
+- multiQuery mode (`multiQueryEnabled`, default false): strictly gated
+  (length > 60 or a vs/and/比较/对比/和 separator) derivation of 2-3 sub-queries,
+  each fanned out fully, fused with Reciprocal Rank Fusion (k=60); the
+  original query always participates with full weight (arXiv:2404.01037 guard).
+- deepCoverage (`deepCoverage`, default false): per-backend result budget
+  widened to ceil(maxResults × 1.5) before global dedupe/truncation; Tavily
+  upgraded to search_depth "advanced"; SearXNG categories widened to
+  "general,news,it"; Exa data-category inference (github / research paper /
+  news, high-confidence only).
+- Observability: GET /api/websearch/history now carries a `backends` array
+  (last real outcome, latency, breaker state per backend — no error strings).
+- Per-backend timeout ceilings: ddg/searxng capped at 5s
+  (min(override, backendTimeoutMs)) so unreachable hosts no longer stall the
+  fan-out tail; real-clock test at 5013ms.
+
+### Verified
+- Real-call: Exa MCP accepted `category: "github"` and returned github.com-only
+  results (docs/real-call-2.8.0.md). DDG/SearXNG real calls blocked by this
+  sandbox's egress policy (connection-level failures); covered by parse-level
+  tests instead.
+
 ## 2.7.3 - 2026-09-29
 
 Compatibility fixes from the six-package compat audit:
