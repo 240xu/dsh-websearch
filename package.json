@@ -1,6 +1,6 @@
 {
   "name": "@240xu/dsh-websearch",
-  "version": "2.8.1",
+  "version": "2.8.2",
   "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search. 统一网页搜索聚合：11 后端并发扇出、去重合并，零依赖。See CHANGELOG.md for version history.",
   "type": "module",
   "main": "lib/index.js",

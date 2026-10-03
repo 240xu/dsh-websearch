@@ -253,3 +253,16 @@ v2.7.0 缓存/熔断/历史三项的依据与刻意取舍（含查证过的反�
 ## License | 许可
 
 MIT © 2026 240xu
+
+## 2.8.2 · Bug 猎场修复（P1×3 + 回归测试）
+
+- **[P1] 零结果伪造失败**：所有后端成功但 0 命中时，原实现落进 `all enabled
+  backends failed (0) - `（计数自相矛盾、detail 空）并丢弃 mergedContent（Tavily
+  直答）。成功即空 → 正常返回 `{sources:[]}` + history 记录。
+- **[P1] limiter 死锁**：`Promise.resolve(fn())` 先执行 fn——同步抛出（如 baseURL
+  校验在建 timeout 前）逃出后 `running` 永不递减，泄漏 ≥ concurrency 后所有任务
+  永久排队且超时机制未武装（实测 HUNG exit=13）。改 `Promise.resolve().then(fn)`。
+- **[P1] exa category 漏门控**：tavily/searxng 的 deepCoverage 增强都门控，唯独
+  exa 漏了——默认关 deepCoverage 也注入 category 收窄结果，与 README 承诺相反。
+- 回归测试 3 条（零结果/limiter 不死锁带 HUNG 超时护栏/exa 双态门控）；
+  `createLimiter` 导出供测试。89/89。
