@@ -51,3 +51,33 @@ test("exa：deepCoverage=false 时不得注入 category（默认查询词也一�
   assert.ok(captured2, "recordRequest captured (deep)");
   assert.equal(typeof captured2.category, "string", "deepCoverage=true 可注入 category");
 });
+
+test("multiquery：CJK 分隔符无空格不切实体（和/比较 词内保护）", async () => {
+  const { deriveSubQueries } = await import("../lib/multiquery.js");
+  // 裸 "和" 在词内：不得切
+  assert.deepEqual(deriveSubQueries("柔和光线和自然光"), ["柔和光线和自然光"]);
+  assert.deepEqual(deriveSubQueries("和平精英攻略"), ["和平精英攻略"]);
+  // 显式空格分隔：可切
+  const spaced = deriveSubQueries("苹果 和 香蕉");
+  assert.ok(spaced.length >= 2, "spaced 和 splits: " + JSON.stringify(spaced));
+  // 顿号分隔不受影响
+  const enumed = deriveSubQueries("苹果、香蕉");
+  assert.ok(enumed.length >= 2, "顿号 splits: " + JSON.stringify(enumed));
+});
+
+test("shapeQuery：寒暄独词整形为空 → provider 早拒（不入扇出/缓存）", async () => {
+  const { shapeQuery } = await import("../lib/prompting.js");
+  assert.equal(shapeQuery("搜索"), "");
+  assert.equal(shapeQuery("search"), "");
+  const { createUnifiedSearchProvider } = await import("../lib/provider.js");
+  let fanout = 0;
+  const spy = { available: () => true, search: async () => { fanout++; return { sources: [] }; } };
+  const provider = createUnifiedSearchProvider({
+    ctx: {},
+    resolveOptions: () => ({ enabledBackends: ["ddg"], numResults: 4, backends: {}, ctx: {}, backendTimeoutMs: 5000 }),
+    backends: { ddg: spy },
+  });
+  await assert.rejects(() => provider.search({ query: "搜索", maxResults: 4 }, undefined),
+    (err) => err.code === "WEB_PROVIDER_ERROR" && /empty query/.test(err.message));
+  assert.equal(fanout, 0, "空查询不得扇出任何后端");
+});
