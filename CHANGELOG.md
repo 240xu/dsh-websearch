@@ -4,7 +4,9 @@
 
 - v2.8.3: empty shaped-query rejected early (no fan-out/cache aliasing), ZH bare filler 搜索 added, CJK separators require a boundary on either side (entity protection), 4 regression tests
 
-v2.8.2: P1 fixes — legitimate zero-results no longer forged as all-backends-failed; limiter sync-throw no longer leaks running (deadlock); exa category inference gated on deepCoverage (parity with tavily/searxng); 3 regression tests
+## 2.8.2 - 2026-09-30
+
+- P1 fixes — legitimate zero-results no longer forged as all-backends-failed; limiter sync-throw no longer leaks running (deadlock); exa category inference gated on deepCoverage (parity with tavily/searxng); 3 regression tests
 
 ## 2.8.1 - 2026-09-29
 
