@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.4 - 2026-10-18
+
+0.2.1-alpha compatibility: the settings section is visible again on builds without the legacy `settingsScope` client service.
+
+- Fix: the client `inject` no longer hard-depends on `settingsScope` (a missing service kept the web boot pending forever). The legacy scope path is preserved for builds that still publish it.
+- Add: `settings.section` registers unconditionally; on 0.2.x the card binds a fenced bridge (`GET/POST /api/unified-search/settings`) to the host settings service and writes the same volatile profile entry the provider resolves from — no second settings store. Headless/CI profiles never mount `webServer`, so nothing runs there.
+- Fix: numeric fields (`numResults`, `concurrency`, `backendTimeoutMs`) lost their bounds check and could never be saved.
+- Fix: credential invalidation now listens to `credentials/reference-updated` (0.2.x) with the legacy `credentials/updated` kept as a fallback; credential read/write prefers the 0.2.x remote face.
+- Add: outbound backend requests now honor `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` through a zero-dependency CONNECT tunnel (`lib/util/egress-fetch.js`), so deployments whose egress is a kill-switched proxy (containers) can search; behavior is unchanged when no proxy env is set.
+- Fix: history/health routes fence through the host connection admission (kernel parity) instead of loopback-only host matching, so LAN and tunnel sessions are served; the health route gains the same fence.
+
 ## 2.8.3 - 2026-10-06
 
 - v2.8.3: empty shaped-query rejected early (no fan-out/cache aliasing), ZH bare filler 搜索 added, CJK separators require a boundary on either side (entity protection), 4 regression tests
