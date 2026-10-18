@@ -4,18 +4,19 @@ import assert from "node:assert/strict";
 import { effectiveBackendTimeoutMs } from "../lib/provider.js";
 import { toBackendObservability, registerHistoryRoutes } from "../lib/history.js";
 
-// 1. timeout ceilings: ddg/searxng capped at 5s, others untouched, operator's
-//    shorter global timeout always wins.
+// 1. timeout ceilings: ddg capped at 8s (route6: slow-but-working scrapes
+//    need ~7.7s), searxng at 5s, others untouched, operator's shorter global
+//    timeout always wins.
 {
-  assert.equal(effectiveBackendTimeoutMs("ddg", 30000), 5000);
+  assert.equal(effectiveBackendTimeoutMs("ddg", 30000), 8000);
   assert.equal(effectiveBackendTimeoutMs("searxng", 30000), 5000);
   assert.equal(effectiveBackendTimeoutMs("exa", 30000), 30000, "no override -> global");
   assert.equal(effectiveBackendTimeoutMs("ddg", 3000), 3000, "shorter global wins");
   assert.equal(effectiveBackendTimeoutMs("brave", 8000), 8000);
 }
 
-// 2. hanging ddg: effective 5s timeout fires (real-clock, one slow test).
-test("hanging ddg backend times out at 5s with the effective timeout in the message", async () => {
+// 2. hanging ddg: effective 8s timeout fires (real-clock, one slow test).
+test("hanging ddg backend times out at 8s with the effective timeout in the message", async () => {
   const { createUnifiedSearchProvider } = await import("../lib/provider.js");
   // Honors abort like a real backend (the timeout aborts the merged signal).
   const hang = {
@@ -32,10 +33,10 @@ test("hanging ddg backend times out at 5s with the effective timeout in the mess
   const started = Date.now();
   await assert.rejects(
     provider.search({ query: "hang probe", maxResults: 4 }, undefined),
-    (err) => err.code === "WEB_PROVIDER_ERROR" && /timed out after 5000ms/.test(err.message),
+    (err) => err.code === "WEB_PROVIDER_ERROR" && /timed out after 8000ms/.test(err.message),
   );
   const elapsed = Date.now() - started;
-  assert.ok(elapsed >= 4900 && elapsed < 7000, "fired at ~5s, got " + elapsed);
+  assert.ok(elapsed >= 7900 && elapsed < 11000, "fired at ~8s, got " + elapsed);
 });
 
 // 3. observability payload: shape + cooled projection, no error strings.

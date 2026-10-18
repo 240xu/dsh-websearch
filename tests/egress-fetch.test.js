@@ -9,7 +9,7 @@ import { egressFetch } from "../lib/util/egress-fetch.js";
 
 const SAVED = [
   "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy",
-  "DSH_EGRESS_FORWARDER", "DSH_EGRESS_FORWARDER_PROXY",
+  "DSH_EGRESS_FORWARDER", "DSH_EGRESS_FORWARDER_PROXY", "DSH_EGRESS_FORWARDER_TIMEOUT_MS",
 ].reduce((acc, key) => {
   acc[key] = process.env[key];
   return acc;
@@ -224,6 +224,70 @@ test("forwarder: NO_PROXY target bypasses the sidecar entirely", async () => {
   } finally {
     sidecar.close();
     direct.close();
+    restoreEnv();
+  }
+});
+
+test("forwarder: bypasses a hijacked global fetch (dispatcher regression)", async () => {
+  const sidecar = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200);
+    res.end("direct-ok");
+  });
+  const port = await listen(sidecar);
+  setEnv({ DSH_EGRESS_FORWARDER: `http://127.0.0.1:${port}/fwd`, NO_PROXY: "" });
+  const hijacked = globalThis.fetch;
+  globalThis.fetch = () => { throw new TypeError("fetch was hijacked by a global dispatcher"); };
+  try {
+    const res = await egressFetch("https://mcp.exa.ai/mcp", { method: "POST", body: "{}" });
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), "direct-ok");
+  } finally {
+    globalThis.fetch = hijacked;
+    sidecar.close();
+    restoreEnv();
+  }
+});
+
+test("forwarder: stalled sidecar yields a clear timeout, not a backend-budget hang", async () => {
+  const sidecar = http.createServer(() => { /* accepts, never responds */ });
+  const port = await listen(sidecar);
+  setEnv({
+    DSH_EGRESS_FORWARDER: `http://127.0.0.1:${port}/fwd`,
+    DSH_EGRESS_FORWARDER_TIMEOUT_MS: "300",
+    NO_PROXY: "",
+  });
+  const started = Date.now();
+  try {
+    await assert.rejects(
+      egressFetch("https://mcp.exa.ai/mcp", { method: "POST", body: "{}" }),
+      (err) => err instanceof TypeError && /forwarder did not respond within 300ms/.test(err.message),
+    );
+    assert.ok(Date.now() - started < 2000, "must not wait for any outer 30s budget");
+  } finally {
+    sidecar.close();
+    restoreEnv();
+  }
+});
+
+test("forwarder: caller abort still wins over the forwarder timeout", async () => {
+  const sidecar = http.createServer(() => { /* accepts, never responds */ });
+  const port = await listen(sidecar);
+  setEnv({
+    DSH_EGRESS_FORWARDER: `http://127.0.0.1:${port}/fwd`,
+    DSH_EGRESS_FORWARDER_TIMEOUT_MS: "5000",
+    NO_PROXY: "",
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 50);
+  try {
+    await assert.rejects(
+      egressFetch("https://mcp.exa.ai/mcp", { method: "POST", body: "{}", signal: controller.signal }),
+      (err) => err?.name === "AbortError",
+    );
+  } finally {
+    clearTimeout(timer);
+    sidecar.close();
     restoreEnv();
   }
 });

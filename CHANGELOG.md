@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.8.6 - 2026-10-18
+
+Search-failure hardening (online incident: every backend search failed with "all enabled backends failed (4)").
+
+- Fix: the sidecar forwarder hop now speaks `node:http(s)` directly instead of the global `fetch`. Hosts that install a global dispatcher (e.g. an HTTP_PROXY-wired `EnvHttpProxyAgent`) hijacked the request to the sidecar: with the sidecar host missing from NO_PROXY it was proxied away through the very chain the sidecar fronts (proxy log: `dial -> sidecar ... EOF`), killing every search. Regression test pins it.
+- Fix: the forwarder hop gains its own ceiling — `min(caller signal, DSH_EGRESS_FORWARDER_TIMEOUT_MS ?? 20s)` — with distinct errors for caller abort vs "sidecar stalled?" vs "unreachable (cause chain)".
+- Fix: all-fail diagnostics keep the full cause chain and enumerate every backend reason (no >4 truncation; cooled skips counted).
+- Fix: SearXNG semantic health — HTTP 200 without `results[]` (anti-bot interstitial) no longer records as success and no longer resets the breaker; anti-bot pages get a friendly label.
+- Add: opt-in SearXNG multi-instance failover (`searxngBaseURLs`).
+- Fix: DDG timeout ceiling 5s to 8s (measured scrapes up to 7.7s were killed).
+- Fix: backend timeouts are classified as timeouts in telemetry/health (were misreported as `unified search aborted`, i.e. user cancellation); proxy/forwarder path failures get their own label.
+
 ## 2.8.5 - 2026-10-18
 
 Fingerprint-gated upstreams (Exa, DuckDuckGo) behind TLS-censoring exits.
