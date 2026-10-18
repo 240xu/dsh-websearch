@@ -233,7 +233,7 @@ test("ddg: recency filter adds df form field", async () => {
   mockFetch(() => ({ ok: true, status: 200, text: async () => "" }));
   const { ddgBackend } = await import("../lib/backends/ddg.js");
   await ddgBackend.search({ query: "q", maxResults: 3, filters: { recency: "week" } }, undefined, {}, {});
-  assert.ok(calls[0].init.body.includes("df=w"));
+  assert.ok(calls[0].url.includes("df=w"));
 });
 
 // ---------- failure enumeration & actionable all-fail message ----------

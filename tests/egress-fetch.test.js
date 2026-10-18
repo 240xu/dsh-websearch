@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { egressFetch } from "../lib/util/egress-fetch.js";
 
-const SAVED = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"].reduce((acc, key) => {
+const SAVED = [
+  "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy",
+  "DSH_EGRESS_FORWARDER", "DSH_EGRESS_FORWARDER_PROXY",
+].reduce((acc, key) => {
   acc[key] = process.env[key];
   return acc;
 }, {});
@@ -130,6 +133,97 @@ test("already-aborted signal rejects with AbortError before any dial", async () 
       (err) => err?.name === "AbortError",
     );
   } finally {
+    restoreEnv();
+  }
+});
+
+test("forwarder: relays through sidecar, spec carries method/headers/body/proxy", async () => {
+  const received = [];
+  const sidecar = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      received.push({
+        url: req.url,
+        specHeader: req.headers["x-sidecar-spec"],
+        body: Buffer.concat(chunks).toString(),
+      });
+      res.writeHead(200, { "content-type": "text/plain", "x-upstream": "yes" });
+      res.end("hello-from-sidecar");
+    });
+  });
+  const port = await listen(sidecar);
+  setEnv({
+    DSH_EGRESS_FORWARDER: `http://127.0.0.1:${port}/fwd`,
+    DSH_EGRESS_FORWARDER_PROXY: "http://172.30.66.1:1091",
+    NO_PROXY: "",
+  });
+  try {
+    const res = await egressFetch("https://mcp.exa.ai/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: '{"jsonrpc":"2.0"}',
+      redirect: "error",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("x-upstream"), "yes");
+    assert.equal(await res.text(), "hello-from-sidecar");
+    assert.equal(received.length, 1);
+    assert.equal(received[0].url, "/fwd");
+    const spec = JSON.parse(Buffer.from(received[0].specHeader, "base64").toString());
+    assert.equal(spec.url, "https://mcp.exa.ai/mcp");
+    assert.equal(spec.method, "POST");
+    assert.equal(spec.proxy, "http://172.30.66.1:1091");
+    assert.equal(spec.redirect, "error");
+    assert.equal(spec.headers["content-type"], "application/json");
+    assert.equal(received[0].body, '{"jsonrpc":"2.0"}');
+  } finally {
+    sidecar.close();
+    restoreEnv();
+  }
+});
+
+test("forwarder: 502 + x-sidecar-error becomes a fetch-style TypeError", async () => {
+  const sidecar = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(502, { "content-type": "application/json", "x-sidecar-error": "dial" });
+    res.end(JSON.stringify({ error: "fetch failed" }));
+  });
+  const port = await listen(sidecar);
+  setEnv({ DSH_EGRESS_FORWARDER: `http://127.0.0.1:${port}/fwd`, NO_PROXY: "" });
+  try {
+    await assert.rejects(
+      egressFetch("https://mcp.exa.ai/mcp", { method: "POST", body: "{}" }),
+      (err) => err instanceof TypeError && /forwarder dial/.test(err.message),
+    );
+  } finally {
+    sidecar.close();
+    restoreEnv();
+  }
+});
+
+test("forwarder: NO_PROXY target bypasses the sidecar entirely", async () => {
+  let sidecarHits = 0;
+  const sidecar = http.createServer((req, res) => {
+    sidecarHits += 1;
+    req.resume();
+    res.writeHead(200);
+    res.end("sidecar");
+  });
+  const sidecarPort = await listen(sidecar);
+  const direct = http.createServer((req, res) => res.end("direct"));
+  const directPort = await listen(direct);
+  setEnv({
+    DSH_EGRESS_FORWARDER: `http://127.0.0.1:${sidecarPort}/fwd`,
+    NO_PROXY: "127.0.0.1",
+  });
+  try {
+    const res = await egressFetch(`http://127.0.0.1:${directPort}/x`);
+    assert.equal(await res.text(), "direct");
+    assert.equal(sidecarHits, 0);
+  } finally {
+    sidecar.close();
+    direct.close();
     restoreEnv();
   }
 });

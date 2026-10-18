@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.8.5 - 2026-10-18
+
+Fingerprint-gated upstreams (Exa, DuckDuckGo) behind TLS-censoring exits.
+
+- Add: optional TLS-egress forwarder. When `DSH_EGRESS_FORWARDER` is set to a local sidecar's `/fwd` endpoint (a forwarder backed by a browser TLS stack), backend requests relay through it and carry the upstream proxy in the sidecar spec (`DSH_EGRESS_FORWARDER_PROXY`, defaulting to `HTTPS_PROXY`). Exists because some upstreams gate on the client TLS fingerprint (JA3) rather than on the exit IP — Node's fingerprint is rejected where a Chromium one is accepted. Unset = byte-identical behavior.
+- Fix: the DuckDuckGo backend now uses the GET form. The html endpoint serves the same results page, but the POST form is rejected by its bot wall for non-browser clients (method + fingerprint double gate).
+- Tests: 3 new forwarder tests (spec encoding/passthrough, 502 error mapping, NO_PROXY bypass).
+
 ## 2.8.4 - 2026-10-18
 
 0.2.1-alpha compatibility: the settings section is visible again on builds without the legacy `settingsScope` client service.
