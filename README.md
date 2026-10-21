@@ -13,6 +13,18 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 
 纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
 
+
+## 10 秒速查
+
+```sh
+dsh plugin --profile web add @240xu/dsh-websearch
+# 重启 dsh web 后，在 设置 → Web Search 选择 unified
+```
+
+- 不想逐个装：`dsh plugin --profile web add @240xu/dsh-plugin-hub`（会带入本插件）
+- 卸载：`dsh plugin --profile web remove @240xu/dsh-websearch`
+- 零 Key 可用：Exa / Parallel / DuckDuckGo / SearXNG；其余后端配 Key 后自动启用
+
 ## Backends | 后端
 
 | id | key | endpoint | how it returns | notes |
