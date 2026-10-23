@@ -3,13 +3,13 @@
 [![npm version](https://img.shields.io/npm/v/@240xu/dsh-websearch.svg)](https://www.npmjs.com/package/@240xu/dsh-websearch)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to eleven backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
+> Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to twelve backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
 
-A pure-Cordis drop-in: registers ONE provider at `ctx.web` so the `dsh-web` selection rule never fires `WEB_PROVIDER_AMBIGUOUS`. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek) auto-activate once their key is supplied via the credentials service or env.
+A pure-Cordis drop-in: registers ONE provider at `ctx.web` so the `dsh-web` selection rule never fires `WEB_PROVIDER_AMBIGUOUS`. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Ark / Brave / Tavily / Serper / Mojeek) auto-activate once their key is supplied via the credentials service or env.
 
 ---
 
-DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十一后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
+DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十二后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
 
 纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
 
@@ -40,6 +40,7 @@ dsh plugin --profile web add @240xu/dsh-websearch
 | `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/anthropic/v1/messages` | Anthropic Messages API + native `web_search_20250305` server tool, model `deepseek-v4-flash` | 与 dav web-search-deepseek 同机制 |
 | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` | Anthropic Messages + `web_search_20250305`, model `claude-sonnet-4-6` | Claude Code 同机制 |
 | `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` | Responses API native `web_search` tool, parse `url_citation` annotations | Codex 同机制 |
+| `ark` | `ARK_API_KEY` | `https://ark.cn-beijing.volces.com/api/v3/responses` | 同上：Responses API native `web_search` tool（火山方舟兼容同一协议），解析 `url_citation` | Agent Plan Key 把 base URL 换成 `/api/plan/v3` |
 
 > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
 
@@ -108,7 +109,7 @@ pnpm install
 **结果健康遥测（默认开）**：每次搜索的 `content` 尾部附一行 `[websearch backends] exa ✓5ms/3 · ddg ✗30000ms`，
 模型可据此自诊断并建议用户调整设置；设置面板「结果策略」可关闭（`resultTelemetry`）。
 
-**11 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai`（默认关）
+**12 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai` / `enableArk`（默认关）
 
 **API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
 
@@ -121,9 +122,10 @@ pnpm install
 | `deepseekApiKeyEnv` | `DEEPSEEK_API_KEY` |
 | `anthropicApiKeyEnv` | `ANTHROPIC_API_KEY` |
 | `openaiApiKeyEnv` | `OPENAI_API_KEY` |
+| `arkApiKeyEnv` | `ARK_API_KEY` |
 | `searxngApiKeyEnv` | `SEARXNG_API_KEY`（私有实例可选） |
 
-**Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
+**Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI/Ark 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
 
 环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
 
@@ -140,7 +142,7 @@ pnpm install
 ### 1. multiQuery 多查询 RRF 融合（`multiQueryEnabled`，默认关）
 
 - 门控启发式（刻意从严）：查询长度 > 60 字符，或含 `vs / and / 比较 / 对比 / 和` 分隔词，才触发；简单查询单扇出，行为与旧版完全一致（arXiv:2404.01037：盲目多查询会劣化）。
-- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 11 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
+- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 12 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
 - 遥测行合并各变体并截断至 12 条，避免淹没结果。
 
 ### 2. deepCoverage 深度覆盖（`deepCoverage`，默认关）
@@ -237,6 +239,7 @@ lib/
     mojeek.js              # Mojeek REST (key-gated)
     anthropic-like.js      # shared: DeepSeek + Anthropic (Messages API + web_search_* server tool)
     openai.js              # OpenAI /responses + web_search tool (url_citation parsing)
+    ark.js                 # 火山方舟 /responses（复用 openai.js 的解析，仅换端点/模型默认值）
     index.js               # unified registry + individual exports
 tests/
   parse.test.js            # 28 unit tests for each backend's pure parse fn

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add: `ark` backend — 火山方舟 (Volcengine Ark). Ark's Responses API accepts the same request/response shape this plugin already speaks for OpenAI (`tools:[{type:"web_search"}]`, `output[]` with `web_search_call` + `url_citation` annotations), so `lib/backends/ark.js` reuses the OpenAI transport and only pins Ark's endpoint/model defaults. Config: `enableArk`, `arkBaseURL` (platform `/api/v3`, Agent Plan `/api/plan/v3`), `arkModel`, `arkApiKeyEnv` (`ARK_API_KEY`). Verified end-to-end against `https://ark.cn-beijing.volces.com/api/plan/v3/responses` with `doubao-seed-2.1-pro` (HTTP 200, `web_search_call` + `url_citation` output).
+- Settings: the web-search card gains a 「火山方舟 Ark」 toggle and an `ARK_API_KEY` credential field (key entry writes through the credentials service, so rotating it needs no plugin reload), plus a console shortcut link.
+- Docs/tests: backend and config tables updated; `tests/ark.test.js` pins the registry id, availability delegation, config defaults/descriptions and the search delegation.
+
 ## 2.8.6 - 2026-10-18
 
 Search-failure hardening (online incident: every backend search failed with "all enabled backends failed (4)").
