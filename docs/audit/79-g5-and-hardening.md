@@ -66,3 +66,7 @@ E1/E2 的 fork 又是「骨架后结束」且未落盘；由 Lead 用本会话�
 - 全库密钥复扫发现 `.baseline-20261111-2230/67-assessment-runtime.md`（11-11 基线快照）仍含未脱敏的旧 `Set-Cookie` 值；已就地替换 cookie 名+值为 `<REDACTED>`，**全库 0 命中**。该基线不在已推送分支内，推送分支 `git log --all -p` 复扫同为 0 命中。
 - GitHub `main` 一次 API 读取返回 `overloaded_error`（代理后端过载，非权限问题）；换 `git/ref/heads/main` 重试成功，确认仍为 `da42e44a0f54`，未被本次推送改变。
 - 最终远端分支 `local-audit-35files-20261115` = `a5d404dc9754a8a8d95d7a0035409fd6d98a2b74`，本地 HEAD 同值；4 个提交；`npm latest` 仍 2.8.8，PR #7 仍 open。
+
+## 8. E2 第二轮口径修订（14:45）
+
+E2 报来两条实测，Lead 逐条复核成立：① `/opt/dsh-0222/.../dsh/package.json` 是 **0.2.2-rc.1**、运行 Node **v24.22.2** ⇒ 历轮「升级 0.2.2-rc.1 / Node 22 硬阻塞」是伪命题（npm `latest=0.2.2-rc.1`、`next=0.2.2-rc.3`）；② 2.8.8 相对 2.8.4 改了我们 23 个修改文件里的 **11 个**，补丁与 2.8.8 逐字节相同 **0 个**，升级覆盖修复实锤。已回写 [74 号](74-nextstep-landing.md) §C/§D 与 [76 号](76-nextstep-plan.md) 附订正。E2 一度用 39 行骨架覆盖了 74 号补完版，本轮合并两者为终版。

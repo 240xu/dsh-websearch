@@ -233,3 +233,18 @@ cd "$S" && node --test tests/*.test.js                                # 期望 7
 ## 结论（A/B/C/D/E 一句话）
 
 **A**：外部事实（npm 2.8.8 无 2.8.9、main 停 10-21、PR#7 open/0 review/3 文件、无 release）与本机事实（pin 2.8.4、35/35 一致、73/73、26 备份、node v24.22.2）全部只读复核一致；**B**：本轮 5 项零副作用立即做、U* 需用户点头、N* 明确禁止；**C**：P0 = 钉基线 + 补 G5 + 修订 Node 旧裁决，G5 是对外 PR 的唯一前置；**D**：patch-package 不做、G5 diff 做、对外 PR 不做、升级不做（理由按 A9 改写）；**E**：阶段 0→4 可执行、立即清单 5 项、10 条风险登记、symlink 动态 relink 加固为下次 runtime 切换的必做前置。**一个必须用户点头的决定**：是否在 G5 diff 就绪后对外提交 PR / 回复 Issue #8（含是否发布 2.8.9）。
+
+## 附：A9 的进一步订正（2026-11-15 14:45，E2 第二轮 + Lead 复核）
+
+**A9 只说对了一半。** 独立复核 `/opt/dsh-0222/node_modules/@deepseek-ai/dsh/package.json`：
+
+```
+version = 0.2.2-rc.1
+engines = {"node": ">=24.9.0"}
+运行 Node = /opt/node24/bin/node → v24.22.2
+npm dist-tags: latest=0.2.2-rc.1, next=0.2.2-rc.3, alpha=0.2.2-alpha.3
+```
+
+⇒ **服务运行时本来就是 `@deepseek-ai/dsh@0.2.2-rc.1` 且 Node 满足要求**，历轮「升级到 0.2.2-rc.1」是**伪命题**（既不是 Node 22，也没有升级动作可做）。U3 里「升级 0.2.2-rc.1」应删除；真正相邻的决定是「是否上 `next=0.2.2-rc.3`」，仍属需用户点头且会切 runtime。E5 相应改为「rc.3 与 `unified` provider 的组合树实测」。
+
+本附 + [74 号](74-nextstep-landing.md) §D 为当前权威口径；20+ 份旧报告里的「Node 22 硬阻塞 / 待升级」按 99:3 保留为过程快照。
