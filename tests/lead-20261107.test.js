@@ -154,3 +154,26 @@ test("N2: changing a backend's baseURL invalidates the cache", async () => {
   assert.equal(calls, 2, "a changed backend setting must not be served from the old cache key");
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// #58327 lesson, made a local contract: every non-2xx HTTP failure must go
+// through webErrorFromResponse so downstream routing sees status/code instead
+// of parsing the message. Pin the 11 call sites across backends + mcp-client.
+test("all non-2xx throws use webErrorFromResponse (structured error contract)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { globSync } = await import("node:fs");
+  const path = await import("node:path");
+  const HERE = new URL(".", import.meta.url);
+  const root = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "lib");
+  const files = [
+    ...globSync(path.join(root, "backends", "*.js")),
+    path.join(root, "util", "mcp-client.js"),
+  ];
+  let calls = 0;
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    calls += (src.match(/throw webErrorFromResponse\(/g) ?? []).length;
+    // No backend may hand-write a generic WebError for an HTTP failure.
+    assert.doesNotMatch(src, /throw new WebError\([^)]*WEB_PROVIDER_ERROR[^)]*HTTP/);
+  }
+  assert.equal(calls, 11, "expected 11 structured non-2xx throw sites");
+});

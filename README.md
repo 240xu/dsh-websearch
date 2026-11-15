@@ -31,6 +31,17 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 
 > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
 
+### Adding a backend | 新增后端
+
+Non-2xx responses must be thrown through `webErrorFromResponse()` from
+`lib/util/web-error.js`. It attaches `status`, `code` (`RATE_LIMIT` / `QUOTA` /
+`WEB_PROVIDER_ERROR`), `retryAfter`, `rateLimited`, `quota` and `keylessRejected`
+after constructing the `WebError`; downstream routing (`failure-label.js`, the
+breaker, 3b) reads those fields, never the message text. Do not hand-write
+`new WebError(..., "WEB_PROVIDER_ERROR")` for an HTTP failure — that drops the
+status and makes a 429 look like an ordinary outage. A source-level test pins
+all 11 call sites.
+
 ### SearXNG 实例 | Public instances
 
 SearXNG 默认指向 `https://searx.be`；公共实例可用性随网络环境波动，失败时错误信息会提示换源。
