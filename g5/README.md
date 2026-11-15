@@ -1,28 +1,24 @@
 # G5 · 完整补丁（权威源）
 
-## 唯一权威源
+## 唯一权威源（**每次代码提交后必须跑 `bash g5/refresh.sh`**）
 
 **`G5-authoritative.patch`** = 发布仓库 `publish-work/repo` 中
 `git diff d2602823 HEAD -- . ':!docs/audit'`。
 
 - 基线提交 `d2602823`：npm `@240xu/dsh-websearch@2.8.4` tarball（33 文件）
 - HEAD：当前分支 `local-audit-35files-20261115`，含 35 文件补丁 + README 测试章节 + `tests/relink-test-deps.sh` + `.gitignore`
-- 共 39 段（35 补丁文件 + 后续新增的脚手架/忽略文件），3610 行级
+- 范围：`git diff d2602823 HEAD -- lib tests README.md package.json .gitignore`（**不含 `g5/archive/` 等归档**，否则会把 3 份旧补丁塞进来）
+- 当前 37 段 / 3983 行
 
-**验收（2026-11-15 实测）**：在洁净 2.8.4 树里 `git init` + `git apply --check` → exit 0；
-真实 `git apply` 后与 `src-work/plugin/` **35/35 逐字节相同**。
-⇒ 这是唯一经真实 apply 闭环验证的补丁源。
+**验收（2026-11-15 21:55，`bash g5/refresh.sh` 输出）**：`37 segments, 35/35 byte-identical`。脚本会重新生成补丁、对洁净 2.8.4 树 `git apply --check` + 真实 apply、再逐文件 `cmp` 到 `src-work`，不满足 35/35 就 exit 1。
+
+> **⚠️ A1 事故（2026-11-15）**：E1 那轮修完 N1–N4 后提交了 `52e26ae`，但**没有重新生成补丁**，`G5-authoritative.patch` 仍是 `230c1cf` 时代的 39 段旧快照（含 `req.destroy()`、`id: skipInitialize?1:2`、无 `sessionCacheKey`/后端级缓存键）。用它 apply 到 2.8.4 只有 **25/35** 与 src-work 相同，会把 4 条 P1 全部重新引入。现由 `refresh.sh` 把「重新生成 + 35/35 验收」固化成一步，杜绝再次脱节。
 
 ## 生成与复验
 
 ```bash
-cd /home/ova/dsh/.artifacts/websearch-research/publish-work/repo
-git diff d2602823 HEAD -- . ':!docs/audit' > /path/to/G5-authoritative.patch
-
-V=$(mktemp -d); cp -a <clean-2.8.4-tree>/. "$V"/
-(cd "$V" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base \
-  && git apply --check /path/to/G5-authoritative.patch && git apply /path/to/G5-authoritative.patch)
-# 再逐文件 cmp 到 src-work/plugin/ 的 35 文件
+bash /home/ova/dsh/.artifacts/websearch-research/g5/refresh.sh
+# 输出应为: ... 35/35 byte-identical
 ```
 
 ## 对 2.8.8 不兼容（精确口径）
