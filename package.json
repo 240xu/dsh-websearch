@@ -1,0 +1,73 @@
+{
+  "name": "@240xu/dsh-websearch",
+  "version": "2.8.4",
+  "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search. 统一网页搜索聚合：11 后端并发扇出、去重合并，零依赖。See CHANGELOG.md for version history.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "web-search",
+    "mcp",
+    "exa",
+    "parallel",
+    "brave",
+    "tavily",
+    "serper",
+    "searxng",
+    "mojeek",
+    "claude",
+    "codex",
+    "cordis"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "240xu",
+    "email": "2401826246@qq.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/240xu/dsh-websearch.git"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-web": "*",
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-credentials": "*",
+    "@deepseek-ai/dsh-settings": "*",
+    "@deepseek-ai/dsh-launch-environment": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": ">=20.3"
+  }
+}
