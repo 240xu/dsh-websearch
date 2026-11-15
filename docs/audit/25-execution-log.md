@@ -85,8 +85,8 @@ src-work/plugin 与安装目录 7 个文件逐字节 MATCH：
 > 历史：4cp+3rm → 10 → 17 → 23 → 34 → 35 文件，前几版都与实际改动数脱节（54 号全量审计判为 P0「不可执行」）。本版按 **2026-11-10 19:25 实测**逐文件核对：**35 个改动 = 23 个修改（有 `.orig` 备份）+ 12 个新增（需 rm）**，备份目录 26 个 `*.orig`（其中 3 个属 profile/包级，不在本链）。**这是 websearch 插件本身唯一可执行的完整链**。
 >
 > **⚠️ 运行时前提（62 号附录二 H-1/H-2/H-3，2026-11-10 补；2026-11-12 按第三次切换修订，见 [71 号](71-goal-runtime-switch.md)）**：
-> 1. 服务 cmdline 自 **11-11 21:26** 起为 `/opt/node24/bin/node /opt/dsh-0222/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open --host ...`（**无 `--patch` 参数**）；此前 11-09 21:25 为 `/home/dsh/.dsh-exp022/runtime/.../bin.js web --patch ...`，**两版都不含字面 `dsh web --patch`** ⇒ environ 验证步必须用 `systemctl show -p MainPID --value dsh-web.service`（已在下方 4b 修正）。G3 用 `plugin_manager list_plugins` 实时确认 `include:dsh-websearch enabled=true fiberPhase=active`。
-> 2. **当前实测（2026-11-12 05:15）**：全系统只剩**一套** `@240xu/dsh-websearch` 安装 = `/home/dsh/.dsh/profiles/web/node_modules/@240xu/dsh-websearch`；`/home/dsh/.dsh-exp022/` 与 `/opt/dsh-0222/` 下均无 profile 副本。`DSH_HOME=/home/dsh/.dsh`、`DSH_PROFILE=web` ⇒ 下方 `$P` 就是运行时实际加载的副本（G3 取证闭合）。若将来 `DSH_HOME` 改指别的 profile 且新副本出现，须把 `$P` 同步改为新路径再回滚。
+> 1. 服务 cmdline 自 **11-11 21:26** 起为 `/opt/node24/bin/node /opt/dsh-0222/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open --host ...`（**无 `--patch` 参数**）；此前自 **11-09 21:25 服务重启**起为 `/home/dsh/.dsh-exp022/runtime/.../bin.js web --patch ...`（launcher 的对应改写发生在同日 **20:17**，见前提 3；两者是不同事件，不是时间笔误），**两版都不含字面 `dsh web --patch`** ⇒ environ 验证步必须用 `systemctl show -p MainPID --value dsh-web.service`（已在下方 4b 修正）。G3 用 `plugin_manager list_plugins` 实时确认 `include:dsh-websearch enabled=true fiberPhase=active`。
+> 2. **当前实测（2026-11-15 14:20，见 [75 号](75-nextstep-runtime.md)）**：运行时**唯一 active 副本**是 `/home/dsh/.dsh/profiles/web/node_modules/@240xu/dsh-websearch`（`$P`）；`/home/dsh/.dsh-exp022/` 与 `/opt/dsh-0222/` 下均无 profile 副本。另有**一套非 active 的 recovery 备份** `/home/dsh/.dsh/dsh-purge-community/install-recovery/2026-11-11T08-35-08-200Z-dba1431d/failed-node_modules/@240xu/dsh-websearch`（46 文件），`/proc/<MainPID>/maps|fd|environ` 实测 **0 引用** ⇒ 不参与加载、不在回滚链内。`DSH_HOME=/home/dsh/.dsh`、`DSH_PROFILE=web` ⇒ `$P` 就是服务加载的副本。若将来 `DSH_HOME` 改指别的 profile 且新 active 副本出现，须把 `$P` 同步改为新路径再回滚。
 > 3. `/usr/local/sbin/dsh-web-run-native.sh` 被**外部 runtime 切换**重写了两次：11-09 20:17（node22→node24、bin 改 exp022、trusted-host .165→.7、删 WARP proxy export）、**11-11 21:26:22（bin 改 `/opt/dsh-0222/...`、删除 `--patch` 参数）**，有 `/usr/local/sbin/dsh-web-run-native.sh.bak-direct-20261106T111430Z` 可 diff。**这不属于 websearch 插件改动**，且回滚它会把 node24 服务退回 node22 二进制、破坏当前 DSH runtime ⇒ **默认不纳入本链**。仅在用户明确要求「连 runtime 一起回退」时才执行下方可选步。
 
 ```bash
@@ -165,7 +165,10 @@ SVC_PID=$(systemctl show -p MainPID --value dsh-web.service)
 echo " verifying against real service PID: $SVC_PID"
 tr '\0' '\n' < /proc/"$SVC_PID"/environ \
   | grep -E '^(DSH_WEB_FETCH_PROVIDER|HTTP_PROXY|HTTPS_PROXY)='
-#   期望：无输出（drop-in 已移除）
+#   期望：无输出（drop-in 已移除）。该判据假设这 3 个变量只由 drop-in 注入；
+#   2026-11-15 实测 llm.env / web-auth.env / 主单元均不含它们（0 命中）。若
+#   将来 launcher 或这些文件补了同名 export，本步会假红 ⇒ 先逐一确认来源，
+#   再判定 drop-in 是否真的移除，不能只看「有输出」就下结论。
 # 5) 功能验证（会重现基线故障，属预期）：
 #    web_fetch  -> WEB_PROVIDER_AMBIGUOUS
 #    web_search -> all enabled backends failed (4) 或全超时

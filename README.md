@@ -237,7 +237,23 @@ tests/
 node --test tests/
 ```
 
-v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）。
+当前 73/73 pass（`node --test tests/*.test.js`）。
+
+### Test-only dependencies
+
+The six `@deepseek-ai/*` packages under `node_modules/` are test-only symlinks
+into the running Harness checkout. They are not shipped and are gitignored. A
+runtime switch moves the checkout and leaves absolute links dangling, which
+makes `node --test` fail with `ERR_MODULE_NOT_FOUND`. Rebuild them from the
+live service before running the suite:
+
+```bash
+bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
+find node_modules/@deepseek-ai -xtype l   # expect no output
+node --test tests/*.test.js                 # 73/73
+```
+
+v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。
 
 ## 权威依据与取舍 | Authoritative sources & design trade-offs
 

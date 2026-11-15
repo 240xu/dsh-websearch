@@ -1,0 +1,46 @@
+# G5 完整 35 文件 diff
+
+- 生成时间: 2026-11-15 14:16:01 CST
+- 基线: npm @240xu/dsh-websearch@2.8.4 tarball (33 文件)
+- 目标: src-work/plugin（35 改动文件）
+- 分类: 修改 22 + 新增 13（注意 failure-label.js 在 2.8.8 才引入，相对 2.8.4 是新增）
+- patch: G5-full-35files.patch，3521 行 / 176K
+- dry-run 对 2.8.4: exit 0（35/35 段全部可 apply）
+- dry-run 对 2.8.8: exit 1（基线不同，不可直接 apply；对外 PR 应先 rebase 到 2.8.8 或分版本提交）
+
+## 35 段清单
+- b/lib/util/egress-fetch.js
+- b/lib/util/mcp-client.js
+- b/lib/util/failure-label.js
+- b/lib/index.js
+- b/lib/client.js
+- b/lib/cache.js
+- b/lib/health.js
+- b/lib/history.js
+- b/lib/provider.js
+- b/lib/settings-api.js
+- b/lib/breaker.js
+- b/lib/backends/exa.js
+- b/lib/backends/parallel.js
+- b/lib/backends/tavily.js
+- b/lib/backends/serper.js
+- b/lib/backends/brave.js
+- b/lib/backends/mojeek.js
+- b/lib/backends/ddg.js
+- b/lib/backends/searxng.js
+- b/lib/backends/openai.js
+- b/lib/backends/anthropic-like.js
+- b/README.md
+- b/package.json
+- b/lib/util/namespace.js
+- b/lib/util/web-error.js
+- b/lib/backends/firecrawl.js
+- b/lib/backends/tinyfish.js
+- b/tests/lead-20261106.test.js
+- b/tests/lead-20261107.test.js
+- b/tests/lead-20261107-p0.test.js
+- b/tests/lead-20261108-interaction.test.js
+- b/tests/lead-20261108-quota.test.js
+- b/tests/lead-20261108-sse.test.js
+- b/tests/lead-20261109-3b-runtime.test.js
+- b/tests/settings-api.test.js
