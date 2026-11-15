@@ -3,13 +3,13 @@
 [![npm version](https://img.shields.io/npm/v/@240xu/dsh-websearch.svg)](https://www.npmjs.com/package/@240xu/dsh-websearch)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to eleven backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
+> Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to thirteen backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
 
 A pure-Cordis drop-in: registers ONE provider at `ctx.web` so the `dsh-web` selection rule never fires `WEB_PROVIDER_AMBIGUOUS`. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek) auto-activate once their key is supplied via the credentials service or env.
 
 ---
 
-DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十一后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
+DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十三后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
 
 纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
 
@@ -96,7 +96,7 @@ pnpm install
 **结果健康遥测（默认开）**：每次搜索的 `content` 尾部附一行 `[websearch backends] exa ✓5ms/3 · ddg ✗30000ms`，
 模型可据此自诊断并建议用户调整设置；设置面板「结果策略」可关闭（`resultTelemetry`）。
 
-**11 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai`（默认关）
+**13 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai` / `enableFirecrawl` / `enableTinyfish`（默认关，后两者为计量型免 Key 后端）
 
 **API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
 
@@ -113,7 +113,7 @@ pnpm install
 
 **Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
 
-环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
+环境变量兜底：未在 credentials 配置时回退读同名环境变量。`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔指定启用集合，但优先级低于 `enabledBackends` 与 `enableXxx` 开关；由于四个免 Key 后端开关默认均为 `true`，该环境变量仅在所有开关被显式关闭时生效（Known Limitation）。
 
 ## v2.8.1 SettingsForms 适配 | What's new in v2.8.1
 
@@ -128,7 +128,7 @@ pnpm install
 ### 1. multiQuery 多查询 RRF 融合（`multiQueryEnabled`，默认关）
 
 - 门控启发式（刻意从严）：查询长度 > 60 字符，或含 `vs / and / 比较 / 对比 / 和` 分隔词，才触发；简单查询单扇出，行为与旧版完全一致（arXiv:2404.01037：盲目多查询会劣化）。
-- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 11 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
+- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 13 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
 - 遥测行合并各变体并截断至 12 条，避免淹没结果。
 
 ### 2. deepCoverage 深度覆盖（`deepCoverage`，默认关）
