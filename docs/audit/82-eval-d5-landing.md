@@ -1,5 +1,6 @@
 # 82 · A2 独立评估：D5 跨会话功能性干扰 — 最小修法与工程落地（终版）
 
+> **⚠️ 22:20 A2 终版（458 行）更正，覆盖上文 §2 推荐**：生产里 `index.js:498` 只 `createUnifiedSearchProvider` 一次、`:514` 注册一次 ⇒ **provider 是单例**；`WebSearchRequest` 只有 `query/maxResults/filters`，seam 不传会话标识。因此「注入式 healthStore」只能隔离多实例，**单进程跨会话干扰仍在**；彻底修须跨包改 pre-stable seam（非最小、需用户点头）。且 429 是账号级配额，「全健康的 B」是 fake 假设 ⇒ A2 建议把 **D5 从 P1 复议为产品语义取舍**。另发现 `history.js:87-96` 的 `clear()` 直接 `unlinkSync(file())` 删整文件 ⇒ 任一会话 `POST /history/clear`，全进程所有会话一起丢历史（比 D5 更直观、无需 429）。落地：PR base 2.8.4 GO / 2.8.8 NO-GO（main 已 2.8.8、分支基 2.8.4 有回退分叉）；publish NO-GO（ENEEDAUTH）；rc.3 NO-GO。**仍需用户点头**（修法范围 + 定级）。
 > 角色：独立评估专家 A2（D5 与工程落地）。**独立取证**：不采信 73/80 号结论，全部以当前 `src-work/plugin/` 源码 + `node` 行为级复现重跑。
 > 约束遵守：**唯一写文件为本报告**；未改源码/配置/运行时/其它报告；未操作任务板；未 commit/push/publish/改 profile；所有复现脚本写在 `/tmp/a2-*`，跑完已删（`ls -d /tmp/a2-*` → 无残留）。
 > 采样：2026-11-15 21:44–21:56 +08:00。Node `v24.22.2`，runtime `/opt/dsh-0222`（`0.2.2-rc.1`）。

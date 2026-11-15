@@ -6,7 +6,7 @@ index 0000000..c2658d7
 @@ -0,0 +1 @@
 +node_modules/
 diff --git a/README.md b/README.md
-index 21efb1a..20cae88 100644
+index 21efb1a..2f3eaa7 100644
 --- a/README.md
 +++ b/README.md
 @@ -3,13 +3,13 @@
@@ -25,7 +25,25 @@ index 21efb1a..20cae88 100644
  
  纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
  
-@@ -96,7 +96,7 @@ pnpm install
+@@ -31,6 +31,17 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：
+ 
+ > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
+ 
++### Adding a backend | 新增后端
++
++Non-2xx responses must be thrown through `webErrorFromResponse()` from
++`lib/util/web-error.js`. It attaches `status`, `code` (`RATE_LIMIT` / `QUOTA` /
++`WEB_PROVIDER_ERROR`), `retryAfter`, `rateLimited`, `quota` and `keylessRejected`
++after constructing the `WebError`; downstream routing (`failure-label.js`, the
++breaker, 3b) reads those fields, never the message text. Do not hand-write
++`new WebError(..., "WEB_PROVIDER_ERROR")` for an HTTP failure — that drops the
++status and makes a 429 look like an ordinary outage. A source-level test pins
++all 11 call sites.
++
+ ### SearXNG 实例 | Public instances
+ 
+ SearXNG 默认指向 `https://searx.be`；公共实例可用性随网络环境波动，失败时错误信息会提示换源。
+@@ -96,7 +107,7 @@ pnpm install
  **结果健康遥测（默认开）**：每次搜索的 `content` 尾部附一行 `[websearch backends] exa ✓5ms/3 · ddg ✗30000ms`，
  模型可据此自诊断并建议用户调整设置；设置面板「结果策略」可关闭（`resultTelemetry`）。
  
@@ -34,7 +52,7 @@ index 21efb1a..20cae88 100644
  
  **API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
  
-@@ -113,7 +113,7 @@ pnpm install
+@@ -113,7 +124,7 @@ pnpm install
  
  **Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
  
@@ -43,7 +61,7 @@ index 21efb1a..20cae88 100644
  
  ## v2.8.1 SettingsForms 适配 | What's new in v2.8.1
  
-@@ -128,7 +128,7 @@ pnpm install
+@@ -128,7 +139,7 @@ pnpm install
  ### 1. multiQuery 多查询 RRF 融合（`multiQueryEnabled`，默认关）
  
  - 门控启发式（刻意从严）：查询长度 > 60 字符，或含 `vs / and / 比较 / 对比 / 和` 分隔词，才触发；简单查询单扇出，行为与旧版完全一致（arXiv:2404.01037：盲目多查询会劣化）。
@@ -52,7 +70,7 @@ index 21efb1a..20cae88 100644
  - 遥测行合并各变体并截断至 12 条，避免淹没结果。
  
  ### 2. deepCoverage 深度覆盖（`deepCoverage`，默认关）
-@@ -237,7 +237,23 @@ tests/
+@@ -237,7 +248,23 @@ tests/
  node --test tests/
  ```
  
@@ -2829,10 +2847,10 @@ index 0000000..b562acf
 +});
 diff --git a/tests/lead-20261107.test.js b/tests/lead-20261107.test.js
 new file mode 100644
-index 0000000..166a1e7
+index 0000000..3a3310a
 --- /dev/null
 +++ b/tests/lead-20261107.test.js
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,179 @@
 +// tests/lead-20261107.test.js — regression for the "saving a setting does
 +// nothing" bug (upstream PR #7) + the RFC1918 baseURL trust gate.
 +// Run: node --test tests/lead-20261107.test.js
@@ -2988,6 +3006,29 @@ index 0000000..166a1e7
 +  await provider.search(req, new AbortController().signal);
 +  assert.equal(calls, 2, "a changed backend setting must not be served from the old cache key");
 +  fs.rmSync(dir, { recursive: true, force: true });
++});
++
++// #58327 lesson, made a local contract: every non-2xx HTTP failure must go
++// through webErrorFromResponse so downstream routing sees status/code instead
++// of parsing the message. Pin the 11 call sites across backends + mcp-client.
++test("all non-2xx throws use webErrorFromResponse (structured error contract)", async () => {
++  const { readFileSync } = await import("node:fs");
++  const { globSync } = await import("node:fs");
++  const path = await import("node:path");
++  const HERE = new URL(".", import.meta.url);
++  const root = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "lib");
++  const files = [
++    ...globSync(path.join(root, "backends", "*.js")),
++    path.join(root, "util", "mcp-client.js"),
++  ];
++  let calls = 0;
++  for (const f of files) {
++    const src = readFileSync(f, "utf8");
++    calls += (src.match(/throw webErrorFromResponse\(/g) ?? []).length;
++    // No backend may hand-write a generic WebError for an HTTP failure.
++    assert.doesNotMatch(src, /throw new WebError\([^)]*WEB_PROVIDER_ERROR[^)]*HTTP/);
++  }
++  assert.equal(calls, 11, "expected 11 structured non-2xx throw sites");
 +});
 diff --git a/tests/lead-20261108-interaction.test.js b/tests/lead-20261108-interaction.test.js
 new file mode 100644
