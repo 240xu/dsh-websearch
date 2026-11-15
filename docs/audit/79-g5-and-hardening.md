@@ -60,3 +60,9 @@ E1/E2 的 fork 又是「骨架后结束」且未落盘；由 Lead 用本会话�
 
 ---
 无凭证值写入本文件。
+
+## 7. 收尾补记（14:30）
+
+- 全库密钥复扫发现 `.baseline-20261111-2230/67-assessment-runtime.md`（11-11 基线快照）仍含未脱敏的旧 `Set-Cookie` 值；已就地替换 cookie 名+值为 `<REDACTED>`，**全库 0 命中**。该基线不在已推送分支内，推送分支 `git log --all -p` 复扫同为 0 命中。
+- GitHub `main` 一次 API 读取返回 `overloaded_error`（代理后端过载，非权限问题）；换 `git/ref/heads/main` 重试成功，确认仍为 `da42e44a0f54`，未被本次推送改变。
+- 最终远端分支 `local-audit-35files-20261115` = `a5d404dc9754a8a8d95d7a0035409fd6d98a2b74`，本地 HEAD 同值；4 个提交；`npm latest` 仍 2.8.8，PR #7 仍 open。
