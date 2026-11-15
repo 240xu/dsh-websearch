@@ -1,5 +1,6 @@
 # 83 · 同类项目搜索与亮点评估（S1 骨架 → Lead 补完，2026-11-15 22:15）
 
+> **⚠️ 22:30 补注（[89 号](89-b1-source-findings.md)）**：B1 用认证 GitHub API 核实 7 个同类仓库**全部 MIT**，`f0909172434/dsh-plugin-verified-search` 301 → `Chih-Kai-Wang/...`；并读到 modsearch `cooldown.ts`/`router.ts`、aggregation `provider.ts`/`keys.ts`/`config.ts`、ssrf-guard `src/ssrf.js`、verified-search `src/domains.ts` 源码。本号中标 E 的这几项应升级为 A/B，详见 89 号 §1。
 > S1 顾问落盘 30 行骨架后结束；Lead 用 `web_search`（6 组查询、真实扇出）+ GitHub REST API 只读（token 值脱敏）+ `web_fetch` 补完。**只看了 PR/Issue 正文、文件清单与部分 diff；未逐个 clone 源码** ⇒ star / LICENSE / 实现细节凡未读到一律标 E。
 > 交叉参考：[84 号](84-lead-peer-leads.md)（线索底稿 + PR#47334 源码级证据）、[86 号](86-borrow-review.md)（选择性抄取 Top5）、[87 号](87-borrow-adversarial.md)（反方风险）。
 
