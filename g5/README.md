@@ -36,6 +36,8 @@ bash /home/ova/dsh/.artifacts/websearch-research/g5/refresh.sh
 | `archive/G5-e2-284.patch` | E2 的 PR 级补丁 | 段头 `base2.8.4/...` ↔ `pr284/...`，`patch -p1` 到 2.8.4 根目录找不到文件；需特定 -p/目录层级 |
 | `archive/G5-e2-35files.patch` | E2 的 35 文件补丁 | 同上格式约束 |
 
+`archive/G5-lead-legacy-duplicate.patch` 是仓库副本里残留的同一份废弃补丁（A1 发现逐字节相同，已归入 archive）。
+
 三者对 2.8.4 的 `--dry-run` 都可能报 CLEAN，但**只有 `git apply` 到洁净树后 35/35 逐字节比对才算数**。
 
 ## 与上游现状

@@ -33,3 +33,17 @@ MOD="lib/util/egress-fetch.js lib/util/mcp-client.js lib/util/failure-label.js l
 n=0; for f in $MOD; do cmp -s "$V/$f" "$S/$f" && n=$((n+1)) || echo "DIFF $f" >&2; done
 echo "G5-authoritative.patch: $(wc -l < "$OUT") lines, $(grep -c '^diff --git' "$OUT") segments, $n/35 byte-identical"
 [[ "$n" -eq 35 ]] || exit 1
+
+# Keep the artifacts-tree copy and the branch checkout byte-identical.
+# A1 (2026-11-15) found these two drifted when refresh ran from one side only.
+OTHER=""
+if [[ "$OUT" == "$R/g5/G5-authoritative.patch" ]]; then
+  OTHER="/home/ova/dsh/.artifacts/websearch-research/g5/G5-authoritative.patch"
+else
+  OTHER="$R/g5/G5-authoritative.patch"
+fi
+if [[ -f "$(dirname "$OTHER")/refresh.sh" || -d "$(dirname "$OTHER")" ]]; then
+  cp "$OUT" "$OTHER"
+  cmp -s "$OUT" "$OTHER" || { echo "two authoritative copies diverged" >&2; exit 1; }
+  echo "both copies identical: $(md5sum "$OUT" | cut -c1-12)"
+fi

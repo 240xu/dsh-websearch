@@ -1,5 +1,6 @@
 # 84 · Lead 侧同类项目线索底稿（供 S1 交叉核对，2026-11-15 21:50）
 
+> **⚠️ 22:40 订正（[91 号](91-s1-corrections.md)）**：「上游 2.8.8 ddg 5s→8s / forwarder hop」应属 **2.8.6**；2.8.8 只有 README/版本号。verified-search 身份 301 → Chih-Kai-Wang，主题为 bounded evidence workflow。
 > 用户「分配专家自代理评估，再分配一个去搜同类型项目，看看抄过来一点，要评估亮点，选择性抄」。
 > 本文件是 Lead 自己用 `web_search` 摸到的**线索**，不是结论；权威评估见 [83 号](83-peer-projects.md)（S1 专家，独立取证）。两条底稿分开，避免把我的搜索结果当专家的。
 
