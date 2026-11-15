@@ -70,11 +70,11 @@ test("SSE: BOM, CRLF, data:[DONE], event lines and string ids", () => {
   assert.equal(parseEnvelope(J({ result: { ok: 6 } }), 2).result.ok, 6);
 });
 
-test("plain JSON keeps permissive id handling for stateless MCP endpoints", () => {
-  // Stateless endpoints may echo a different (or no) id; the plain-JSON path
-  // deliberately returns the parsed envelope, while the SSE path still picks
-  // the frame matching expectedId.
-  assert.equal(parseEnvelope(J({ id: 7, result: { ok: 1 } }), 2).result.ok, 1);
+test("plain JSON rejects a foreign id but tolerates a missing one", () => {
+  // A response explicitly carrying a different id belongs to another request
+  // (65 号 N3a). Only a missing id is tolerated for notification-style
+  // replies; string ids equal to the numeric expectedId are accepted.
+  assert.throws(() => parseEnvelope(J({ id: 7, result: { ok: 1 } }), 2), /response id does not match/);
   assert.equal(parseEnvelope(J({ id: "2", result: { ok: 2 } }), 2).result.ok, 2);
   assert.equal(parseEnvelope(J({ result: { ok: 3 } }), 2).result.ok, 3);
 });
@@ -91,4 +91,24 @@ test("egress-fetch collect() guards Response construction", async () => {
   assert.match(body, /res\.on\("end", \(\) => \{/);
   assert.match(body, /try \{/);
   assert.match(body, /catch \(err\) \{\s*reject\(err\);/);
+});
+
+// 65 号 N3 (partial): tools/call ids must never collide with initialize's
+// id=1, otherwise a shared SSE stream can hand a serverInfo frame back as a
+// search result. We keep plain-JSON permissive (stateless endpoints may echo
+// a different id) but make SSE id matching symmetric with the batch path.
+test("tools/call ids avoid initialize; SSE id matching is string-tolerant", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../lib/util/mcp-client.js", import.meta.url), "utf8");
+  assert.match(src, /id: options\.skipInitialize \? 2 : 3/);
+  assert.doesNotMatch(src, /id: options\.skipInitialize \? 1 : 2/);
+  assert.match(src, /String\(r\.id\) === String\(expectedId\)/);
+  // A shared stream carrying an initialize-shaped frame and the real frame:
+  // expectedId 3 must pick the tools/call frame, not id 1.
+  const init = "data: " + J({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "x", serverInfo: { name: "x" } } }) + "\n\n";
+  const real = "data: " + J({ jsonrpc: "2.0", id: 3, result: { content: [{ text: "REAL" }] } }) + "\n\n";
+  const out = parseEnvelope(init + real, 3);
+  assert.deepEqual(out.result.content[0].text, "REAL");
+  // String ids are accepted on the SSE path too.
+  assert.equal(parseEnvelope("data: " + J({ id: "3", result: { ok: 1 } }) + "\n\n", 3).result.ok, 1);
 });

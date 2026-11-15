@@ -213,3 +213,71 @@ test("a write() failure is caught by guarded and returns a response", async () =
   assert.ok(rs.writableEnded, "the client must receive a response");
   assert.ok(rs.code >= 400);
 });
+
+// 65 号 N1: an oversized body must produce an actionable 413, not
+// ECONNRESET. Destroying the request socket prevented the 413 from being
+// written; draining with req.resume() keeps the response reachable.
+test("oversized settings POST returns 413, not ECONNRESET", async () => {
+  const http = await import("node:http");
+  const { registerSettingsRoutes } = await import("../lib/settings-api.js");
+  let handler;
+  registerSettingsRoutes({ register: (r) => { handler = r.handler; } }, {
+    getConnection: () => ({ admit: () => ({}) }),
+    getSettings: () => ({ describe: () => [{ ns: "dsh-websearch", value: {}, base: {}, user: {}, revision: 1, applies: "live" }], mutate: async () => ({}) }),
+    getConfig: () => ({ dict: {} }),
+  });
+  const srv = http.createServer(handler);
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const body = JSON.stringify({ ops: [], pad: "x".repeat(70_000) });
+  const res = await new Promise((resolve) => {
+    const req = http.request({
+      host: "127.0.0.1", port, method: "POST", path: "/api/unified-search/settings",
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), host: "127.0.0.1" },
+    }, (r) => { let d = ""; r.on("data", (c) => d += c); r.on("end", () => resolve({ status: r.statusCode, body: d })); });
+    req.on("error", (e) => resolve({ status: "ERR", body: e.code || e.message }));
+    req.end(body);
+  });
+  assert.equal(res.status, 413, "expected an actionable 413, got " + String(res.body).slice(0, 60));
+  assert.match(String(res.body), /request body too large/);
+  srv.close();
+});
+
+// 65 号 A.6 / E1: a duplicate route mid-registration must not leak the
+// routes already acquired. Roll them back before rethrowing so a later
+// reload can register the full set again.
+test("partial route registration rolls back on a duplicate route", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../lib/index.js", import.meta.url), "utf8");
+  assert.match(src, /for \(const register of registers\) disposers\.push\(\.\.\.register\(\)\)/);
+  assert.match(src, /for \(const dispose of disposers\.reverse\(\)\)/);
+  assert.match(src, /throw err;/);
+  // Behavioural: simulate the third register failing after two succeeded.
+  const table = new Map();
+  const ws = {
+    register(route) {
+      if (table.has(route.path)) throw new Error("duplicate route " + route.path);
+      table.set(route.path, route);
+      return () => table.delete(route.path);
+    },
+  };
+  const { registerHealthRoute } = await import("../lib/health.js");
+  const { registerHistoryRoutes } = await import("../lib/history.js");
+  const { registerSettingsRoutes } = await import("../lib/settings-api.js");
+  const noop = () => undefined;
+  const disposers = [];
+  const registers = [
+    () => registerHealthRoute(ws, { resolveOptions: () => ({}), backends: {}, getBackendHealth: () => new Map(), getConnection: noop }),
+    () => registerHistoryRoutes(ws, { getStore: () => null, getBackendHealth: () => new Map(), getConnection: noop }),
+    () => { table.set("/api/unified-search/settings", {}); throw new Error("duplicate route /api/unified-search/settings"); },
+    () => registerSettingsRoutes(ws, { getSettings: () => null, getConfig: () => ({}), getConnection: noop }),
+  ];
+  try {
+    for (const register of registers) disposers.push(...register());
+    assert.fail("expected a duplicate-route error");
+  } catch (err) {
+    for (const dispose of disposers.reverse()) dispose();
+  }
+  assert.equal(table.size, 1, "only the foreign pre-occupied route may remain");
+  assert.ok(table.has("/api/unified-search/settings"));
+});

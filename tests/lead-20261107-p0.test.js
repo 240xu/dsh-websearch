@@ -29,10 +29,13 @@ async function withFakeFetch(fn) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), headers: init?.headers ?? {} });
-    // Minimal MCP tools/call envelope with an embedded JSON result string.
+    // Echo the request id like a JSON-RPC server; stateless calls use 2 and
+    // sessionful ones 3, so a hardcoded id would be rejected by parseEnvelope.
+    let reqId = 2;
+    try { reqId = JSON.parse(String(init?.body ?? "{}")).id ?? 2; } catch { /* keep 2 */ }
     const inner = JSON.stringify({ results: [{ url: "https://x.test", title: "X", snippet: "s" }] });
     return new Response(
-      JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: inner }] } }),
+      JSON.stringify({ jsonrpc: "2.0", id: reqId, result: { content: [{ type: "text", text: inner }] } }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   };

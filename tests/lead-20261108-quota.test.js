@@ -147,3 +147,27 @@ test("cooledAnnotation is evaluated at fan-out time, not render time", async () 
   assert.match(src, /cooledAnnotation\(centry, nowMs\)/);
   assert.doesNotMatch(src, /cooledAnnotation\(centry, Date\.now\(\)\) \|\| "⏸cooled"/);
 });
+
+// 65 号 A.7: a zero/negative concurrency must not hang every queued backend.
+test("createLimiter clamps a non-positive limit to 1", async () => {
+  const { createLimiter } = await import("../lib/provider.js");
+  for (const bad of [0, -1, NaN]) {
+    const limit = createLimiter(bad);
+    let done = false;
+    await Promise.race([
+      limit(async () => { done = true; return 1; }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("hang")), 200)),
+    ]);
+    assert.equal(done, true, "limit(" + String(bad) + ") must resolve");
+  }
+  const six = createLimiter(6);
+  assert.ok(await six(async () => 1) === 1);
+});
+
+// 65 号 A.8: a cooldown that expires during a slow search must be marked as
+// expired, not reported as still cooling.
+test("cooled note marks a window that expired during the search", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../lib/provider.js", import.meta.url), "utf8");
+  assert.match(src, /isCooled\(centry, Date\.now\(\)\) \? "" : " \(expired during search\)"/);
+});

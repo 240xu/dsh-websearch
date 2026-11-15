@@ -80,23 +80,28 @@ test("M-3: keyed tinyfish forces a fresh session, keyless is unchanged", async (
   const tf = readFileSync(new URL("../lib/backends/tinyfish.js", HERE), "utf8");
   assert.match(tf, /\{ skipInitialize: !keyed, forceFreshSession: keyed \}/);
   const mc = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
-  assert.match(mc, /async function ensureSession\(url, signal, options = \{\}\)/);
+  assert.match(mc, /async function ensureSession\(url, signal, options = \{\}, extraHeaders = \{\}\)/);
   assert.match(mc, /!options\.forceFreshSession && cached/);
   assert.match(mc, /forceFreshSession: options\.forceFreshSession === true/);
+  // 65 号 N4: the cache key must include the auth header, and handshake
+  // requests must carry the same credential as tools/call.
+  assert.match(mc, /sessionCacheKey\(url, extraHeaders\)/);
+  assert.match(mc, /\.\.\.extraHeaders,/);
   // The sessionId line prefix is a hard assertion anchor in lead-20261106.
   assert.match(mc, /const sessionId = options\.skipInitialize \? undefined : await ensureSession\(/);
 });
 
 // M-1: stateless MCP endpoints take the single tools/call path. The
 // sessionful (tinyfish keyed) path keeps id 2 so initialize cannot share an id.
-test("M-1: exa/parallel/firecrawl skip initialize; sessionful keeps id 2", async () => {
+test("M-1: exa/parallel/firecrawl skip initialize; call ids avoid initialize's", async () => {
   const { readFileSync } = await import("node:fs");
   for (const f of ["exa.js", "parallel.js", "firecrawl.js"]) {
     const src = readFileSync(new URL(`../lib/backends/${f}`, HERE), "utf8");
     assert.match(src, /skipInitialize: true/, `${f} must skip initialize`);
   }
   const mc = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
-  assert.match(mc, /id: options\.skipInitialize \? 1 : 2/);
+  // ids must avoid initialize's id=1 (see 65 号 N3 / sse.test.js).
+  assert.match(mc, /id: options\.skipInitialize \? 2 : 3/);
   // tinyfish keyless still skips; keyed still uses the handshake + fresh session.
   const tf = readFileSync(new URL("../lib/backends/tinyfish.js", HERE), "utf8");
   assert.match(tf, /\{ skipInitialize: !keyed, forceFreshSession: keyed \}/);
@@ -181,4 +186,43 @@ test("health and history expose cooldown classification without dropping old key
   assert.equal(typeof obs.cooledUntilMs, "number");
   assert.equal(obs.cooled, true);
   assert.ok(!JSON.stringify(obs).includes("apiKey"));
+});
+
+// 65 号 N4 (behavioural): a rotated credential must not reuse a session
+// bound to the old key, and the initialize handshake must carry the same
+// credential header as tools/call.
+test("N4: session cache is keyed by credential; handshake carries the key", async () => {
+  const http = await import("node:http");
+  const { mcpCall } = await import("../lib/util/mcp-client.js");
+  const seen = [];
+  let sessionSeq = 0;
+  const srv = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => body += c);
+    req.on("end", () => {
+      const parsed = (() => { try { return JSON.parse(body); } catch { return {}; } })();
+      seen.push({ method: parsed.method, apiKey: req.headers["x-api-key"] ?? null, session: req.headers["mcp-session-id"] ?? null });
+      if (parsed.method === "initialize") {
+        sessionSeq += 1;
+        res.writeHead(200, { "content-type": "application/json", "mcp-session-id": `s${sessionSeq}` });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18", serverInfo: { name: "x" } } }));
+      } else if (parsed.method === "notifications/initialized") {
+        res.writeHead(202); res.end();
+      } else {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: parsed.id ?? 3, result: { content: [{ type: "text", text: "ok" }] } }));
+      }
+    });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${srv.address().port}/mcp`;
+  const call = (key) => mcpCall(url, "search", { q: "x" }, { "X-API-Key": key }, new AbortController().signal, { forceFreshSession: false });
+  await call("KEY_A");
+  await call("KEY_B");
+  const inits = seen.filter((s) => s.method === "initialize");
+  assert.equal(inits.length, 2, "a rotated key must force a fresh initialize");
+  assert.equal(inits[0].apiKey, "KEY_A");
+  assert.equal(inits[1].apiKey, "KEY_B");
+  assert.equal(seen.find((s) => s.method === "notifications/initialized").apiKey, "KEY_A");
+  srv.close();
 });

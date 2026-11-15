@@ -10,7 +10,7 @@
 | 基线 | npm `@240xu/dsh-websearch@2.8.4` tarball（33 文件；上游无 v2.8.4 tag） |
 | 分类 | **22 修改 + 13 新增**（按文件在 2.8.4 中是否存在自动判定） |
 | `patch --dry-run` 对 2.8.4 | **exit 0**，35/35 段全部可 apply |
-| `patch --dry-run` 对 2.8.8 | **exit 1 / 11 段冲突**（基线不同）⇒ 不能直接套到 2.8.8，对外 PR 须先 rebase 或分版本提交 |
+| `patch --dry-run` 对 2.8.8 | **exit 1 / 4 文件 6 hunk FAILED**（基线不同；11 是日志里含汇总行的 FAILED 行数，不是失败 hunk 数）⇒ 不能直接套到 2.8.8，对外 PR 须先 rebase 或分版本提交 |
 
 **关键发现**：`lib/util/failure-label.js` 是**上游 2.8.8 才引入**的文件，2.8.4 里没有 ⇒ 我们本地在 2.8.4 上补它，相对 2.8.4 属**新增**。历轮「23 修改 + 12 新增」是相对某个中间基线的口径；以 2.8.4 tarball 为准应为 **22 + 13**。第一版 patch 用 `--label a/...` 掩盖了新增文件的 `/dev/null` 段头（会让 `patch` 把创建当修改），已改为按真实存在性生成、13 个 `/dev/null` 段齐备。
 
@@ -70,3 +70,17 @@ E1/E2 的 fork 又是「骨架后结束」且未落盘；由 Lead 用本会话�
 ## 8. E2 第二轮口径修订（14:45）
 
 E2 报来两条实测，Lead 逐条复核成立：① `/opt/dsh-0222/.../dsh/package.json` 是 **0.2.2-rc.1**、运行 Node **v24.22.2** ⇒ 历轮「升级 0.2.2-rc.1 / Node 22 硬阻塞」是伪命题（npm `latest=0.2.2-rc.1`、`next=0.2.2-rc.3`）；② 2.8.8 相对 2.8.4 改了我们 23 个修改文件里的 **11 个**，补丁与 2.8.8 逐字节相同 **0 个**，升级覆盖修复实锤。已回写 [74 号](74-nextstep-landing.md) §C/§D 与 [76 号](76-nextstep-plan.md) 附订正。E2 一度用 39 行骨架覆盖了 74 号补完版，本轮合并两者为终版。
+
+## 9. E2 终版附录 X 的订正（14:55，Lead 逐条复核）
+
+E2 落盘 201 行终版（保留我的合并版 + 追加「附录 X · E2 独立取证补遗」），订正 3 处，全部复核成立：
+
+1. **2.8.8 冲突计数**：我的「11 段」是 `patch` 日志里含 `1 out of N hunks FAILED` 汇总行的 FAILED 行数；**精确是 4 文件 6 hunk FAILED**（`provider.js` 3、`ddg.js` 1、`searxng.js` 1、`package.json` 1，E2 的 PR 级补丁逐文件表）。两个补丁（我的 3521 行 / E2 的 3581 行）对 2.8.8 都 exit=1，结论一致「不可直接 apply」。73/79 号措辞已订正。
+2. **`pushed_at` 三时间戳**：main HEAD commit date = `2026-10-21T14:08:30Z`（`da42e44a`）；**repo `pushed_at` = `2026-11-15T06:47:40Z`**（今天，因我推的新分支）；`updated_at = 2026-11-07T04:49:21Z`。77 号「main 停 10-21」成立，但把 `pushed_at` 也写成 10-21 已过时。REPORT 已加订正。
+3. **PR#7 精确状态**：open / `mergeable=true` / **`mergeable_state=clean`** / 0 review / 0 comment / 3 files（+76/−2）。
+
+**新增硬阻塞（E2 X.1/X.5）**：`patch-package@8.0.1` 在 pnpm-only profile 里 `npx patch-package <pkg>` 实报 `No package-lock.json, npm-shrinkwrap.json, or yarn.lock file` ⇒ **生成器不可用**；即使将来点头落地，也必须手工构造 `a/node_modules/<pkg>/… b/node_modules/<pkg>/…` 头，或改用 `postinstall: patch --forward -p1`。E2 X.2 另用 toy profile 实测 `install_bundle`（`pnpm add`）覆盖判定：装/升 websearch 本身必覆盖 35 文件；装别的 bundle 不覆盖但每次触发 root postinstall（**非幂等**）。X.5 是「可执行方案，非已验收方案」（X.7 第 4 条）。
+
+**E2 的诚实边界（X.7）**：compare API 404、`/issues/8` 未查、`0.2.2-rc.3` 未安装验证、patch-package apply 闭环未在本机 profile 实跑、分支推送归属未取证、token 只用于读公开 API 未验证写权限（本轮禁止写 API）。这些登记为 E，不写成结论。
+
+E2 X.6 里的「分支 5 commits / `cfcde9fe`」是 14:40 快照；**当前 6 commits / `230c1cf`**（其后又推了 2 次文档订正提交）。

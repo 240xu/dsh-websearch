@@ -1,0 +1,3557 @@
+--- a/lib/util/egress-fetch.js
++++ b/lib/util/egress-fetch.js
+@@ -167,13 +167,24 @@
+         fail(new TypeError(`fetch failed: proxy CONNECT rejected with ${connectRes.statusCode}`));
+         return;
+       }
++      // normalizeHeaders() strips Host
++      // (see below). For a request tunnelled through CONNECT, Node's
++      // https.request() then synthesises a Host from options.host — which is
++      // absent here (we pass an already-connected `socket`), so the value is
++      // the bare hostname without the port, not the request-target authority.
++      // Cloudflare-fronted MCP endpoints (mcp.exa.ai, search.parallel.ai)
++      // reject that with HTTP 403 before any MCP handshake. httpViaProxy()
++      // already restores the header with the same expression; mirror it here
++      // so both proxy paths send an explicit, port-qualified Host. Node
++      // auto-synthesises a non-port-qualified Host under { socket }, which
++      // the upstream proxy rejects; target.host carries the authority form.
+       const request = https.request({
+         socket,
+         agent: false,
+         servername: target.hostname,
+         method,
+         path: pathWithQuery(target),
+-        headers,
++        headers: { ...headers, host: headers.host ?? target.host },
+       });
+       open.push(request);
+       request.on("error", (error) => fail(new TypeError(`fetch failed: ${sanitize(error)}`, { cause: error })));
+@@ -238,11 +249,18 @@
+     res.on("end", () => {
+       // Null-body statuses (204/304) and empty streams must construct a
+       // bodiless Response; an empty Buffer is not null and would throw.
+-      const payload = chunks.length === 0 ? null : Buffer.concat(chunks);
+-      resolve(new Response(payload, {
+-        status: res.statusCode ?? 502,
+-        headers: headersFromRaw(res),
+-      }));
++      // Constructing a Response can throw (invalid status, illegal header
++      // name, 204 with a body). This runs inside an event callback, so an
++      // uncaught throw here would bypass reject() and crash the process.
++      try {
++        const payload = chunks.length === 0 ? null : Buffer.concat(chunks);
++        resolve(new Response(payload, {
++          status: res.statusCode ?? 502,
++          headers: headersFromRaw(res),
++        }));
++      } catch (err) {
++        reject(err);
++      }
+     });
+     res.on("error", reject);
+   });
+@@ -273,6 +291,12 @@
+       if (value !== undefined) headers[String(key).toLowerCase()] = String(value);
+     }
+   }
++  // Host is deliberately removed: a caller-supplied Host must not override
++  // the tunnel target. Each transport is therefore responsible for adding it
++  // back before the request is sent — httpViaProxy() and httpsViaConnect()
++  // both do so via `host: headers.host ?? target.host`. Do not delete those
++  // two restorations; doing so reintroduces the Cloudflare 403 described in
++  // the comment at httpsViaConnect().
+   delete headers["host"];
+   return headers;
+ }
+--- a/lib/util/mcp-client.js
++++ b/lib/util/mcp-client.js
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "./web-error.js";
+ import { egressFetch } from "./egress-fetch.js";
+ 
+ const UA = "dsh-websearch/2.3";
+@@ -20,11 +21,12 @@
+  * Performs the 3-step handshake if needed.
+  * @returns {Promise<string>} sessionId
+  */
+-async function ensureSession(url, signal) {
++async function ensureSession(url, signal, options = {}) {
+   const now = Date.now();
+   const cached = sessionCache.get(url);
+-  
+-  if (cached && (now - cached.initializedAt) < SESSION_TTL_MS) {
++
++  // A rotated credential must not reuse a session bound to the old key.
++  if (!options.forceFreshSession && cached && (now - cached.initializedAt) < SESSION_TTL_MS) {
+     return cached.sessionId;
+   }
+ 
+@@ -60,7 +62,7 @@
+ 
+   if (!initResponse.ok) {
+     const text = await initResponse.text().catch(() => "").then((tx) => tx.slice(0, 300));
+-    throw new WebError(`MCP initialize HTTP ${initResponse.status}: ${text}`, "WEB_PROVIDER_ERROR");
++    throw webErrorFromResponse(initResponse, text, "MCP initialize");
+   }
+ 
+   // Extract Mcp-Session-Id from response headers. Stateless MCP servers may
+@@ -105,32 +107,40 @@
+  * @returns {object} { id, result?, error? }
+  */
+ function parseEnvelope(text, expectedId) {
+-  // Try SSE format first: "event: message\ndata: {...}\n\n"
+-  if (text.includes("data:")) {
+-    // SSE spec: one JSON payload may span multiple data: lines - join them.
+-    const joined = text
+-      .trim()
+-      .split("\n")
+-      .filter((l) => l.startsWith("data:"))
+-      .map((l) => l.slice(5).trim())
+-      .join("");
+-    if (joined) {
+-      try {
+-        return JSON.parse(joined);
+-      } catch {}
++  // Strip a UTF-8 BOM: some MCP servers prepend it to the first SSE line,
++  // which would otherwise make the leading `data:` invisible to the split.
++  const body = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
++  // SSE: split into events on blank lines, parse each event's data lines, and
++  // pick the frame whose id matches the request and carries result/error.
++  // Joining all data lines across events produced "{...}{...}" and failed
++  // whenever a server pushed a notification before the actual response.
++  if (body.includes("data:")) {
++    for (const event of body.split(/\r?\n\r?\n/)) {
++      const joined = event
++        .split("\n")
++        .filter((l) => l.startsWith("data:"))
++        .map((l) => l.slice(5).trim())
++        .join("");
++      if (!joined) continue;
++      let frame;
++      try { frame = JSON.parse(joined); } catch { continue; }
++      const candidates = Array.isArray(frame) ? frame : [frame];
++      const match = candidates.find((r) => r && r.id === expectedId
++        && (r.result !== undefined || r.error !== undefined));
++      if (match) return match;
+     }
+   }
+-  
+-  // Try plain JSON (single line or JSON-RPC batch)
++
++  // Plain JSON (single line or JSON-RPC batch). Response ids are not enforced
++  // here: stateless MCP endpoints may echo a different (or no) id, and the
++  // original contract returned the parsed envelope directly. Id matching is
++  // applied only when picking a frame out of a multi-event SSE stream.
+   try {
+-    const parsed = JSON.parse(text);
+-    if (Array.isArray(parsed)) {
+-      // Batch response - find matching id
+-      return parsed.find((r) => r.id === expectedId) ?? parsed[0];
+-    }
++    const parsed = JSON.parse(body);
++    if (Array.isArray(parsed)) return parsed.find((r) => String(r.id) === String(expectedId)) ?? parsed[0];
+     return parsed;
+   } catch {}
+-  
++
+   throw new WebError("MCP: failed to parse response envelope", "WEB_PROVIDER_ERROR");
+ }
+ 
+@@ -148,14 +158,24 @@
+  * @param {object} args - Tool arguments
+  * @param {object} extraHeaders - Additional headers
+  * @param {AbortSignal} signal - Abort signal
++ * @param {{ skipInitialize?: boolean, forceFreshSession?: boolean }} [options] - Per-call transport options.
++ *   `skipInitialize` sends a direct tools/call for stateless endpoints that
++ *   do not need a session: TinyFish keyless, Exa, Parallel, Firecrawl (per
++ *   the official websearch provider's single tools/call). `forceFreshSession`
++ *   bypasses the URL-keyed session cache so a rotated credential cannot reuse
++ *   a stale Mcp-Session-Id. Keyed calls use the handshake and a fresh session.
+  * @returns {Promise<object>} Parsed result envelope
+  */
+-export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+-  const sessionId = await ensureSession(url, signal);
++export async function mcpCall(url, toolName, args, extraHeaders = {}, signal, options = {}) {
++  // The session handshake is the default; stateless keyless servers accept a
++  // direct tools/call and skip it.
++  const sessionId = options.skipInitialize ? undefined : await ensureSession(url, signal, { forceFreshSession: options.forceFreshSession === true });
+   
+   const callBody = {
+     jsonrpc: "2.0",
+-    id: 2, // increment from initialize(1)
++    // Stateless endpoints use the official bare-tools/call id; sessionful
++    // calls keep 2 so their initialize response cannot share an id.
++    id: options.skipInitialize ? 1 : 2,
+     method: "tools/call",
+     params: { name: toolName, arguments: args },
+   };
+@@ -208,7 +228,7 @@
+ 
+   if (!response.ok) {
+     const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+-    throw new WebError(`MCP tools/call HTTP ${response.status}: ${text}`, "WEB_PROVIDER_ERROR");
++    throw webErrorFromResponse(response, text, "MCP tools/call");
+   }
+ 
+   const text = await response.text();
+--- a/lib/util/failure-label.js
++++ b/lib/util/failure-label.js
+@@ -1,23 +1,60 @@
+-// failure-label.js — classify quota/rate-limit failures from a WebError's
+-// message. Response headers do not reach WebError in this implementation, so
+-// retryAfterMsFrom() falls back to a fixed 60s cooldown.
++// failure-label.js — classify quota/rate-limit failures. Route on the stable
++// `code` / `status` / `rateLimited` fields first (HarnessError JSDoc:
++// "route on this, never by parsing message"). The message regex is a legacy
++// fallback for errors built before webErrorFromResponse() landed.
+ 
+-/** True when the error message indicates a rate limit or exhausted quota. */
++import { RATE_LIMIT_CODE, QUOTA_CODE } from "./web-error.js";
++
++/** True when the error indicates a keyless permission refusal (needs a key,
++ *  not a retry). The Firecrawl hosted MCP returns this as an isError result. */
++export function keylessRejected(err) {
++  if (err?.keylessRejected === true) return true;
++  const s = String(err?.message ?? err);
++  return /Anonymous keyless access is unavailable|keyless access is unavailable/i.test(s);
++}
++
++/** True when the error is a rate limit or exhausted quota. */
+ export function rateLimited(err) {
++  if (err?.code === RATE_LIMIT_CODE || err?.code === QUOTA_CODE) return true;
++  if (err?.rateLimited === true || err?.quota === true) return true;
++  if (Number(err?.status) === 429) return true;
++  if (typeof err?.providerCode === "string"
++      && /^(rate_limit_error|quota_exceeded|insufficient_quota)$/.test(err.providerCode)) return true;
++  // Legacy fallback for pre-helper errors. Bare "quota" and generic
++  // "anonymous" are deliberately excluded: they produced false positives on
++  // HTTP 200/402/503 bodies. Only Firecrawl's exact keyless MCP isError text
++  // is matched; it never passes through webErrorFromResponse().
+   const s = String(err?.message ?? err);
+-  return /HTTP 429|rate.?limit|429\b/i.test(s) || /Anonymo|quota|额度/i.test(s);
++  return /HTTP 429|429\b|rate.?limit/i.test(s)
++    || /额度/i.test(s)
++    || /Anonymous keyless access is unavailable/i.test(s);
+ }
+ 
++// Cap a server-supplied cooldown so a bogus or hostile Retry-After cannot
++// disable a backend for years. Anything beyond a day falls back to the default.
++const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
++const DEFAULT_RETRY_AFTER_MS = 60_000;
++
+ /**
+- * Best-effort Retry-After extraction. WebError carries only a message here,
+- * so this normally returns the fixed 60s default.
++ * Best-effort Retry-After extraction, in milliseconds. webErrorFromResponse()
++ * stores the raw header on err.retryAfter; older errors fall back to 60s.
+  * @returns {number} cooldown in milliseconds
+  */
+ export function retryAfterMsFrom(err) {
+-  const v = err?.cause?.response?.headers?.get?.("retry-after") ?? err?.retryAfter;
+-  if (v == null || String(v).trim() === "") return 60_000;
++  const v = err?.retryAfter
++    ?? err?.cause?.response?.headers?.get?.("retry-after")
++    ?? err?.cause?.retryAfter;
++  if (v == null || String(v).trim() === "") return DEFAULT_RETRY_AFTER_MS;
+   const secs = Number(v);
+-  if (Number.isFinite(secs)) return secs >= 0 ? secs * 1000 : 60_000;
++  if (Number.isFinite(secs)) {
++    if (secs < 0) return DEFAULT_RETRY_AFTER_MS;
++    const ms = secs * 1000;
++    return ms <= MAX_RETRY_AFTER_MS ? ms : DEFAULT_RETRY_AFTER_MS;
++  }
+   const date = Date.parse(v);
+-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 60_000;
++  if (!Number.isFinite(date)) return DEFAULT_RETRY_AFTER_MS;
++  // An http-date in the past (clock skew, already-expired window) must not
++  // become a zero-length cooldown; treat it as unknown and use the default.
++  const ms = date - Date.now();
++  return ms > 0 && ms <= MAX_RETRY_AFTER_MS ? ms : DEFAULT_RETRY_AFTER_MS;
+ }
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -18,6 +18,7 @@
+ // plain string "unified-search". No import needed anymore.
+ import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { findPluginRow } from "./util/namespace.js";
+ 
+ // Import all backends
+ import { exaBackend } from "./backends/exa.js";
+@@ -33,6 +34,9 @@
+ import { serperBackend } from "./backends/serper.js";
+ import { searxngBackend } from "./backends/searxng.js";
+ import { mojeekBackend } from "./backends/mojeek.js";
++// OpenCode v2 keyless MCP backends.
++import { firecrawlBackend } from "./backends/firecrawl.js";
++import { tinyfishBackend } from "./backends/tinyfish.js";
+ import { createUnifiedSearchProvider, getLatestBackendHealth } from "./provider.js";
+ import { registerHealthRoute } from "./health.js";
+ import { createSearchCache, CACHE_DEFAULTS } from "./cache.js";
+@@ -63,12 +67,19 @@
+   deepseek: deepseekBackend,
+   anthropic: anthropicBackend,
+   openai: openaiBackend,
++  // Appended last so default fan-out order is unchanged.
++  // Both are opt-in (not in DEFAULT_ENABLED): their keyless tiers are metered
++  // and Firecrawl's exact daily ceiling is not published by the vendor.
++  firecrawl: firecrawlBackend,
++  tinyfish: tinyfishBackend,
+ };
+ 
+ /** All backend ids in registry order. */
+ const ALL_BACKENDS = Object.keys(BACKENDS);
+ 
+ /** Backends enabled by default (keyless only). */
++// Firecrawl/TinyFish are intentionally absent here — enable them
++// explicitly via the Settings toggles once their keyless quotas are reviewed.
+ const DEFAULT_ENABLED = ["exa", "parallel", "ddg", "searxng"];
+ 
+ /** Environment-variable names each key-gated backend reads. */
+@@ -80,8 +91,16 @@
+   tavily: "TAVILY_API_KEY",
+   serper: "SERPER_API_KEY",
+   mojeek: "MOJEEK_API_KEY",
++  // Optional keys; keyless works without them.
++  firecrawl: "FIRECRAWL_API_KEY",
++  tinyfish: "TINYFISH_API_KEY",
+ };
+ 
++/** Backends whose key only raises the hosted tier's limits, not a prerequisite. */
++const OPTIONAL_KEY_IDS = new Set(["searxng", "firecrawl", "tinyfish"]);
++/** Metered, opt-in backends surfaced separately in the card. */
++const METERED_IDS = new Set(["firecrawl", "tinyfish"]);
++
+ /** Default base URLs. */
+ const DEFAULT_BASE_URLS = {
+   exa: "https://mcp.exa.ai/mcp",
+@@ -95,6 +114,10 @@
+   deepseek: "https://api.deepseek.com/anthropic/v1",
+   anthropic: "https://api.anthropic.com/v1",
+   openai: "https://api.openai.com/v1",
++  // OpenCode v2 source endpoints; overridable via the
++  // matching *BaseURL settings so a TLS-fingerprint sidecar can be pointed at.
++  firecrawl: "https://mcp.firecrawl.dev/v2/mcp",
++  tinyfish: "https://agent.tinyfish.ai/mcp",
+ };
+ 
+ /** Env var that overrides the default backend sweep order / enabled set. */
+@@ -122,6 +145,10 @@
+   deepseek: "DeepSeek (原生 web_search, 需 Key)",
+   anthropic: "Anthropic (Claude 原生 web_search, 需 Key)",
+   openai: "OpenAI (Responses API web_search, 需 Key)",
++  // Labels surfaced in the Settings panel; the keyless tier is rate limited,
++  // which is why both toggles default to off.
++  firecrawl: "Firecrawl (MCP, keyless with quota, off by default)",
++  tinyfish: "TinyFish (MCP, keyless 30/min and 50/day, off by default)",
+ };
+ 
+ /**
+@@ -188,24 +215,33 @@
+   enableDeepseek: z.boolean().default(false).description(DEFAULT_LABELS.deepseek),
+   enableAnthropic: z.boolean().default(false).description(DEFAULT_LABELS.anthropic),
+   enableOpenai: z.boolean().default(false).description(DEFAULT_LABELS.openai),
++  // Opt-in by default; see DEFAULT_ENABLED comment.
++  enableFirecrawl: z.boolean().default(false).description(DEFAULT_LABELS.firecrawl),
++  enableTinyfish: z.boolean().default(false).description(DEFAULT_LABELS.tinyfish),
+ 
+   // Credential refs (env-var names; secrets live in the credentials service)
+-  braveApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.brave)
++  braveApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.brave)
+     .description("Brave API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  tavilyApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.tavily)
++  tavilyApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.tavily)
+     .description("Tavily API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  serperApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.serper)
++  serperApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.serper)
+     .description("Serper API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  mojeekApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.mojeek)
++  mojeekApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.mojeek)
+     .description("Mojeek API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  deepseekApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.deepseek)
++  deepseekApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.deepseek)
+     .description("Deepseek API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  anthropicApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.anthropic)
++  anthropicApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.anthropic)
+     .description("Anthropic API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  openaiApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.openai)
++  openaiApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.openai)
+     .description("Openai API Key 的凭证引用（填环境变量名，实际密钥存凭证库）"),
+-  searxngApiKeyEnv: z.string().role("credential-ref").default("SEARXNG_API_KEY")
++  searxngApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default("SEARXNG_API_KEY")
+     .description("SearXNG 私有实例的 API Key 凭证引用（公共实例留空）"),
++  // Optional: both backends work keyless. Supplying a key only raises the
++  // hosted tier's limits (and for TinyFish activates the session handshake).
++  firecrawlApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.firecrawl)
++    .description("Firecrawl API key credential reference (optional; blank uses the hosted keyless tier)"),
++  tinyfishApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.tinyfish)
++    .description("TinyFish API key credential reference (optional; blank uses keyless mode)"),
+ 
+   // Base URLs (defaults from built-in registry)
+   braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
+@@ -224,6 +260,12 @@
+     .description("Anthropic API 端点（默认官方；自托管/代理实例改此项）"),
+   openaiBaseURL: z.string().default(DEFAULT_BASE_URLS.openai)
+     .description("OpenAI API 端点（默认官方；自托管/代理实例改此项）"),
++  // resolveOptions() derives `${id}BaseURL` for every id, so these two fields
++  // are required for the sidecar/proxy path.
++  firecrawlBaseURL: z.string().default(DEFAULT_BASE_URLS.firecrawl)
++    .description("Firecrawl MCP endpoint (official v2 by default; may point at a TLS sidecar)"),
++  tinyfishBaseURL: z.string().default(DEFAULT_BASE_URLS.tinyfish)
++    .description("TinyFish MCP endpoint (official by default; may point at a TLS sidecar)"),
+ 
+   // Models
+   deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
+@@ -279,7 +321,9 @@
+  * service -> env.
+  */
+ export function resolveOptions(ctx, config) {
+-  // 1. Determine enabled backends: explicit list > toggles > env > defaults
++  // 1. Determine enabled backends: explicit list > toggles > env > defaults.
++  // The four keyless toggles default to true, so the env fallback is reachable
++  // only when all toggles are explicitly disabled; see README Known Limitation.
+   let enabledBackends = [];
+ 
+   if (config?.enabledBackends && config.enabledBackends.length > 0) {
+@@ -299,6 +343,9 @@
+       deepseek: config?.enableDeepseek,
+       anthropic: config?.enableAnthropic,
+       openai: config?.enableOpenai,
++      // Keep in sync with BACKENDS / Config toggles.
++      firecrawl: config?.enableFirecrawl,
++      tinyfish: config?.enableTinyfish,
+     };
+     enabledBackends = ALL_BACKENDS.filter((id) => toggleMap[id] === true);
+   }
+@@ -330,7 +377,9 @@
+       ...(id === "tavily" ? { searchDepth: config?.tavilySearchDepth ?? "basic" } : {}),
+       safeSearch: config?.safeSearch !== false,
+       label: DEFAULT_LABELS[id] ?? id,
+-      requiresKey: DEFAULT_KEY_ENV[id] !== undefined,
++      requiresKey: DEFAULT_KEY_ENV[id] !== undefined && !OPTIONAL_KEY_IDS.has(id),
++      optionalKey: OPTIONAL_KEY_IDS.has(id),
++      metered: METERED_IDS.has(id),
+       resolveApiKey: async () => {
+         const credentials = ctx.get("credentials");
+         if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
+@@ -407,11 +456,28 @@
+       });
+       return;
+     }
+-    // 0.2.x SettingsForms line: no installSection. Keep the service so the
+-    // browser settings card can read/write this profile entry through the
+-    // fenced bridge in ./settings-api.js; values keep resolving via cordis
+-    // config (the same volatile entry), so there is no second settings store.
+-    if (typeof settings?.describe === "function" && typeof settings?.mutate === "function") settingsForms = settings;
++    // 0.2.x SettingsForms line: no installSection. The entry-level `config`
++    // passed to apply() carries only schema defaults on DSH 0.2.x; the live
++    // profile-patch / user values live in the settings service's effective
++    // config. Reading them per search is what makes the Settings card actually
++    // drive execution. Without this, saving a toggle writes to the settings
++    // service but `current()` keeps returning the stale initial config, so
++    // the save is a no-op. Mirrors the upstream settings-inert fix.
++    if (typeof settings?.describe === "function" && typeof settings?.mutate === "function") {
++      settingsForms = settings;
++      // Read the live settings-service values on every resolve so a save
++      // from the card drives the next search. Exact namespace ids take
++      // priority over the shape fallback; findPluginRow is shared with the
++      // HTTP bridge so both resolve the same row.
++      current = () => {
++        try {
++          const row = findPluginRow(settings.describe());
++          return (row && row.value) ?? config;
++        } catch {
++          return config;
++        }
++      };
++    }
+   });
+ 
+   // v2.7.0 stores: disk cache + append-only search history, both under
+@@ -460,26 +526,35 @@
+         return undefined;
+       }
+     };
+-    registerHealthRoute(webCtx.webServer, {
+-      resolveOptions: () => resolveOptions(ctx, current()),
+-      backends: BACKENDS,
+-      getBackendHealth: getLatestBackendHealth,
+-      getConnection,
+-    });
+-    // v2.7.0 search history: read-only GET + explicit clear POST.
+-    // v2.8.0: GET also carries per-backend last-outcome observability.
+-    registerHistoryRoutes(webCtx.webServer, {
+-      getStore: () => historyStore,
+-      getBackendHealth: getLatestBackendHealth,
+-      getConnection,
+-    });
+-    // Settings bridge for the browser card on 0.2.x builds (no legacy
+-    // settingsScope service). Fenced by the host connection admission; writes
+-    // land in the volatile config entry above.
+-    registerSettingsRoutes(webCtx.webServer, {
+-      getSettings: () => settingsForms,
+-      getConfig: () => Config,
+-      getConnection,
+-    });
++    // Registrations are effects: WebServer.register() returns the disposer
++    // removing the route, so hand all of them to the injection fiber. Without
++    // this, a plugin reload leaves the old routes registered and the next
++    // load throws on duplicate (kind, path).
++    webCtx.effect(() => {
++      const disposers = [
++        ...registerHealthRoute(webCtx.webServer, {
++          resolveOptions: () => resolveOptions(ctx, current()),
++          backends: BACKENDS,
++          getBackendHealth: getLatestBackendHealth,
++          getConnection,
++        }),
++        // v2.7.0 search history: read-only GET + explicit clear POST.
++        // v2.8.0: GET also carries per-backend last-outcome observability.
++        ...registerHistoryRoutes(webCtx.webServer, {
++          getStore: () => historyStore,
++          getBackendHealth: getLatestBackendHealth,
++          getConnection,
++        }),
++        // Settings bridge for the browser card on 0.2.x builds (no legacy
++        // settingsScope service). Fenced by the host connection admission;
++        // writes land in the volatile config entry above.
++        ...registerSettingsRoutes(webCtx.webServer, {
++          getSettings: () => settingsForms,
++          getConfig: () => Config,
++          getConnection,
++        }),
++      ];
++      return () => disposers.forEach((dispose) => dispose());
++    }, "unified-search: web routes");
+   });
+ }
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -23,6 +23,13 @@
+ 			{ id: "deepseek", keyEnv: "DEEPSEEK_API_KEY", label: "DeepSeek" },
+ 			{ id: "anthropic", keyEnv: "ANTHROPIC_API_KEY", label: "Anthropic" },
+ 			{ id: "openai", keyEnv: "OPENAI_API_KEY", label: "OpenAI" },
++			// these two are metered, opt-in backends. They are
++			// deliberately NOT in KEYLESS: listing them under "keyless, ready to
++			// use" would imply zero cost / zero limits, while the hosted keyless
++			// tier is rate limited and its exact ceiling is not published. They
++			// still accept an optional key (OPTIONAL_KEYS) to raise limits.
++			{ id: "firecrawl", keyEnv: "FIRECRAWL_API_KEY", optionalKey: true, metered: true, label: "Firecrawl (免 Key · 有额度 · 默认关)" },
++			{ id: "tinyfish", keyEnv: "TINYFISH_API_KEY", optionalKey: true, metered: true, label: "TinyFish (免 Key · 30/分·50/日 · 默认关)" },
+ 		];
+ 		const GLOBAL_FIELDS = ["numResults", "concurrency", "backendTimeoutMs"];
+ 		/** Enum-valued settings (validated client-side, saved as strings). */
+@@ -32,7 +39,12 @@
+ 		};
+ 		/** Boolean settings staged as "true"/"false" strings by the selects. */
+ 		const BOOLEAN_FIELDS = ["rerank", "safeSearch", "resultTelemetry"];
+-		const KEYLESS = BACKENDS.filter((b) => !b.keyEnv || b.optionalKey);
++		// split metered, opt-in backends out of the
++		// "keyless / ready to use" group. They work without a key but are rate
++		// limited and default OFF, so a separate section with an explicit hint
++		// prevents the misleading impression of a free unlimited backend.
++		const METERED = BACKENDS.filter((b) => b.metered);
++		const KEYLESS = BACKENDS.filter((b) => (!b.keyEnv || b.optionalKey) && !b.metered);
+ 		const KEYED = BACKENDS.filter((b) => b.keyEnv && !b.optionalKey);
+ 		const OPTIONAL_KEYS = BACKENDS.filter((b) => b.keyEnv && b.optionalKey);
+ 
+@@ -51,12 +63,18 @@
+ 			nav: "搜索",
+ 			groupFree: "免密钥（开箱即用）",
+ 			groupKeyed: "需要 API Key",
++			// metered/opt-in section copy (zh).
++			groupMetered: "计量型（免 Key 但有额度，默认关）",
++			meteredHint: "官方 hosted keyless tier 按 IP/日限额并可能返回 429；启用前请确认额度。填可选 Key 可提升限额。",
+ 			statusEnabled: "已启用后端",
+ 			statusKeys: "已配置密钥",
++			// status bar labels for the metered section.
++			statusMetered: "计量型",
++			statusOffByDefault: "默认关",
+ 			keyMissing: "缺密钥",
+ 			unsavedHint: "有未保存的修改", savedOk: "已保存 ✓",
+ 			title: "统一搜索 (Unified Search)",
+-			description: "聚合网络搜索：11 个后端并发 fan-out、URL 去重合并。开关后端、填 API Key、调参数，保存即生效。",
++			description: "聚合网络搜索：多后端并发 fan-out、URL 去重合并（含 2 个默认关的计量型后端）。开关后端、填 API Key、调参数，保存即生效。",
+ 			save: "保存",
+ 			discard: "放弃修改",
+ 			dirty: "有未保存修改",
+@@ -67,12 +85,12 @@
+ 			overridden: "已自定义",
+ 			keyLabel: "{id} API Key",
+ 			getKey: "获取 Key ↗",
+-			keyHint: "填入后保存到凭证库（对应环境变量引用）；留空表示不修改",
++			// the switch is immediate, the key needs Save.
++			keySaveModeHint: "开关即时生效；密钥填写后需点「保存」写入凭证库",
+ 			keySet: "已配置",
+ 			keyUnset: "未配置",
+ 			togglesTitle: "启用后端",
+ 			globalsTitle: "全局参数",
+-			keysTitle: "API 密钥（保存后写入凭证库，立即生效）",
+ 			shapingTitle: "结果策略",
+ 			recencyLabel: "时间范围",
+ 			langLabel: "搜索语言",
+@@ -90,22 +108,29 @@
+ 			dedupTitle: "链接 + 标题（合并转载）",
+ 			langPlaceholder: "如 en、zh-CN，留空为默认",
+ 						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
++			keyReadFailed: "密钥状态读取失败，请稍后重试",
+ 			telemetryLabel: "结果健康遥测",
+-			fallbackHint: "全部后端已关闭：搜索将回退到默认免 Key 后端",
++			fallbackHint: "全部后端已关闭：搜索将回退到默认免 Key 后端（计量型仍保持关闭）",
+ 			invalidFields: "以下字段未通过校验：",
+ 			readOnlyScope: "当前配置只读（可能由宿主锁定）",
+-			optionalTitle: "私有实例可选 Key",
++			optionalTitle: "可选 Key（私有实例 / 提升计量型额度）",
+ 		};
+ 		const en = {
+ 			nav: "Web Search",
+ 			groupFree: "Keyless (ready to use)",
+ 			groupKeyed: "Requires API key",
++			// metered/opt-in section copy (en).
++			groupMetered: "Metered (keyless but rate limited, off by default)",
++			meteredHint: "The hosted keyless tier is limited per IP/day and may return 429; check quotas before enabling. An optional API key raises the limits.",
+ 			statusEnabled: "Backends enabled",
+ 			statusKeys: "Keys configured",
++			// status bar labels for the metered section.
++			statusMetered: "Metered",
++			statusOffByDefault: "off by default",
+ 			keyMissing: "key missing",
+ 			unsavedHint: "You have unsaved changes", savedOk: "Saved ✓",
+ 			title: "Unified Search",
+-			description: "Aggregated web search: 11 backends fan out concurrently, URL-deduped. Toggle backends, set API keys, tune globals — saves apply immediately.",
++			description: "Aggregated web search: multiple backends fan out concurrently, URL-deduped (incl. 2 metered backends that are off by default). Toggle backends, set API keys, tune globals — saves apply immediately.",
+ 			save: "Save",
+ 			discard: "Discard",
+ 			dirty: "Unsaved changes",
+@@ -116,12 +141,12 @@
+ 			overridden: "customized",
+ 			keyLabel: "{id} API Key",
+ 			getKey: "Get key ↗",
+-			keyHint: "Stored into the credential store on save; leave blank to keep current",
++			// the switch is immediate, the key needs Save.
++			keySaveModeHint: "The switch applies immediately; the key is written to the credential store when you press Save",
+ 			keySet: "configured",
+ 			keyUnset: "not set",
+ 			togglesTitle: "Enabled backends",
+ 			globalsTitle: "Global parameters",
+-			keysTitle: "API keys (saved to the credential store, effective immediately)",
+ 			shapingTitle: "Result shaping",
+ 			recencyLabel: "Recency",
+ 			langLabel: "Language",
+@@ -142,11 +167,12 @@
+ 			readOnly: "read-only, nothing to fill",
+ 			conflict: "Changed elsewhere - please retry",
+ 			keyFailed: "failed to save this key",
++			keyReadFailed: "could not read key status, please retry later",
+ 			telemetryLabel: "Result health telemetry",
+-			fallbackHint: "All backends off: search falls back to the default keyless four.",
++			fallbackHint: "All backends off: search falls back to the default keyless four (metered backends stay off).",
+ 			invalidFields: "Fields failed validation:",
+ 			readOnlyScope: "Configuration is read-only (locked by host?)",
+-			optionalTitle: "Private instance optional keys",
++			optionalTitle: "Optional keys (private instance / higher metered limits)",
+ 		};
+ 
+ 		//#region styles
+@@ -189,6 +215,10 @@
+ 					revision: undefined,
+ 					mode: "routes",
+ 				});
++				// Serialise writes: a queued write must read the revision only
++				// when its turn comes, otherwise two concurrent toggles both
++				// send revision=0 and the second is rejected as a conflict.
++				this.writeQueue = Promise.resolve();
+ 			}
+ 
+ 			getSnapshot() { return this.store.getSnapshot(); }
+@@ -222,7 +252,14 @@
+ 				}
+ 			}
+ 
+-			async write(ops) {
++			write(ops) {
++				const run = () => this.writeNow(ops);
++				const result = this.writeQueue.then(run, run);
++				this.writeQueue = result.then(() => undefined, () => undefined);
++				return result;
++			}
++
++			async writeNow(ops) {
+ 				const expectedRevision = this.store.getSnapshot().revision;
+ 				const response = await fetch("/api/unified-search/settings", {
+ 					method: "POST",
+@@ -247,6 +284,13 @@
+ 		 * Card state machine: reads the bound settings scope snapshot, stages edits,
+ 		 * writes section fields through scope.set/unset and secrets via credentials.
+ 		 */
++		// Host errors can carry internal paths and reference names. Only a
++		// stable, shape-checked error code is safe to display in the card.
++		function safeFailureReason(err) {
++			const code = err && typeof err === "object" && typeof err.code === "string" ? err.code : "";
++			return /^[a-z][a-z0-9/_-]{0,60}$/i.test(code) ? code : "write rejected";
++		}
++
+ 		class UnifiedSearchCardController {
+ 			constructor(scope, connection, remote) {
+ 				this.scope = scope;
+@@ -259,6 +303,9 @@
+ 				this.failed = false;
+ 				this.conflict = false;
+ 				this.failedKeys = new Map(); // envRef -> failure reason
++				// Credential READ failures, distinct from SAVE failures above.
++				// Only a fixed code is stored; raw host errors are never kept.
++				this.readErrors = new Map();
+ 				this.failedFields = new Set();
+ 				this.savedAt = 0;
+ 				this.store = createStore(this.projection());
+@@ -292,6 +339,7 @@
+ 					},
+ 					conflict: this.conflict,
+ 					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
++					readErrors: [...this.readErrors].map(([ref, reason]) => ({ ref, reason })),
+ 					failedFields: [...this.failedFields],
+ 					saving: this.saving,
+ 					failed: this.failed,
+@@ -303,7 +351,14 @@
+ 
+ 			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
+ 			reset(field) { this.staged.delete(field); this.republish(); }
+-			editKey(envRef, text) { this.savedAt = 0; this.stagedKeys.set(envRef, { text }); this.republish(); }
++			editKey(envRef, text) {
++				this.savedAt = 0;
++				// A blank draft is not a pending change; staging it would keep
++				// the Save button enabled with nothing to write.
++				if (String(text).trim() === "") this.stagedKeys.delete(envRef);
++				else this.stagedKeys.set(envRef, { text });
++				this.republish();
++			}
+ 
+ 			/** Toggles write immediately (no staging); globals/keys stage + save. */
+ 			async setToggle(id, checked) {
+@@ -312,39 +367,82 @@
+ 				} catch (err) {
+ 					this.failed = true;
+ 					this.conflict = String(err).includes("SETTINGS_CONFLICT");
++					// The host may have committed the write even when the
++					// response failed. Resync instead of leaving the stale
++					// pre-write value on screen. Report only the conflict
++					// classification, never the raw error text.
++					if (typeof console !== "undefined" && typeof console.warn === "function") {
++						console.warn("websearch: toggle write failed", { conflict: this.conflict });
++					}
++					if (typeof this.scope.load === "function") {
++						try { await this.scope.load(); } catch { /* keep current snapshot */ }
++					}
+ 				}
+-				
+ 				this.republish();
+ 			}
+ 
+ 			async readCredential(ref) {
++				let readFailed = false;
++				let reason;
+ 				try {
+ 					let view;
+-					if (this.remote !== undefined && this.remote.credentials !== undefined && typeof this.remote.credentials.describe === "function") {
+-						// 0.2.x remote face: Record<ref, {configured, writable, source}> behind {ok, value}.
+-						const res = await this.remote.credentials.describe([ref]);
+-						const record = res !== null && typeof res === "object" && res.value !== undefined ? res.value : res;
+-						const byRef = record !== null && typeof record === "object" && record.credentials !== undefined ? record.credentials : record;
+-						view = byRef !== null && typeof byRef === "object" ? byRef[ref] : undefined;
++					// Guard the namespace access: an undeclared remote service throws on
++					// access, and a swallowed error would leave the configured badge dark.
++					let api;
++					try { api = this.remote === undefined ? undefined : this.remote.credentials; } catch { api = undefined; }
++					if (api !== undefined && typeof api.describe === "function") {
++						// 0.2.x remote face: RemoteResult<Record<ref, CredentialInfo>>.
++						const res = await api.describe([ref]);
++						// Judge the RemoteResult envelope before unwrapping: `ok:false` is a
++						// read failure, not an unconfigured credential. Do not fall
++						// through to the legacy connection branch, which could surface
++						// a stale value. failedKeys is reserved for save failures.
++						if (res !== null && typeof res === "object" && res.ok === false) {
++							readFailed = true;
++							reason = "credential/read-failed";
++						} else {
++							const record = res !== null && typeof res === "object" && res.value !== undefined ? res.value : res;
++							const byRef = record !== null && typeof record === "object" && record.credentials !== undefined ? record.credentials : record;
++							view = byRef !== null && typeof byRef === "object" ? byRef[ref] : undefined;
++						}
+ 					}
+-					if (view === undefined && this.connection !== undefined && this.connection.api !== undefined && this.connection.api.credentials !== undefined) {
++					if (!readFailed && view === undefined && this.connection !== undefined && this.connection.api !== undefined && this.connection.api.credentials !== undefined) {
+ 						// Older line: the connection controller's credentials API.
+ 						const res = await this.connection.api.credentials.describe({ refs: [ref] });
+ 						if (res?.result?.ok) view = res.result.value.credentials[ref];
+ 					}
+-					if (view === undefined) return;
+-					this.keyState.set(ref, { configured: view.configured === true, writable: view.writable !== false });
+-				} catch { /* ignore */ }
+-				this.republish();
++					if (!readFailed && view !== undefined) {
++						this.keyState.set(ref, { configured: view.configured === true, writable: view.writable !== false });
++						this.readErrors.delete(ref);
++					}
++				} catch {
++					reason = "credential/read-failed";
++				} finally {
++					// Only a fixed code is stored; host error text may contain
++					// internal paths or credential reference names.
++					if (reason !== undefined) this.readErrors.set(ref, safeFailureReason({ code: reason }));
++					this.republish();
++				}
+ 			}
+ 
+ 			async writeCredential(ref, value) {
+-				if (this.remote !== undefined && this.remote.credentials !== undefined && typeof this.remote.credentials.set === "function") {
+-					await this.remote.credentials.set(ref, value);
++				// The namespace access may throw on hosts that do not register
++				// `remote.credentials`; guard it so the older connection API can
++				// still serve as fallback. `set()` resolves with a RemoteResult
++				// envelope instead of throwing on rejection, so `ok === false`
++				// must be treated as a failure.
++				let api;
++				try { api = this.remote === undefined ? undefined : this.remote.credentials; } catch { api = undefined; }
++				if (api !== undefined && typeof api.set === "function") {
++					const res = await api.set(ref, value);
++					const rejected = res !== null && typeof res === "object" && res.ok === false;
++					if (rejected) throw new Error(res.error?.message ?? "credential write rejected");
+ 					return;
+ 				}
+ 				if (this.connection !== undefined && this.connection.api !== undefined && this.connection.api.credentials !== undefined && typeof this.connection.api.credentials.set === "function") {
+-					await this.connection.api.credentials.set({ ref, value });
++					const res = await this.connection.api.credentials.set({ ref, value });
++					const rejected = res !== null && typeof res === "object" && (res.ok === false || res.result?.ok === false);
++					if (rejected) throw new Error(res.error?.message ?? res.result?.error?.message ?? "credential write rejected");
+ 					return;
+ 				}
+ 				throw new Error("credentials service unavailable");
+@@ -360,8 +458,20 @@
+ 			this.conflict = false; this.failedFields.clear(); this.republish();
+ 				const doneFields = [];
+ 				const doneKeys = [];
++				// Snapshot the staged entry object for each field/key we save.
++				// edit()/editKey() replace the entry with a NEW object, so comparing
++				// by identity tells us whether the user typed again while the
++				// awaits were in flight. Those newer edits must not be discarded
++				// or reported as saved.
++				const savedFieldRefs = new Map();
++				const savedKeyRefs = new Map();
+ 				try {
+ 					for (const [field, staged] of this.staged) {
++						// Snapshot the entry BEFORE any await. edit() replaces the staged
++						// entry with a new object, so identity comparison later detects an edit
++						// that arrived while the awaits were in flight. Recording after the
++						// await would capture the NEW edit and delete it as if saved.
++						savedFieldRefs.set(field, staged);
+ 						// Empty draft clears the override so the schema default applies again.
+ 						if (staged.clear || staged.text === "") { await this.scope.unset(field); doneFields.push(field); continue; }
+ 						if (SELECT_FIELDS[field]) {
+@@ -395,6 +505,8 @@
+ 						}
+ 					}
+ 					for (const [ref, staged] of this.stagedKeys) {
++						// Snapshot before any await, same reason as the field loop.
++						savedKeyRefs.set(ref, staged);
+ 						const value = staged.text.trim();
+ 						if (value !== "") {
+ 							try {
+@@ -405,14 +517,24 @@
+ 							} catch (keyErr) {
+ 								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
+ 								this.failed = true;
+-								this.failedKeys.set(ref, String(keyErr && keyErr.message ? keyErr.message : keyErr).slice(0, 140));
++								this.failedKeys.set(ref, safeFailureReason(keyErr));
+ 								void keyErr;
+ 							}
++						} else {
++							// Consume a blank draft so the Save button drains.
++							doneKeys.push(ref);
+ 						}
+ 					}
+-					for (const f of doneFields) this.staged.delete(f);
+-					for (const k of doneKeys) this.stagedKeys.delete(k);
+-					if (!this.failed && (doneFields.length > 0 || doneKeys.length > 0)) this.savedAt = Date.now();
++					for (const f of doneFields) {
++						if (this.staged.get(f) === savedFieldRefs.get(f)) this.staged.delete(f);
++					}
++					for (const k of doneKeys) {
++						if (this.stagedKeys.get(k) === savedKeyRefs.get(k)) this.stagedKeys.delete(k);
++					}
++					// Only claim "saved" when nothing is left pending. An edit
++					// that arrived during the awaits keeps its own unsaved state.
++					if (!this.failed && (doneFields.length > 0 || doneKeys.length > 0)
++					    && this.staged.size === 0 && this.stagedKeys.size === 0) this.savedAt = Date.now();
+ 				} catch (err) {
+ 					this.failed = true;
+ 					this.conflict = String(err).includes("SETTINGS_CONFLICT");
+@@ -436,7 +558,7 @@
+ 			}
+ 		}
+ 
+-		/** Toggle row for one backend. */
++		/** Toggle row for one backend (keyless / metered backends). */
+ 		function ToggleRow(props) {
+ 			const b = props.backend;
+ 			// The Host serves schema-resolved values, so defaults arrive materialized;
+@@ -457,6 +579,55 @@
+ 			] });
+ 		}
+ 
++		/**
++		 * Combined card for a key-gated backend: switch, status badge, get-key
++		 * link, input, hint and per-key error in one place so the credential is
++		 * matched to its toggle without scrolling.
++		 *
++		 * The switch writes immediately (setToggle), the key is staged until
++		 * Save (editKey) — `keySaveModeHint` states this so the two behaviours
++		 * are not mistaken for one atomic action.
++		 */
++		function KeyedBackendCard(props) {
++			const b = props.backend;
++			const state = props.state;
++			const checked = props.value === true;
++			const configured = !!state.keyState[b.keyEnv]?.configured;
++			const readOnly = configured && state.keyState[b.keyEnv]?.writable === false;
++			// failedKeys is an array of { ref, reason }, NOT an array of strings.
++			const failure = (state.failedKeys ?? []).find((f) => f && f.ref === b.keyEnv);
++			const readFailure = (state.readErrors ?? []).find((f) => f && f.ref === b.keyEnv);
++			const needsKey = !configured;
++			const dotColor = needsKey ? (checked ? "#e6a700" : "#888") : "#2ea043";
++			return react_jsx_runtime.jsxs("div", { className: "wsc-keyCard", style: { display: "flex", flexDirection: "column", gap: 6, padding: "9px 10px", borderRadius: 10, border: "1px solid var(--dsw-alias-border-subtle)" }, children: [
++				react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: 0, border: "none", borderRadius: 0 }, children: [
++					react_jsx_runtime.jsx("input", { type: "checkbox", checked, onChange: (e) => props.onToggle(e.target.checked) }),
++					react_jsx_runtime.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, display: "inline-block" } }),
++					react_jsx_runtime.jsx("span", { children: b.label }),
++					needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
++				] }),
++				react_jsx_runtime.jsxs("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, children: [
++					react_jsx_runtime.jsx("span", { className: "wsc-badge" + (configured ? " wsc-badgeOn" : ""), children: configured ? props.t("keySet") : props.t("keyUnset") }),
++					readOnly && react_jsx_runtime.jsx("span", { className: "wsc-badge", style: { opacity: .75 }, children: props.t("envProvided") }),
++					KEY_URLS[b.id] && react_jsx_runtime.jsx("a", {
++						href: KEY_URLS[b.id], target: "_blank", rel: "noreferrer",
++						style: { fontSize: 11, color: "var(--dsw-alias-accent-primary)", textDecoration: "none" },
++						children: props.t("getKey"),
++					}),
++				] }),
++				react_jsx_runtime.jsx("input", {
++					className: "wsc-keyInput", type: "password", autoComplete: "off",
++					disabled: readOnly,
++					placeholder: readOnly ? props.t("readOnly") : b.keyEnv,
++					value: state.stagedKeys[b.keyEnv] ?? "",
++					onChange: (e) => props.onEditKey(b.keyEnv, e.target.value),
++				}),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keySaveModeHint") }),
++				failure && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") + (failure.reason ? ": " + failure.reason : "") }),
++				readFailure && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e6a700" }, children: props.t("keyReadFailed") }),
++			] });
++		}
++
+ 		/** Labeled <select> for enum / boolean settings. */
+ 		function SelectField(props) {
+ 			return react_jsx_runtime.jsxs("div", { children: [
+@@ -509,6 +680,11 @@
+ 				react_jsx_runtime.jsx("div", { style: { display: "flex", gap: 14, alignItems: "center", padding: "10px 12px", marginBottom: 10, borderRadius: 8, background: "rgba(127,127,127,.08)", fontSize: 13 }, children: [
+ 					react_jsx_runtime.jsxs("span", { children: [props.t("statusEnabled"), ": ", react_jsx_runtime.jsx("b", { children: enabledCount + "/" + BACKENDS.length })] }),
+ 					react_jsx_runtime.jsxs("span", { children: [props.t("statusKeys"), ": ", react_jsx_runtime.jsx("b", { children: keysReady + "/" + keyedBackends.length })] }),
++					// a low "enabled/total" is expected, not a
++					// fault — the 2 metered backends are intentionally off by default.
++					METERED.length > 0 && react_jsx_runtime.jsxs("span", { style: { opacity: .65 }, children: [
++						props.t("statusMetered"), ": ", METERED.length, " ", props.t("statusOffByDefault"),
++					] }),
+ 				] }),
+ 				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: props.t("description") }),
+ 				(enabledCount === 0) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("fallbackHint") }),
+@@ -524,15 +700,33 @@
+ 					}, b.id)
+ 				) }),
+ 				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupKeyed") }),
+-				react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: KEYED.map((b) =>
+-					react_jsx_runtime.jsx(ToggleRow, {
++				// switch and credential input are now ONE card
++				// per backend instead of a switch here + an input grid far below.
++				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: KEYED.map((b) =>
++					react_jsx_runtime.jsx(KeyedBackendCard, {
+ 						backend: b,
++						state,
+ 						value: state.value[toggleField(b.id)],
+-						keyConfigured: !!state.keyState[b.keyEnv]?.configured,
+ 						t: props.t,
+-						onChange: (checked) => card.setToggle(b.id, checked),
++						onToggle: (checked) => card.setToggle(b.id, checked),
++						onEditKey: (ref, text) => card.editKey(ref, text),
+ 					}, b.id)
+ 				) }),
++				// metered/opt-in backends get their own section
++				// with a hint, instead of being silently mixed into "keyless".
++				METERED.length > 0 && react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
++					react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupMetered") }),
++					react_jsx_runtime.jsx("p", { style: { margin: "0 0 6px", fontSize: 11, opacity: .6 }, children: props.t("meteredHint") }),
++					react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: METERED.map((b) =>
++						react_jsx_runtime.jsx(ToggleRow, {
++							backend: b,
++							value: state.value[toggleField(b.id)],
++							keyConfigured: true,
++							t: props.t,
++							onChange: (checked) => card.setToggle(b.id, checked),
++						}, b.id)
++					) }),
++				] }),
+ 				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("globalsTitle") }),
+ 				react_jsx_runtime.jsxs("div", { className: "wsc-grid", children: [
+ 					react_jsx_runtime.jsxs("div", { children: [
+@@ -590,44 +784,32 @@
+ 						onChange: (v) => card.edit("resultTelemetry", v),
+ 					}),
+ 				] }),
+-				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("keysTitle") }),
+-				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: BACKENDS.filter((b) => b.keyEnv && !b.optionalKey).map((b) =>
+-					react_jsx_runtime.jsxs("div", { children: [
++				// the old separate "API keys" grid has been
++				// merged into KeyedBackendCard above. Keeping it would show each
++				// credential twice and reintroduce the scroll-and-match problem.
++				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("optionalTitle") }),
++				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: OPTIONAL_KEYS.map((b) => {
++					// failedKeys is [{ref, reason}], not a string array — the old
++					// `.includes(b.keyEnv)` never matched, so failures were silent.
++					const failure = (state.failedKeys ?? []).find((f) => f && f.ref === b.keyEnv);
++					const readFailure = (state.readErrors ?? []).find((f) => f && f.ref === b.keyEnv);
++					return react_jsx_runtime.jsxs("div", { children: [
+ 						react_jsx_runtime.jsxs("div", { className: "wsc-fieldHead", children: [
+ 							react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.t("keyLabel", { id: b.id }) }),
+-							react_jsx_runtime.jsxs("span", { className: "wsc-badges", style: { display: "flex", gap: 6, alignItems: "center" }, children: [
+-								KEY_URLS[b.id] && react_jsx_runtime.jsx("a", {
+-									href: KEY_URLS[b.id], target: "_blank", rel: "noreferrer",
+-									style: { fontSize: 11, color: "var(--dsw-alias-accent-primary)", textDecoration: "none" },
+-									children: props.t("getKey"),
+-								}),
+-								react_jsx_runtime.jsx("span", { className: "wsc-badge" + (state.keyState[b.keyEnv]?.configured ? " wsc-badgeOn" : ""), children: state.keyState[b.keyEnv]?.configured ? props.t("keySet") : props.t("keyUnset") }),
+-								state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false && react_jsx_runtime.jsx("span", { className: "wsc-badge", style: { opacity: .75 }, children: props.t("envProvided") }),
+-							] }),
++							react_jsx_runtime.jsx("span", { className: "wsc-badge" + (state.keyState[b.keyEnv]?.configured ? " wsc-badgeOn" : ""), children: state.keyState[b.keyEnv]?.configured ? props.t("keySet") : props.t("keyUnset") }),
+ 						] }),
+ 						react_jsx_runtime.jsx("input", {
+ 							className: "wsc-keyInput", type: "password", autoComplete: "off",
+ 							disabled: state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false,
+-							placeholder: (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false) ? props.t("readOnly") : b.keyEnv,
+-							value: state.stagedKeys[b.keyEnv] ?? "",
+-							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+-						}),
+-						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keyHint") }),
+-						state.failedKeys.includes(b.keyEnv) && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") }),
+-					] }, b.id)
+-				) }),
+-				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("optionalTitle") }),
+-				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: OPTIONAL_KEYS.map((b) =>
+-					react_jsx_runtime.jsxs("div", { children: [
+-						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.t("keyLabel", { id: b.id }) }) }),
+-						react_jsx_runtime.jsx("input", {
+-							className: "wsc-keyInput", type: "password", autoComplete: "off",
+ 							placeholder: b.keyEnv,
+ 							value: state.stagedKeys[b.keyEnv] ?? "",
+ 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+ 						}),
+-					] }, b.id),
+-				) }),
++						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keySaveModeHint") }),
++						failure && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") + (failure.reason ? ": " + failure.reason : "") }),
++						readFailure && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e6a700" }, children: props.t("keyReadFailed") }),
++					] }, b.id);
++				}) }),
+ 				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .6 }, children: props.t("unsavedHint") }),
+ 				react_jsx_runtime.jsxs("div", { className: "wsc-actions", children: [
+ 					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.stagedCount === 0 || state.writable === false, onClick: () => card.save(), children: state.saving ? props.t("saving") : props.t("save") }),
+@@ -646,7 +828,12 @@
+ 		 * the 0.2.x line; the card binds whichever data source the build offers
+ 		 * (see selectBridge) and registers the section unconditionally.
+ 		 */
+-		const inject = ["slots", "locale", "connection", "remote"];
++		// DSH 0.2.x registers each remote namespace as its own service key
++		// (`remote.<namespace>`). Undeclared access throws instead of returning
++		// undefined, so the namespace must be declared in inject for key saves
++		// and credential reads. The official settings models plugin declares
++		// the same key.
++		const inject = ["slots", "locale", "connection", "remote", "remote.credentials"];
+ 		/**
+ 		 * Resolve the settings data source for this build, in order:
+ 		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
+--- a/lib/cache.js
++++ b/lib/cache.js
+@@ -31,16 +31,26 @@
+  * Compute the deterministic cache key for a search.
+  * Includes the enabledBackends selection set (sorted): switching the backend
+  * mix must never serve a stale result produced by a different combination
+- * (arch-review P1-1). Pure function; exported for tests and host reuse.
++ * (arch-review P1-1). Also includes the options that change the merged
++ * result (safeSearch, rerank, dedupStrategy, per-backend base URLs and
++ * models) so editing a setting is not masked by a hit within the TTL.
++ * Pure function; exported for tests and host reuse.
+  */
+-export function cacheKeyFor({ query, filters, maxResults, backends, mode }) {
++export function cacheKeyFor({ query, filters, maxResults, backends, mode, resultOptions }) {
+   const backendSet = Array.isArray(backends) ? [...backends].sort().join(",") : "";
++  let shaped = {};
++  if (resultOptions && typeof resultOptions === "object") {
++    const keys = Object.keys(resultOptions).filter((k) =>
++      typeof resultOptions[k] !== "function" && !k.startsWith("resolve"));
++    for (const k of keys.sort()) shaped[k] = resultOptions[k] ?? null;
++  }
+   const canonical = JSON.stringify({
+     q: typeof query === "string" ? query : "",
+     f: filters ?? {},
+     n: Number(maxResults) || 0,
+     b: backendSet,
+     m: typeof mode === "string" ? mode : "",
++    o: shaped,
+   });
+   return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+ }
+--- a/lib/health.js
++++ b/lib/health.js
+@@ -60,6 +60,14 @@
+       id,
+       enabled,
+       keyless,
++      optionalKey: beOpts.optionalKey === true,
++      metered: beOpts.metered === true,
++      // Observability: expose the breaker classification so callers can tell
++      // a quota cooldown from an ordinary outage or a missing key without
++      // parsing lastError. Additive fields; existing keys keep their meaning.
++      rateLimited: t?.rateLimited === true,
++      keylessRejected: t?.keylessRejected === true,
++      cooledUntilMs: Number.isFinite(t?.cooledUntil) && t.cooledUntil > 0 ? t.cooledUntil : null,
+       // reachable: true/false from the latest search telemetry; null = never probed.
+       reachable: t ? t.ok === true : null,
+       lastOk: t && typeof t.lastOkAt === "number" ? t.lastOkAt : null,
+@@ -72,6 +80,10 @@
+     ok: true,
+     enabled: enabledList.length,
+     keyless: enabledList.filter((b) => b.keyless).length,
++    // The deployment cap and the user's numResults combine as
++    // min(hostCap, userMax) in provider.search(); expose the user value here
++    // so an observer can explain why a search returned fewer results.
++    requestedMaxResults: Number.isFinite(opts.numResults) ? opts.numResults : null,
+     backends: list,
+     updatedAt: Date.now(),
+   };
+@@ -82,8 +94,8 @@
+  * GET only; never probes backends; response is JSON with no credentials.
+  */
+ export function registerHealthRoute(ws, deps) {
+-  if (!ws || typeof ws.register !== "function") return;
+-  ws.register({
++  if (!ws || typeof ws.register !== "function") return [];
++  const disposer = ws.register({
+     kind: "exact",
+     path: "/api/unified-search/health",
+     handler: (req, res) => {
+@@ -107,4 +119,5 @@
+       }
+     },
+   });
++  return typeof disposer === "function" ? [disposer] : [];
+ }
+--- a/lib/history.js
++++ b/lib/history.js
+@@ -82,41 +82,22 @@
+       return readAll().slice(0, cap).map(toPublicEntry);
+     },
+ 
+-    /** Empty the history (removes the file; best-effort). */
++    /** Empty the history. Serialised with record() so a pending append cannot
++     *  resurrect an entry after the clear. */
+     clear() {
+-      try {
+-        if (existsSync(file())) unlinkSync(file());
+-      } catch {
+-        // nothing to do
+-      }
++      writeChain = writeChain.then(() => {
++        try {
++          if (existsSync(file())) unlinkSync(file());
++        } catch {
++          // nothing to do
++        }
++      });
++      return writeChain;
+     },
+   };
+ }
+ 
+ /**
+- * Minimal trust fence for plugin-registered routes (the host /api RPC fence
+- * does not cover webServer.register paths): require a loopback Host (blocks
+- * DNS rebinding) and a same-site browser context (sec-fetch-site same-origin
+- * / none, or an Origin whose host matches the request Host — blocks
+- * cross-site CSRF including text/plain preflight-less POSTs).
+- * Returns null when trusted, otherwise a short rejection reason.
+- */
+-export function isTrustedApiRequest(req) {
+-  const host = String(req?.headers?.host ?? "");
+-  const hostOk = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])(:\d+)?$/.test(host);
+-  if (!hostOk) return "untrusted host";
+-  const site = req?.headers?.["sec-fetch-site"];
+-  if (site === "same-origin" || site === "none") return null;
+-  const origin = req?.headers?.origin;
+-  if (!origin) return site !== undefined ? "cross-site request" : null;
+-  try {
+-    return new URL(origin).host === host ? null : "cross-origin request";
+-  } catch {
+-    return "invalid origin";
+-  }
+-}
+-
+-/**
+  * Project the module-level backend health map into a small observability
+  * payload (v2.8.0 P2): per-backend last real success/failure, latency and
+  * breaker state — no error strings, no credentials, safe for the GUI.
+@@ -132,6 +113,9 @@
+         at: Number.isFinite(e?.at) ? e.at : null,
+         failCount: Number.isFinite(e?.failCount) ? e.failCount : 0,
+         cooled: Number.isFinite(e?.cooledUntil) && e.cooledUntil > nowMs,
++        cooledUntilMs: Number.isFinite(e?.cooledUntil) && e.cooledUntil > 0 ? e.cooledUntil : null,
++        rateLimited: e?.rateLimited === true,
++        keylessRejected: e?.keylessRejected === true,
+       });
+     }
+   }
+@@ -148,7 +132,7 @@
+  * decision the kernel applies to its own /api routes).
+  */
+ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConnection }) {
+-  if (!ws || typeof ws.register !== "function") return;
++  if (!ws || typeof ws.register !== "function") return [];
+   const send = (res, code, body) => {
+     res.writeHead(code, { "content-type": "application/json" });
+     res.end(JSON.stringify(body));
+@@ -161,7 +145,7 @@
+     }
+     handler(req, res);
+   };
+-  ws.register({
++  const disposerA = ws.register({
+     kind: "exact",
+     path: "/api/websearch/history",
+     handler: guarded((req, res) => {
+@@ -177,7 +161,7 @@
+       });
+     }),
+   });
+-  ws.register({
++  const disposerB = ws.register({
+     kind: "exact",
+     path: "/api/websearch/history/clear",
+     handler: guarded((req, res) => {
+@@ -190,4 +174,5 @@
+       send(res, 200, { ok: true, cleared: true });
+     }),
+   });
++  return [disposerA, disposerB].filter((d) => typeof d === "function");
+ }
+--- a/lib/provider.js
++++ b/lib/provider.js
+@@ -25,6 +25,7 @@
+ import { shapeQuery, resultHeader, TELEMETRY_TAG } from "./prompting.js";
+ import { cacheKeyFor } from "./cache.js";
+ import { foldBreaker, isCooled, cooledAnnotation } from "./breaker.js";
++import { rateLimited, retryAfterMsFrom, keylessRejected } from "./util/failure-label.js";
+ import { rrfFuse } from "./rrf.js";
+ import { isComplexQuery, deriveSubQueries } from "./multiquery.js";
+ 
+@@ -34,10 +35,11 @@
+ // SearXNG instances are the slowest to fail when unreachable — a 30s global
+ // default lets one dead backend stall the whole fan-out tail. The effective
+ // timeout is min(override, backendTimeoutMs), so an operator's shorter global
+-// timeout always wins.
++// timeout always wins. 8s matches the upstream 2.8.8 ceiling: public DDG and
++// SearXNG instances routinely need 5-8s, and a 5s cap killed them mid-fetch.
+ const BACKEND_TIMEOUT_OVERRIDES_MS = {
+-  ddg: 5000,
+-  searxng: 5000,
++  ddg: 8000,
++  searxng: 8000,
+ };
+ 
+ /** Effective per-backend timeout = min(override ?? ∞, global). Exported for tests. */
+@@ -59,14 +61,19 @@
+   return latestBackendHealth;
+ }
+ 
+-function recordBackendHealth(id, entry, breakerCfg) {
++function recordBackendHealth(id, entry, breakerCfg, opts = {}) {
+   const prev = latestBackendHealth.get(id);
+-  const breaker = foldBreaker(prev, entry.ok === true, entry.at, breakerCfg ?? undefined);
++  const breaker = foldBreaker(prev, entry.ok === true, entry.at, breakerCfg ?? undefined, opts);
+   latestBackendHealth.set(id, {
+     ...entry,
+     lastOkAt: entry.ok === true ? entry.at : (prev && prev.lastOkAt) || null,
+     failCount: breaker.failCount,
+     cooledUntil: breaker.cooledUntil,
++    // Persist the classification so a later full-cooldown decision can
++    // distinguish quota failures from ordinary outages and from a keyless
++    // permission refusal (which cannot be fixed by retrying after a wait).
++    rateLimited: opts.rateLimited === true,
++    keylessRejected: opts.keylessRejected === true,
+   });
+ }
+ 
+@@ -191,7 +198,13 @@
+       ...(opts.filters ?? {}),
+       ...(request?.filters ?? {}),
+       });
+-        let effReq = { ...request, maxResults: Math.max(1, Number(request?.maxResults) || opts.numResults || 8) };
++        // The host sends its deployment cap as request.maxResults; the card's
++        // numResults is the user's requested count. Neither alone is right:
++        // cap wins when smaller (never exceed the deployment limit), the user
++        // value wins when smaller (settings must actually take effect).
++        const hostCap = Number(request?.maxResults) || Infinity;
++        const userMax = Number(opts.numResults) || 8;
++        let effReq = { ...request, maxResults: Math.max(1, Math.min(hostCap, userMax)) };
+       // 系统性查询整形（Tavily/Exa best practices）：扇出前对口语化查询做
+       // 确定性归一 —— 剥离寒暄前缀、压缩空白、截断到 1500 字符；
+       // 专名/版本号/日期原样保留，不改写语义。
+@@ -228,7 +241,15 @@
+       const cacheEnabled = opts.cacheEnabled === true && cache;
+       let cacheKey = null;
+       if (cacheEnabled) {
+-        cacheKey = cacheKeyFor({ query: effReq.query, filters, maxResults, backends: opts.enabledBackends, mode: cacheMode });
++        // Result-affecting options belong in the key; otherwise a settings
++        // change is masked by a hit within the cache TTL.
++        const resultOptions = {};
++        for (const [k, v] of Object.entries(opts)) {
++          if (typeof v === "function") continue;
++          if (/^(safeSearch|rerank|dedupStrategy|language|recency|numResults|resultHeader|resultTelemetry|backendTimeoutMs|concurrency|multiQueryEnabled|deepCoverage)$/.test(k)
++              || /BaseURL$|^.*Model$|^.*ApiKeyEnv$|^enable[A-Z]/.test(k)) resultOptions[k] = v;
++        }
++        cacheKey = cacheKeyFor({ query: effReq.query, filters, maxResults, backends: opts.enabledBackends, mode: cacheMode, resultOptions });
+         const hit = cache.get(cacheKey);
+         if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
+           // Defense in depth: the fresh path drops non-http(s) schemes before
+@@ -247,8 +268,10 @@
+             query: request?.query,
+             time: Date.now(),
+             resultCount: hit.value.sources.length,
+-            backendsOk: 0,
+-            backendsTotal: 0,
++            // A cache hit is served from a prior successful fan-out; zeroing
++            // the counters made it indistinguishable from a total outage.
++            backendsOk: hit.value.sources.length > 0 ? 1 : 0,
++            backendsTotal: hit.value.sources.length > 0 ? 1 : 0,
+           });
+           return {
+             sources: safeSources,
+@@ -279,17 +302,50 @@
+         candidates.push({ id, backend: be, beOpts });
+       }
+       const cooled = new Map();
++      const rateLimitedCooled = new Map();
+       let eligible = candidates;
+       if (breakerCfg) {
+         const active = candidates.filter((c) => {
+-          if (isCooled(latestBackendHealth.get(c.id), nowMs)) {
+-            cooled.set(c.id, latestBackendHealth.get(c.id));
++          const entry = latestBackendHealth.get(c.id);
++          if (isCooled(entry, nowMs)) {
++            cooled.set(c.id, entry);
++            if (entry?.rateLimited === true) rateLimitedCooled.set(c.id, entry);
+             return false;
+           }
+           return true;
+         });
+-        if (active.length > 0) eligible = active;
+-        else cooled.clear(); // all cooled -> fail-open
++        // A rate-limited/quota backend must never be re-hit while its cooldown
++        // is open, even in a mixed outage. Only the non-quota cooled backends
++        // keep the historical fail-open behaviour; when nothing usable remains
++        // and at least one cooldown is quota-driven, fail fast with a retry hint.
++        const failOpen = active.concat([...cooled.entries()]
++          .filter(([, e]) => e?.rateLimited !== true)
++          .map(([id]) => candidates.find((c) => c.id === id))
++          .filter(Boolean));
++        if (failOpen.length > 0) eligible = failOpen;
++        else if (rateLimitedCooled.size > 0) {
++          const until = Math.max(...[...rateLimitedCooled.values()].map((e) => e?.cooledUntil ?? 0));
++          const waitS = Math.max(0, Math.ceil((until - nowMs) / 1000));
++          // Distinguish a real quota/rate-limit cooldown from a keyless
++          // permission refusal: retrying the latter after N seconds cannot
++          // succeed without configuring a key.
++          const keyless = [...rateLimitedCooled.values()].some((e) => e?.keylessRejected === true);
++          if (keyless) {
++            throw new WebError(
++              "unified search: all backends need an API key (keyless access is unavailable); add a key or enable another backend",
++              "WEB_PROVIDER_ERROR",
++            );
++          }
++          throw new WebError(
++            `unified search: all backends are rate-limited; retry after ~${waitS}s`,
++            "WEB_PROVIDER_ERROR",
++          );
++        } else {
++          // Pure non-quota outage: keep fail-open so a breaker can never make
++          // search worse than no breaker.
++          eligible = candidates;
++          cooled.clear();
++        }
+       }
+ 
+       if (eligible.length === 0) {
+@@ -313,7 +369,10 @@
+           if (beOpts.baseURL !== undefined) {
+             let bu = null;
+             try { bu = new URL(beOpts.baseURL); } catch { bu = null; }
+-            const privHost = bu ? /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){3}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){3})$/.test(bu.hostname) : false;
++            // The first two octets of 192.168/16 and 172.16/12 are already matched,
++            // so exactly two further octets may follow. Plain-http is allowed
++            // only for RFC1918 hosts that pass this gate.
++            const privHost = bu ? /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})$/.test(bu.hostname) : false;
+             const schemeOk = bu && (bu.protocol === "https:" || (bu.protocol === "http:" && privHost));
+             if (!schemeOk || bu.username || bu.password) {
+               throw new WebError(`backend "${id}" has an invalid baseURL: https required (plain http only for private hosts), credentials-in-URL rejected`, "WEB_PROVIDER_ERROR");
+@@ -334,9 +393,17 @@
+                 return value;
+               },
+               (err) => {
+-                const msg = String(err instanceof Error ? err.message : err).slice(0, 80);
++                // An internal backend timeout aborts the per-backend
++                // controller, not the caller's signal. Report it as a timeout
++                // in telemetry/health instead of the backend's generic
++                // "aborted" text, which would read as a user cancellation.
++                const internalTimeout = controller.signal.aborted && !(signal && signal.aborted);
++                const msg = internalTimeout
++                  ? `backend "${id}" timed out after ${effectiveTimeoutMs}ms`
++                  : String(err instanceof Error ? err.message : err).slice(0, 80);
+                 telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: msg });
+-                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg);
++                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg,
++                  { rateLimited: rateLimited(err), keylessRejected: keylessRejected(err), retryAfterMs: retryAfterMsFrom(err) });
+                 throw err;
+               },
+             )
+@@ -408,10 +475,10 @@
+         const sources = ordered.slice(0, maxResults);
+         // 结果呈现头（Anthropic web-search / OpenAI grounding 官方指引）：
+         // 置于结果块最前，要求逐条引用来源 URL、优先官方/一手与较新来源；
+-        // 语言按查询文本自动选择（含 CJK 用中文头）。可用
+-        // opts.resultHeader === false 关闭。
++        // The result header is always prepended; the language follows the
++        // query text (CJK selects the Chinese header).
+         let outContent = perVariant.find((v) => v.mergedContent !== undefined)?.mergedContent;
+-        if (opts.resultHeader !== false && (sources.length > 0 || outContent !== undefined)) {
++        if (sources.length > 0 || outContent !== undefined) {
+           const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
+           outContent = outContent === undefined ? header : header + "\n\n" + outContent;
+         }
+@@ -430,8 +497,12 @@
+         if (opts.resultTelemetry !== false && (allTelemetry.length > 0 || cooled.size > 0)) {
+           const cooledParts = [];
+           for (const [cid, centry] of cooled) {
+-            const ann = cooledAnnotation(centry, Date.now()) || "⏸cooled";
+-            cooledParts.push(cid + " " + ann);
++            // The cooldown set was captured at fan-out start. Recomputing with
++            // Date.now() here (after every backend returned) can find the
++            // window already expired and emit a bare "⏸cooled" for a backend
++            // that is now retryable. Use the same instant as the decision.
++            const ann = cooledAnnotation(centry, nowMs);
++            if (ann) cooledParts.push(cid + " " + ann);
+           }
+           // Multi-query fans every variant through every backend; cap the line
+           // so the telemetry note cannot dwarf the results themselves.
+@@ -456,7 +527,7 @@
+       // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
+       if (allFailures.length === 0) {
+         let emptyContent = perVariant.find((v) => v.mergedContent !== undefined)?.mergedContent;
+-        if (opts.resultHeader !== false && emptyContent !== undefined) {
++        if (emptyContent !== undefined) {
+           const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
+           emptyContent = header + "\n\n" + emptyContent;
+         }
+@@ -478,7 +549,7 @@
+       // All enabled backends failed - synthesize one meaningful error that
+       // names each backend's own reason so the caller (model or user) can act.
+       const detail = allFailures.slice(0, 4)
+-        .map((f) => f.id + ": " + String(f.err instanceof Error ? f.err.message : f.err).slice(0, 120))
++        .map((f) => f.id + ": " + String(f.err instanceof Error ? f.err.message : f.err).slice(0, 200))
+         .join("; ");
+       const allKeyMissing =
+         allFailures.length > 0 &&
+@@ -486,6 +557,16 @@
+       const hint = allKeyMissing
+         ? " (every enabled backend is missing its API key - add keys in Settings > Web Search, or enable a keyless backend)"
+         : "";
++      // A total outage must be visible in history: otherwise the newest entry
++      // still shows the last success while health already records failures,
++      // making failure-rate/availability statistics silently omit outages.
++      history?.record({
++        query: request?.query,
++        time: Date.now(),
++        resultCount: 0,
++        backendsOk: allTelemetry.filter((t) => t.ok).length,
++        backendsTotal: allTelemetry.length,
++      });
+       throw new WebError(
+         `unified search: all enabled backends failed (${allFailures.length}) - ${detail}` + hint,
+         "WEB_PROVIDER_ERROR",
+--- a/lib/settings-api.js
++++ b/lib/settings-api.js
+@@ -33,16 +33,11 @@
+  * @module lib/settings-api.js
+  */
+ import { rejectionFor } from "./trust.js";
++import { findPluginRow } from "./util/namespace.js";
+ 
+ const SETTINGS_PATH = "/api/unified-search/settings";
+ const MAX_BODY_BYTES = 64 * 1024;
+ const MAX_OPS = 64;
+-/**
+- * Field names the card owns. Used only to find the profile entry in
+- * `describe()` output — never as a whitelist; the whitelist is the live
+- * `Config.dict`, so schema growth is picked up without touching this file.
+- */
+-const DISCOVERY_FIELDS = ["numResults", "backendTimeoutMs", "enabledBackends", "enableExa"];
+ 
+ /**
+  * Register the (exact) settings route on the late-mounted webServer.
+@@ -50,8 +45,8 @@
+  * @param {{ getSettings: () => unknown, getConfig: () => unknown, getConnection?: () => unknown }} deps
+  */
+ export function registerSettingsRoutes(ws, deps) {
+-  if (!ws || typeof ws.register !== "function") return;
+-  ws.register({
++  if (!ws || typeof ws.register !== "function") return [];
++  const disposer = ws.register({
+     kind: "exact",
+     path: SETTINGS_PATH,
+     handler: guarded(deps, (req, res) => {
+@@ -66,13 +61,15 @@
+         return;
+       }
+       if (req.method === "POST") {
+-        void write(req, res, deps);
+-        return;
++        // Return the promise so guarded()'s catch handles write() failures
++        // instead of leaving an unhandled rejection with no response.
++        return write(req, res, deps);
+       }
+       res.setHeader("allow", "GET, POST");
+       sendJson(res, 405, { ok: false, error: "method not allowed (GET/POST)" });
+     }),
+   });
++  return typeof disposer === "function" ? [disposer] : [];
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -95,7 +92,10 @@
+   };
+ }
+ 
+-/** Read the plugin's volatile form snapshot from the host settings service. */
++/** Read the plugin's volatile form snapshot from the host settings service.
++ * `revision` counts value changes, not write requests: setting a field to its
++ * current value returns 200 without advancing it. Pass the returned revision
++ * as expectedRevision on the next write for optimistic-concurrency checks. */
+ function describe(deps) {
+   const settings = typeof deps.getSettings === "function" ? deps.getSettings() : undefined;
+   if (settings === undefined || settings === null || typeof settings.describe !== "function") {
+@@ -122,17 +122,13 @@
+ }
+ 
+ /**
+- * Locate this plugin's descriptor: first by shape (the card's own fields
+- * present in the resolved value), then by the profile entry id this package's
+- * bundle patch inserts. Shape-first survives a renamed insert id; the literal
+- * survives a host that reports an empty value.
++ * Locate the plugin's settings row. Delegates to the shared resolver so the
++ * HTTP bridge and the provider resolve the same namespace in the same way.
++ * @param {unknown} descriptors - `settings.describe()` output.
++ * @returns {object|undefined} the matching row.
+  */
+ function findNamespace(descriptors) {
+-  if (!Array.isArray(descriptors)) return undefined;
+-  const rows = descriptors.filter((row) => row !== null && typeof row === "object" && typeof row.ns === "string");
+-  return rows.find((row) => row.value !== undefined && row.value !== null
+-      && typeof row.value === "object" && DISCOVERY_FIELDS.some((key) => Object.hasOwn(row.value, key)))
+-    ?? rows.find((row) => row.ns === "dsh-websearch");
++  return findPluginRow(descriptors);
+ }
+ 
+ async function write(req, res, deps) {
+@@ -166,6 +162,20 @@
+   const fields = config !== undefined && config !== null && config.dict !== undefined && config.dict !== null
+     ? config.dict
+     : {};
++  const view = findNamespace(safeDescribe(settings));
++  if (view === undefined) {
++    sendJson(res, 503, { ok: false, error: "settings namespace unavailable" });
++    return;
++  }
++  const expected = Number.isInteger(body.expectedRevision) ? body.expectedRevision : undefined;
++  // Report a stale revision before field validation: otherwise a caller that
++  // both lost a race and sent a bad value sees a misleading 400 and retries
++  // forever. The host mutate() still performs the authoritative CAS below,
++  // so a revision that changes between here and there remains covered.
++  if (expected !== undefined && Number.isInteger(view.revision) && expected !== view.revision) {
++    sendJson(res, 409, { ok: false, code: "SETTINGS_CONFLICT", error: "settings changed elsewhere; reload and retry" });
++    return;
++  }
+   const ops = [];
+   for (const raw of wanted) {
+     const parsed = validateOp(raw, fields);
+@@ -175,12 +185,6 @@
+     }
+     ops.push(parsed);
+   }
+-  const view = findNamespace(safeDescribe(settings));
+-  if (view === undefined) {
+-    sendJson(res, 503, { ok: false, error: "settings namespace unavailable" });
+-    return;
+-  }
+-  const expected = Number.isInteger(body.expectedRevision) ? body.expectedRevision : undefined;
+   try {
+     await settings.mutate(view.ns, ops, expected);
+   } catch (err) {
+@@ -248,19 +252,26 @@
+   return new Promise((resolveBody, rejectBody) => {
+     const chunks = [];
+     let size = 0;
++    const onEnd = () => resolveBody(Buffer.concat(chunks).toString("utf8"));
++    const onError = rejectBody;
+     req.on("data", (chunk) => {
+       size += chunk.length;
+       if (size > MAX_BODY_BYTES) {
+         const oversize = new Error("request body too large");
+         oversize.status = 413;
+         rejectBody(oversize);
++        // Stop consuming and release the stream so a keep-alive connection is
++        // not left waiting for an `end` that can still arrive.
+         req.removeAllListeners("data");
++        req.removeListener("end", onEnd);
++        req.removeListener("error", onError);
++        req.destroy();
+         return;
+       }
+       chunks.push(chunk);
+     });
+-    req.on("end", () => resolveBody(Buffer.concat(chunks).toString("utf8")));
+-    req.on("error", rejectBody);
++    req.on("end", onEnd);
++    req.on("error", onError);
+   });
+ }
+ 
+--- a/lib/breaker.js
++++ b/lib/breaker.js
+@@ -24,9 +24,11 @@
+  * @param {boolean} ok             did this call succeed?
+  * @param {number} nowMs
+  * @param {{threshold?: number, cooldownMs?: number}} cfg
++ * @param {{rateLimited?: boolean, retryAfterMs?: number}} [opts] - a quota
++ *   failure cools the backend immediately instead of waiting for threshold.
+  * @returns {{ failCount: number, cooledUntil: number }}
+  */
+-export function foldBreaker(prev, ok, nowMs, cfg = {}) {
++export function foldBreaker(prev, ok, nowMs, cfg = {}, opts = {}) {
+   const threshold = Math.max(1, Math.floor(Number(cfg.threshold) || BREAKER_DEFAULTS.threshold));
+   // cooldownMs === 0 explicitly disables the cooldown window (cooledUntil = now
+   // expires instantly). Only null/undefined falls back to the default — an
+@@ -35,13 +37,26 @@
+     ? Math.max(0, Math.floor(Number(cfg.cooldownMs) || 0))
+     : BREAKER_DEFAULTS.cooldownMs;
+   if (ok) return { failCount: 0, cooledUntil: 0 };
+-  const failCount = (Number.isFinite(prev?.failCount) ? prev.failCount : 0) + 1;
++  // A cooldown window that has already expired starts a fresh failure streak;
++  // otherwise failCount grows monotonically across unrelated outages.
++  // cooledUntil === 0 means "never opened", so the streak still accumulates.
++  const hadOpenWindow = Number.isFinite(prev?.cooledUntil) && prev.cooledUntil > 0;
++  const expired = hadOpenWindow && prev.cooledUntil <= nowMs;
++  const baseCount = Number.isFinite(prev?.failCount) ? prev.failCount : 0;
++  const failCount = expired ? 1 : baseCount + 1;
++  const prevCooledUntil = expired ? 0 : (Number.isFinite(prev?.cooledUntil) ? prev.cooledUntil : 0);
++  // A rate-limit/quota response should not be retried twice more just to
++  // reach the failure threshold; cool immediately for the retry window.
++  if (opts.rateLimited === true) {
++    const retryAfterMs = Number.isFinite(opts.retryAfterMs) ? opts.retryAfterMs : cooldownMs;
++    return { failCount, cooledUntil: nowMs + Math.max(0, retryAfterMs) };
++  }
+   if (failCount >= threshold) {
+     return { failCount, cooledUntil: nowMs + cooldownMs };
+   }
+   // Keep an existing open window if the backend was already open (failure
+   // while open extends nothing, but must not silently close it).
+-  return { failCount, cooledUntil: Number.isFinite(prev?.cooledUntil) ? prev.cooledUntil : 0 };
++  return { failCount, cooledUntil: prevCooledUntil };
+ }
+ 
+ /**
+--- a/lib/backends/exa.js
++++ b/lib/backends/exa.js
+@@ -59,7 +59,9 @@
+ 
+     let result;
+     try {
+-      result = await mcpCall(EXA_ENDPOINT, EXA_TOOL, args, {}, signal);
++      // The public Exa MCP endpoint is stateless; the official provider sends
++      // a single tools/call with no initialize round-trip.
++      result = await mcpCall(EXA_ENDPOINT, EXA_TOOL, args, {}, signal, { skipInitialize: true });
+     } catch (err) {
+       if (err instanceof WebError) throw err;
+       throw new WebError(
+--- a/lib/backends/parallel.js
++++ b/lib/backends/parallel.js
+@@ -47,7 +47,8 @@
+ 
+     let result;
+     try {
+-      result = await mcpCall(PARALLEL_ENDPOINT, PARALLEL_TOOL, args, {}, signal);
++      // The official provider sends a bare tools/call with no session handshake.
++      result = await mcpCall(PARALLEL_ENDPOINT, PARALLEL_TOOL, args, {}, signal, { skipInitialize: true });
+     } catch (err) {
+       if (err instanceof WebError) throw err;
+       throw new WebError(
+--- a/lib/backends/tavily.js
++++ b/lib/backends/tavily.js
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { applyTavilyFilters, normalizeFilters } from "../util/filters.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+@@ -77,7 +78,7 @@
+     if (!response.ok) {
+       const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+       hooks?.recordOutcome?.({ status: "error", message: `HTTP ${response.status}: ${text}` });
+-      throw new WebError(`Tavily API error (HTTP ${response.status}): ${text}`, "WEB_PROVIDER_ERROR");
++      throw webErrorFromResponse(response, text, "Tavily");
+     }
+ 
+     let data;
+--- a/lib/backends/serper.js
++++ b/lib/backends/serper.js
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { applySerperFilters, normalizeFilters } from "../util/filters.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+@@ -68,7 +69,7 @@
+     if (!response.ok) {
+       const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+       hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
+-      throw new WebError("Serper API error (HTTP " + response.status + "): " + text, "WEB_PROVIDER_ERROR");
++      throw webErrorFromResponse(response, text, "Serper");
+     }
+ 
+     let data;
+--- a/lib/backends/brave.js
++++ b/lib/backends/brave.js
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { applyBraveFilters, normalizeFilters, safeSearchParams } from "../util/filters.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+@@ -66,7 +67,7 @@
+     if (!response.ok) {
+       const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+       hooks?.recordOutcome?.({ status: "error", message: `HTTP ${response.status}: ${text}` });
+-      throw new WebError(`Brave Search API error (HTTP ${response.status}): ${text}`, "WEB_PROVIDER_ERROR");
++      throw webErrorFromResponse(response, text, "Brave");
+     }
+ 
+     let data;
+--- a/lib/backends/mojeek.js
++++ b/lib/backends/mojeek.js
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+ 
+@@ -68,7 +69,7 @@
+     if (!response.ok) {
+       const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+       hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
+-      throw new WebError("Mojeek API error (HTTP " + response.status + "): " + text, "WEB_PROVIDER_ERROR");
++      throw webErrorFromResponse(response, text, "Mojeek");
+     }
+ 
+     let data;
+--- a/lib/backends/ddg.js
++++ b/lib/backends/ddg.js
+@@ -8,6 +8,7 @@
+ import { searchAborted, isAbortError, throwIfSearchAborted } from "../util/abort.js";
+ import { applyDdgFilters, normalizeFilters } from "../util/filters.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+ 
+ export const DDG_ENDPOINT = "https://html.duckduckgo.com/html/";
+@@ -49,12 +50,16 @@
+       if (!res.ok) {
+         let detail = "";
+         try { detail = (await res.text()).slice(0, 200); } catch {}
+-        throw new WebError(`ddg HTTP ${res.status}${detail ? ": " + detail : ""}`, "WEB_PROVIDER_ERROR");
++        throw webErrorFromResponse(res, detail, "ddg");
+       }
+       text = await res.text();
+     } catch (err) {
+       if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
+       hooks.recordOutcome?.({ status: "error", message: String(err?.message ?? err) });
++      // webErrorFromResponse() already produced a structured WebError with
++      // status/code/rateLimited; re-wrapping it would drop those fields and
++      // force the breaker back onto message-text classification.
++      if (err instanceof WebError) throw err;
+       throw new WebError(
+         `ddg search failed: ${String(err?.message ?? err)}`,
+         "WEB_PROVIDER_ERROR",
+--- a/lib/backends/searxng.js
++++ b/lib/backends/searxng.js
+@@ -7,6 +7,7 @@
+  */
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { applySearxngFilters, normalizeFilters, safeSearchParams } from "../util/filters.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+@@ -79,9 +80,9 @@
+       const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+       hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
+       if (response.status === 429 || response.status >= 500) {
+-        throw new WebError("SearXNG API error (HTTP " + response.status + "): " + text + " (instance struggling? point searxngBaseURL at another public instance)", "WEB_PROVIDER_ERROR");
++        throw webErrorFromResponse(response, text, "SearXNG");
+       }
+-      throw new WebError("SearXNG API error (HTTP " + response.status + "): " + text, "WEB_PROVIDER_ERROR");
++      throw webErrorFromResponse(response, text, "SearXNG");
+     }
+ 
+     let data;
+--- a/lib/backends/openai.js
++++ b/lib/backends/openai.js
+@@ -12,6 +12,7 @@
+ 
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+ 
+ const UA = "dsh-websearch/2.3";
+@@ -103,7 +104,7 @@
+         if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
+       }
+       hooks.recordOutcome?.({ status: "error", message });
+-      throw new WebError(message, "WEB_PROVIDER_ERROR");
++      throw webErrorFromResponse(response, message, "OpenAI");
+     }
+ 
+     try {
+--- a/lib/backends/anthropic-like.js
++++ b/lib/backends/anthropic-like.js
+@@ -17,6 +17,7 @@
+ 
+ import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
+ import { egressFetch } from "../util/egress-fetch.js";
+ 
+ /** Attribution header; bumped with the package version. */
+@@ -149,7 +150,7 @@
+           if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
+         }
+         hooks.recordOutcome?.({ status: "error", message });
+-        throw new WebError(message, "WEB_PROVIDER_ERROR");
++        throw webErrorFromResponse(response, message, id);
+       }
+ 
+       try {
+--- a/README.md
++++ b/README.md
+@@ -3,13 +3,13 @@
+ [![npm version](https://img.shields.io/npm/v/@240xu/dsh-websearch.svg)](https://www.npmjs.com/package/@240xu/dsh-websearch)
+ [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+ 
+-> Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to eleven backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
++> Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to thirteen backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
+ 
+ A pure-Cordis drop-in: registers ONE provider at `ctx.web` so the `dsh-web` selection rule never fires `WEB_PROVIDER_AMBIGUOUS`. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek) auto-activate once their key is supplied via the credentials service or env.
+ 
+ ---
+ 
+-DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十一后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
++DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十三后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
+ 
+ 纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
+ 
+@@ -96,7 +96,7 @@
+ **结果健康遥测（默认开）**：每次搜索的 `content` 尾部附一行 `[websearch backends] exa ✓5ms/3 · ddg ✗30000ms`，
+ 模型可据此自诊断并建议用户调整设置；设置面板「结果策略」可关闭（`resultTelemetry`）。
+ 
+-**11 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai`（默认关）
++**13 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai` / `enableFirecrawl` / `enableTinyfish`（默认关，后两者为计量型免 Key 后端）
+ 
+ **API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
+ 
+@@ -113,7 +113,7 @@
+ 
+ **Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
+ 
+-环境变量兜底：未在 credentials 配置时回退读同名环境变量；`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔强制指定启用集合。
++环境变量兜底：未在 credentials 配置时回退读同名环境变量。`DSH_UNIFIED_SEARCH_BACKENDS` 可逗号分隔指定启用集合，但优先级低于 `enabledBackends` 与 `enableXxx` 开关；由于四个免 Key 后端开关默认均为 `true`，该环境变量仅在所有开关被显式关闭时生效（Known Limitation）。
+ 
+ ## v2.8.1 SettingsForms 适配 | What's new in v2.8.1
+ 
+@@ -128,7 +128,7 @@
+ ### 1. multiQuery 多查询 RRF 融合（`multiQueryEnabled`，默认关）
+ 
+ - 门控启发式（刻意从严）：查询长度 > 60 字符，或含 `vs / and / 比较 / 对比 / 和` 分隔词，才触发；简单查询单扇出，行为与旧版完全一致（arXiv:2404.01037：盲目多查询会劣化）。
+-- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 11 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
++- 触发后派生 ≤3 个子查询（原查询永远参与融合且保持全权重），各自走完整 13 后端扇出，再用 RRF（k=60）融合：出现在多个子查询结果里的条目被提升，单列表独占条目按位次衰减；URL 去重、首见元数据保留。
+ - 遥测行合并各变体并截断至 12 条，避免淹没结果。
+ 
+ ### 2. deepCoverage 深度覆盖（`deepCoverage`，默认关）
+@@ -237,7 +237,23 @@
+ node --test tests/
+ ```
+ 
+-v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）。
++当前 73/73 pass（`node --test tests/*.test.js`）。
++
++### Test-only dependencies
++
++The six `@deepseek-ai/*` packages under `node_modules/` are test-only symlinks
++into the running Harness checkout. They are not shipped and are gitignored. A
++runtime switch moves the checkout and leaves absolute links dangling, which
++makes `node --test` fail with `ERR_MODULE_NOT_FOUND`. Rebuild them from the
++live service before running the suite:
++
++```bash
++bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
++find node_modules/@deepseek-ai -xtype l   # expect no output
++node --test tests/*.test.js                 # 73/73
++```
++
++v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。
+ 
+ ## 权威依据与取舍 | Authoritative sources & design trade-offs
+ 
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "@240xu/dsh-websearch",
+   "version": "2.8.4",
+-  "description": "Unified web search provider for DeepSeek Harness (ctx.web): 11 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials). Registers provider id \"unified\" for zero-config web_search. 统一网页搜索聚合：11 后端并发扇出、去重合并，零依赖。See CHANGELOG.md for version history.",
++  "description": "Unified web search provider for DeepSeek Harness (ctx.web): 13 backends — Exa + Parallel + DDG + SearXNG (keyless), DeepSeek + Anthropic + OpenAI + Brave + Tavily + Serper + Mojeek (key-gated via Settings credentials), Firecrawl + TinyFish (metered keyless, opt-in). Registers provider id \"unified\" for zero-config web_search. 统一网页搜索聚合：13 后端并发扇出、去重合并。See CHANGELOG.md for version history.",
+   "type": "module",
+   "main": "lib/index.js",
+   "exports": {
+--- a/lib/util/namespace.js
++++ b/lib/util/namespace.js
+@@ -0,0 +1,28 @@
++/**
++ * Locate this plugin's row in a settings `describe()` result.
++ *
++ * DSH 0.2.x keys namespaces by the profile entry id (`entry.options.id`),
++ * which for this plugin is `dsh-websearch`. Older hosts used the settings
++ * NAMESPACE `unified-search`. A host may expose several namespaces with
++ * generic field names such as `numResults`, so a shape-only match can select
++ * another plugin's row and make a write land in the wrong namespace.
++ * Prefer the exact ids; only fall back to the shape when neither id is
++ * present, and require at least two plugin-specific fields in that case.
++ *
++ * @param {unknown} rows - `settings.describe()` output.
++ * @returns {object|undefined} the matching row (with `.value`).
++ */
++const PROFILE_ID = "dsh-websearch";
++const LEGACY_ID = "unified-search";
++const SHAPE_FIELDS = ["searxngBaseURL", "enableFirecrawl", "firecrawlBaseURL", "enableTinyfish", "tinyfishBaseURL"];
++
++export function findPluginRow(rows) {
++  if (!Array.isArray(rows)) return undefined;
++  const candidates = rows.filter((row) => row !== null && typeof row === "object" && typeof row.ns === "string");
++  const byId = candidates.find((row) => row.ns === PROFILE_ID)
++    ?? candidates.find((row) => row.ns === LEGACY_ID);
++  if (byId) return byId;
++  return candidates.find((row) => row.value !== undefined && row.value !== null
++    && typeof row.value === "object"
++    && SHAPE_FIELDS.filter((key) => Object.hasOwn(row.value, key)).length >= 2);
++}
+--- a/lib/util/web-error.js
++++ b/lib/util/web-error.js
+@@ -0,0 +1,49 @@
++// web-error.js — shared HTTP-failure constructor for the unified search
++// provider. WebError (published dsh-web) extends HarnessError, whose
++// constructor consumes only `cause`; extra fields must be assigned after
++// construction. Keeping that in one place preserves `instanceof WebError`
++// and the cause chain while giving the breaker machine-routable fields.
++
++import { WebError } from "@deepseek-ai/dsh-web";
++
++/** Canonical codes from dsh-llm/lib/types/error.js (RATE_LIMIT example, QUOTA_EXCEEDED_CODE). */
++export const RATE_LIMIT_CODE = "RATE_LIMIT";
++export const QUOTA_CODE = "QUOTA";
++
++function headerValue(response, name) {
++  try { return response?.headers?.get?.(name) ?? undefined; } catch { return undefined; }
++}
++
++/**
++ * Build a WebError from a non-2xx Response. egressFetch already constructs a
++ * Response with status + full headers, so Retry-After is reachable here.
++ * @param {Response} response - the non-2xx response.
++ * @param {string} text - already-bounded upstream body.
++ * @param {string} label - backend name for the human-readable message.
++ * @param {{cause?: unknown}} [opts] - optional underlying error.
++ * @returns {WebError} error carrying status, retryAfter, rateLimited and code.
++ */
++export function webErrorFromResponse(response, text, label, opts = {}) {
++  const status = Number(response?.status) || 0;
++  const retryAfter = headerValue(response, "retry-after");
++  const rateLimited = status === 429;
++  // 402 is an explicit payment/quota signal. 403 is ambiguous (invalid key,
++  // forbidden, or quota) so it must NOT be classified as quota here; treating
++  // every 403 as quota would cool a backend for a bad credential.
++  const quota = status === 402;
++  const code = rateLimited ? RATE_LIMIT_CODE
++    : quota ? QUOTA_CODE
++      : "WEB_PROVIDER_ERROR";
++  const message = `${label} API error (HTTP ${status}): ${String(text ?? "").slice(0, 140)}`;
++  const err = new WebError(
++    message,
++    code,
++    opts.cause === undefined ? undefined : { cause: opts.cause },
++  );
++  // HarnessError `super(message, options)` only accepts cause; attach the rest.
++  err.status = status;
++  err.retryAfter = retryAfter;
++  err.rateLimited = rateLimited;
++  err.quota = quota;
++  return err;
++}
+--- a/lib/backends/firecrawl.js
++++ b/lib/backends/firecrawl.js
+@@ -0,0 +1,127 @@
++// firecrawl.js — Firecrawl search backend (streamable-http MCP, v2).
++//
++// Requests the official Firecrawl MCP endpoint through the shared MCP client.
++// The hosted keyless tier is rate limited; an optional API key raises its
++// limits. Results are normalised to { url, title?, snippet? }.
++
++//   https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/plugin/websearch/firecrawl.ts
++//   https://docs.firecrawl.dev/mcp-server/keyless.md
++//
++// Endpoint: https://mcp.firecrawl.dev/v2/mcp
++//   - keyless hosted tier: no credential, exposes firecrawl_search /
++//     firecrawl_scrape / firecrawl_parse only, rate limited per IP (official
++//     docs, HTTP 200). The exact daily numbers are not published.
++//   - with FIRECRAWL_API_KEY: Authorization: Bearer <key>, higher limits.
++// The v2.2.5 OpenCode client does NOT send an explicit keyless header; the
++// server implicitly provides the tier when no Authorization header is set.
++//
++// Response envelope: content[0].text is a JSON string of
++//   { success: boolean, data: { web: [{ url, title?, description? }] } }
++// which we normalise to the DSH source shape { url, title?, snippet? }.
++//
++// Registration is intentionally opt-in (DEFAULT_ENABLED does not contain this
++// id) because the keyless tier is metered and its exact ceiling is unknown.
++
++import { mcpCall } from "../util/mcp-client.js";
++import { WebError } from "@deepseek-ai/dsh-web";
++
++const FIRECRAWL_ENDPOINT = "https://mcp.firecrawl.dev/v2/mcp";
++const FIRECRAWL_TOOL = "firecrawl_search";
++
++export const firecrawlBackend = {
++  id: "firecrawl",
++  requiresCredential: false,
++
++  available() {
++    // Hosted keyless tier works without a key; a key only raises limits.
++    return true;
++  },
++
++  async search(request, signal, options, hooks = {}) {
++    // The official provider requests a fixed page of 8; a larger maxResults
++    // is applied locally by parseFirecrawlResult, not sent upstream where it
++    // would consume more of the hosted keyless quota.
++    const args = {
++      query: request.query,
++      limit: 8,
++    };
++    // resolveOptions() supplies an async resolveApiKey(); a literal apiKey is
++    // accepted for stubs (same split as anthropic-like.js). Resolution failure
++    // degrades to the keyless tier.
++    let apiKey = typeof options?.apiKey === "string" ? options.apiKey : "";
++    if (!apiKey && typeof options?.resolveApiKey === "function") {
++      try { apiKey = (await options.resolveApiKey()) ?? ""; } catch { apiKey = ""; }
++    }
++    const extraHeaders = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
++    // Use the configured baseURL so the sidecar/proxy path and the provider
++    // trust gate apply; fall back to the official endpoint when unset.
++    const endpoint = typeof options?.baseURL === "string" && options.baseURL.length > 0
++      ? options.baseURL : FIRECRAWL_ENDPOINT;
++
++    // Keys must never appear in recorded request metadata.
++    hooks.recordRequest?.({
++      endpoint,
++      toolName: FIRECRAWL_TOOL,
++      body: args,
++      headers: {},
++    });
++
++    let result;
++    try {
++      result = await mcpCall(
++        endpoint,
++        FIRECRAWL_TOOL,
++        args,
++        extraHeaders,
++        signal,
++        // The hosted Firecrawl MCP endpoint is stateless; the official
++        // provider sends a single tools/call.
++        { skipInitialize: true },
++      );
++    } catch (err) {
++      if (err instanceof WebError) throw err;
++      throw new WebError(
++        `firecrawl search failed: ${String(err?.message ?? err)}`,
++        "WEB_PROVIDER_ERROR",
++        { cause: err },
++      );
++    }
++
++    if (result?.isError === true) {
++      const message = String(result.content?.[0]?.text ?? "unknown");
++      hooks.recordOutcome?.({ status: "error", message });
++      throw new WebError(`firecrawl returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
++    }
++
++    const sources = parseFirecrawlResult(result, request.maxResults ?? 8);
++    hooks.recordOutcome?.({ status: "ok", count: sources.length });
++    return { sources, content: undefined, truncated: false };
++  },
++};
++
++/** Parse the JSON string embedded in content[0].text into DSH sources. */
++export function parseFirecrawlResult(result, maxResults) {
++  const text = result?.content?.[0]?.text;
++  if (typeof text !== "string" || text.length === 0) return [];
++  let parsed;
++  try {
++    parsed = JSON.parse(text);
++  } catch {
++    return [];
++  }
++  if (parsed?.success === false || !Array.isArray(parsed?.data?.web)) return [];
++  const sources = [];
++  for (const item of parsed.data.web) {
++    if (typeof item?.url !== "string" || item.url.length === 0) continue;
++    const source = { url: item.url };
++    if (typeof item.title === "string" && item.title.length > 0) source.title = item.title;
++    if (typeof item.description === "string" && item.description.length > 0) {
++      source.snippet = item.description;
++    }
++    sources.push(source);
++    if (sources.length >= maxResults) break;
++  }
++  return sources;
++}
++
++export default firecrawlBackend;
+--- a/lib/backends/tinyfish.js
++++ b/lib/backends/tinyfish.js
+@@ -0,0 +1,123 @@
++// tinyfish.js — TinyFish search backend (streamable-http MCP).
++//
++// Aligned with the OpenCode v2 websearch provider:
++//   https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/plugin/websearch/tinyfish.ts
++// The hosted keyless tier needs no credential; an optional API key activates
++// the session handshake and raises limits.
++// Endpoint: https://agent.tinyfish.ai/mcp
++//   - keyless: header `X-TinyFish-Access-Mode: keyless`, NO initialize /
++//     Mcp-Session-Id handshake. TinyFish v2.2.5 source comment:
++//       "Keyed requests are rejected without the Mcp-Session-Id returned by
++//        initialize; keyless ones are not."
++//   - keyed: header `X-API-Key: <key>` plus the normal 3-step handshake
++//     (mcpCall default). Our mcpCall() gained `options.skipInitialize` to
++//     express exactly this split without regressing exa/parallel.
++//
++// Keyless limits observed via tools/list: 30 requests/min, 50 searches/UTC
++// day (search only: web + news). The REST pricing page uses different numbers
++// (TinySearch 30 req/min, 500/hour) — that is a different ingress, do not
++// conflate the two. See 05-search-backends.md appendix A.3.
++//
++// Response envelope: content[0].text is a JSON string of
++//   { results: [{ url, title, snippet }] }.
++//
++// Registration is opt-in (DEFAULT_ENABLED does not contain this id).
++
++import { mcpCall } from "../util/mcp-client.js";
++import { WebError } from "@deepseek-ai/dsh-web";
++
++const TINYFISH_ENDPOINT = "https://agent.tinyfish.ai/mcp";
++const TINYFISH_TOOL = "search";
++
++export const tinyfishBackend = {
++  id: "tinyfish",
++  requiresCredential: false,
++
++  available() {
++    // Keyless mode needs no credential.
++    return true;
++  },
++
++  async search(request, signal, options, hooks = {}) {
++    const args = { query: request.query };
++    // resolveOptions() supplies an async resolveApiKey() closure. A literal
++    // apiKey is accepted for stubs; a failed resolution degrades to keyless.
++    let apiKey = typeof options?.apiKey === "string" ? options.apiKey : "";
++    if (!apiKey && typeof options?.resolveApiKey === "function") {
++      try { apiKey = (await options.resolveApiKey()) ?? ""; } catch { apiKey = ""; }
++    }
++    const keyed = apiKey.length > 0;
++
++    const extraHeaders = keyed
++      ? { "X-API-Key": apiKey }
++      : { "X-TinyFish-Access-Mode": "keyless" };
++    // Use the configured baseURL so the provider trust gate and sidecar path apply.
++    const endpoint = typeof options?.baseURL === "string" && options.baseURL.length > 0
++      ? options.baseURL : TINYFISH_ENDPOINT;
++
++    // Never record the key itself.
++    hooks.recordRequest?.({
++      endpoint,
++      toolName: TINYFISH_TOOL,
++      body: args,
++      headers: {},
++    });
++
++    let result;
++    try {
++      result = await mcpCall(
++        endpoint,
++        TINYFISH_TOOL,
++        args,
++        extraHeaders,
++        signal,
++        // Keyless is stateless: skip initialize. Keyed uses the full
++        // handshake and a fresh session so a rotated key cannot reuse the
++        // Mcp-Session-Id cached for the previous credential.
++        { skipInitialize: !keyed, forceFreshSession: keyed },
++      );
++    } catch (err) {
++      if (err instanceof WebError) throw err;
++      throw new WebError(
++        `tinyfish search failed: ${String(err?.message ?? err)}`,
++        "WEB_PROVIDER_ERROR",
++        { cause: err },
++      );
++    }
++
++    if (result?.isError === true) {
++      const message = String(result.content?.[0]?.text ?? "unknown");
++      hooks.recordOutcome?.({ status: "error", message });
++      throw new WebError(`tinyfish returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
++    }
++
++    const sources = parseTinyfishResult(result, request.maxResults ?? 8);
++    hooks.recordOutcome?.({ status: "ok", count: sources.length });
++    return { sources, content: undefined, truncated: false };
++  },
++};
++
++/** Parse the JSON string embedded in content[0].text into DSH sources. */
++export function parseTinyfishResult(result, maxResults) {
++  const text = result?.content?.[0]?.text;
++  if (typeof text !== "string" || text.length === 0) return [];
++  let parsed;
++  try {
++    parsed = JSON.parse(text);
++  } catch {
++    return [];
++  }
++  if (!Array.isArray(parsed?.results)) return [];
++  const sources = [];
++  for (const item of parsed.results) {
++    if (typeof item?.url !== "string" || item.url.length === 0) continue;
++    const source = { url: item.url };
++    if (typeof item.title === "string" && item.title.length > 0) source.title = item.title;
++    if (typeof item.snippet === "string" && item.snippet.length > 0) source.snippet = item.snippet;
++    sources.push(source);
++    if (sources.length >= maxResults) break;
++  }
++  return sources;
++}
++
++export default tinyfishBackend;
+--- a/tests/lead-20261106.test.js
++++ b/tests/lead-20261106.test.js
+@@ -0,0 +1,227 @@
++// tests/lead-20261106.test.js — regression tests for the lead-owned fixes.
++// Run: node --test tests/lead-20261106.test.js
++//
++// NOTE ON DEPENDENCIES: the backends import `@deepseek-ai/dsh-web` (WebError).
++// At runtime DSH host injects that package; a bare `node --test` from the
++// installed npm package cannot resolve it (true for all 11 original backends,
++// not just these two). Run this file from `.artifacts/websearch-research/
++// src-work/plugin/`, where `node_modules/@deepseek-ai/*` are symlinks to the
++// published CLI copies used only for testing. The installed `lib/` stays
++// pristine — see the byte-identical check in the execution log.
++//
++// Added 2026-11-06 by dsh-websearch / lead. Pure fixtures only: NO live
++// network, NO API keys. These cover:
++//   1. the two new OpenCode v2 keyless MCP backends (parse functions);
++//   2. the CONNECT-tunnel Host restoration (via source inspection, since
++//      httpsViaConnect is module-private and needs a real proxy socket).
++//      Offline A/B run on 2026-11-06 with a local CONNECT proxy + TLS server:
++//        patched  -> Host "localhost:<port>" (explicit target.host)
++//        original -> Host "localhost"       (Node auto-synthesis, no port)
++//      Both carry a Host header; the fix makes it explicit/port-qualified.
++//
++// Companion evidence:
++//   .artifacts/websearch-research/22-execution-drafts.md §1.2 (live A/B:
++//   WITHOUT Host: 403 / WITH Host: 200) and §3.2 (fixture draft).
++
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { readFileSync } from "node:fs";
++
++import { parseFirecrawlResult } from "../lib/backends/firecrawl.js";
++import { parseTinyfishResult } from "../lib/backends/tinyfish.js";
++
++const HERE = new URL(".", import.meta.url);
++
++test("parseFirecrawlResult: {success,data.web[]} JSON text → sources", () => {
++  const inner = JSON.stringify({
++    success: true,
++    data: {
++      web: [
++        { url: "https://a.example", title: "A", description: "desc A" },
++        { url: "https://b.example", title: null, description: null },
++      ],
++    },
++  });
++  const got = parseFirecrawlResult({ content: [{ text: inner }] }, 8);
++  assert.equal(got.length, 2);
++  assert.equal(got[0].url, "https://a.example");
++  assert.equal(got[0].title, "A");
++  assert.equal(got[0].snippet, "desc A");
++  assert.equal(got[1].url, "https://b.example");
++  assert.equal(got[1].title, undefined);
++  assert.equal(got[1].snippet, undefined);
++});
++
++test("parseFirecrawlResult: success:false / bad JSON / missing web → []", () => {
++  assert.deepEqual(parseFirecrawlResult({ content: [{ text: "not json" }] }, 8), []);
++  assert.deepEqual(parseFirecrawlResult({ content: [{ text: '{"success":false}' }] }, 8), []);
++  assert.deepEqual(parseFirecrawlResult({ content: [{ text: '{"data":{}}' }] }, 8), []);
++  assert.deepEqual(parseFirecrawlResult({ content: [] }, 8), []);
++});
++
++test("parseFirecrawlResult: honours maxResults and skips url-less rows", () => {
++  const inner = JSON.stringify({
++    success: true,
++    data: { web: [
++      { url: "https://1.example" },
++      { title: "no url" },
++      { url: "https://2.example" },
++      { url: "https://3.example" },
++    ] },
++  });
++  const got = parseFirecrawlResult({ content: [{ text: inner }] }, 2);
++  assert.deepEqual(got.map((s) => s.url), ["https://1.example", "https://2.example"]);
++});
++
++test("parseTinyfishResult: {results[]} JSON text → sources", () => {
++  const inner = JSON.stringify({
++    results: [
++      { url: "https://t1.example", title: "T1", snippet: "snip 1" },
++      { url: "https://t2.example", title: "T2", snippet: "" },
++    ],
++  });
++  const got = parseTinyfishResult({ content: [{ text: inner }] }, 8);
++  assert.equal(got.length, 2);
++  assert.equal(got[0].url, "https://t1.example");
++  assert.equal(got[0].snippet, "snip 1");
++  assert.equal(got[1].snippet, undefined);
++});
++
++test("parseTinyfishResult: bad JSON / missing results → []", () => {
++  assert.deepEqual(parseTinyfishResult({ content: [{ text: "oops" }] }, 8), []);
++  assert.deepEqual(parseTinyfishResult({ content: [{ text: "{}" }] }, 8), []);
++  assert.deepEqual(parseTinyfishResult(undefined, 8), []);
++});
++
++test("egress-fetch: httpsViaConnect restores Host after normalizeHeaders strips it", () => {
++  // Source-level regression: normalizeHeaders() must keep `delete host`, and
++  // BOTH proxy transports must add it back with the same expression. This
++  // pins the fix without requiring a live CONNECT socket (covered by the
++  // manual A/B in 22-execution-drafts.md §1.2).
++  const src = readFileSync(new URL("../lib/util/egress-fetch.js", HERE), "utf8");
++  assert.match(src, /delete headers\["host"\]/);
++  // Count only real code lines (the lead comment quotes the same expression).
++  const restorations = src
++    .split("\n")
++    .filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//"))
++    .filter((line) => line.includes("headers.host ?? target.host"));
++  assert.equal(restorations.length, 2, "httpViaProxy and httpsViaConnect must both restore Host");
++});
++
++test("mcp-client: skipInitialize option keeps the default handshake", () => {
++  const src = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
++  assert.match(src, /options\.skipInitialize \? undefined : await ensureSession/);
++  assert.match(src, /export async function mcpCall\([^)]*options = \{\}/);
++});
++
++// lead (2026-11-06 UX polish): the Settings panel is a bundled client module,
++// so assert its grouping/labels statically rather than rendering React.
++test("client.js UX: metered backends are separate, labelled and i18n-complete", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++
++  // 1. Two metered entries, marked and NOT counted as plain keyless.
++  assert.match(src, /metered: true, label: "Firecrawl/);
++  assert.match(src, /metered: true, label: "TinyFish/);
++  assert.match(src, /const METERED = BACKENDS\.filter\(\(b\) => b\.metered\)/);
++  assert.match(src, /const KEYLESS = BACKENDS\.filter\(\(b\) => \(!b\.keyEnv \|\| b\.optionalKey\) && !b\.metered\)/);
++
++  // 2. Description no longer hardcodes the stale "11 backends".
++  assert.doesNotMatch(src, /11 个后端/);
++  assert.doesNotMatch(src, /11 backends/);
++
++  // 3. Every newly added copy key is defined in BOTH dictionaries and used.
++  for (const key of ["groupMetered", "meteredHint", "statusMetered", "statusOffByDefault"]) {
++    const defs = (src.match(new RegExp(`^\\s*${key}:`, "gm")) ?? []).length;
++    assert.equal(defs, 2, `${key} must be defined in zh and en`);
++    assert.ok(src.includes(`t("${key}")`), `${key} must be referenced via props.t`);
++  }
++
++  // 4. Status bar explains why enabled/total is intentionally low.
++  assert.match(src, /statusMetered/);
++  // 5. Fallback hint does not imply metered backends auto-enable.
++  assert.match(src, /计量型仍保持关闭/);
++  assert.match(src, /metered backends stay off/);
++});
++
++// lead (2026-11-06 UX round 2): a key-gated backend's switch and its API-key
++// input must be ONE card, and failing key saves must actually be visible.
++test("client.js UX: key switch merged with key input; failedKeys bug fixed", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++
++  // 1. Combined card exists and is used for the KEYED group.
++  assert.match(src, /function KeyedBackendCard\(props\)/);
++  assert.match(src, /children: KEYED\.map\(\(b\) =>\s*react_jsx_runtime\.jsx\(KeyedBackendCard/);
++  assert.match(src, /onEditKey: \(ref, text\) => card\.editKey\(ref, text\)/);
++
++  // 2. The old separate "API keys" grid is gone (no duplicate inputs).
++  assert.doesNotMatch(src, /children: props\.t\("keysTitle"\)/);
++  // 3. The old `.includes(b.keyEnv)` bug (failedKeys is [{ref,reason}]) is gone.
++  assert.doesNotMatch(src, /state\.failedKeys\.includes\(b\.keyEnv\)/);
++  // Both key sections now resolve failures by ref.
++  const finds = (src.match(/\(state\.failedKeys \?\? \[\]\)\.find\(\(f\) => f && f\.ref === b\.keyEnv\)/g) ?? []).length;
++  assert.equal(finds, 2, "KeyedBackendCard and OPTIONAL_KEYS must both resolve failures by ref");
++
++  // 4. The immediate-switch / staged-key distinction is explained in both locales.
++  const defs = (src.match(/^\s*keySaveModeHint:/gm) ?? []).length;
++  assert.equal(defs, 2);
++  assert.equal((src.match(/t\("keySaveModeHint"\)/g) ?? []).length, 2);
++
++  // 5. Dead copy keys removed (they were only defined, never rendered).
++  for (const dead of ["keysTitle", "keyHint"]) {
++    assert.equal((src.match(new RegExp(`^\\s*${dead}:`, "gm")) ?? []).length, 0, `${dead} should not linger`);
++  }
++});
++
++// lead-fix (2026-11-06): github.com/240xu/dsh-websearch/issues/8 — on DSH
++// 0.2.x, `ctx.remote.credentials` throws unless `remote.credentials` is in
++// `inject`, so EVERY key save failed and the configured badge never lit; also
++// `set()` resolves with `{ok:false}` instead of throwing, causing false
++// "Saved" feedback. Pin all three fixes statically (bundled client module).
++test("client.js issue #8: credential save path is actually usable on DSH 0.2.x", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++
++  // 1. Namespace declared in inject (matches the official settings-models plugin).
++  assert.ok(
++    src.includes('const inject = ["slots", "locale", "connection", "remote", "remote.credentials"];'),
++    "inject must declare remote.credentials (issue #8 root cause)",
++  );
++
++  // 2. Both read and write guard the property access (no naked throw).
++  const guards = (src.match(/try \{ api = this\.remote === undefined \? undefined : this\.remote\.credentials; \} catch \{ api = undefined; \}/g) ?? []).length;
++  assert.equal(guards, 2, "readCredential and writeCredential must both guard the access");
++  assert.doesNotMatch(src, /if \(this\.remote !== undefined && this\.remote\.credentials !== undefined/);
++
++  // 3. `set()` envelope is checked, so a rejected write is not shown as saved.
++  assert.match(src, /res\.ok === false/);
++  assert.match(src, /throw new Error\(res\.error\?\.message \?\? "credential write rejected"\)/);
++
++  // 4. package.json dsh.client.inject is a PACKAGE-level list; adding the
++  //    service key there would be wrong. Assert we did not.
++  const pkg = JSON.parse(readFileSync(new URL("../package.json", HERE), "utf8"));
++  const pkgInject = pkg?.dsh?.client?.inject ?? [];
++  assert.ok(!pkgInject.includes("remote.credentials"));
++
++  // 5. lead-fix (2026-11-07, review 33): readCredential must judge the
++  //    RemoteResult envelope before unwrapping. Otherwise `{ok:false}` falls
++  //    through to the legacy connection branch and can surface a stale value.
++  assert.match(src, /let readFailed = false;/);
++  assert.match(src, /if \(res !== null && typeof res === "object" && res\.ok === false\) \{\s*readFailed = true;/);
++  assert.match(src, /if \(!readFailed && view === undefined && this\.connection/);
++  assert.match(src, /if \(!readFailed && view !== undefined\)/);
++});
++
++// The real writeCredential lives inside the bundled client module. Pin the
++// production check at source level (no mirrored copy of the logic here) and
++// exercise the real shared error factory behaviourally.
++test("issue #8: ok:false envelope is rejected, not reported as saved", async () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /res\.ok === false/);
++  assert.match(src, /throw new Error\(res\.error\?\.message \?\? "credential write rejected"\)/);
++  const { webErrorFromResponse } = await import("../lib/util/web-error.js");
++  const { rateLimited } = await import("../lib/util/failure-label.js");
++  const err = webErrorFromResponse(new Response("rate limited", { status: 429 }), "rate limited", "Exa");
++  // A rate-limited response is classified from its structured code, not by
++  // re-parsing a copied message string.
++  assert.equal(rateLimited(err), true);
++  assert.equal(err.code, "RATE_LIMIT");
++});
+--- a/tests/lead-20261107.test.js
++++ b/tests/lead-20261107.test.js
+@@ -0,0 +1,116 @@
++// tests/lead-20261107.test.js — regression for the "saving a setting does
++// nothing" bug (upstream PR #7) + the RFC1918 baseURL trust gate.
++// Run: node --test tests/lead-20261107.test.js
++//
++// Added 2026-11-07 by lead. Pure fixtures: fake Context, fake settings
++// service, fake fetch. No live network, no credentials, no DSH runtime.
++//
++// Background: on DSH 0.2.x `apply(ctx, config)` receives only schema defaults;
++// the live values live in the settings service's effective config. The old
++// `current = () => config` never read them, so a toggle saved from the UI was
++// a no-op. This pins the fix from PR #7 that we applied locally.
++
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { mkdtempSync, readFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++
++const HERE = new URL(".", import.meta.url);
++
++test("apply() resolves live settings-service values, not stale initial config", async () => {
++  process.env.DSH_HOME = mkdtempSync(join(tmpdir(), "lead-settings-"));
++  // egressFetch() honours proxy env; clear it so the fake fetch is what the
++  // provider actually calls (otherwise the request goes to the proxy).
++  const savedProxy = {};
++  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"]) {
++    savedProxy[k] = process.env[k]; delete process.env[k];
++  }
++
++  const { apply } = await import("../lib/index.js");
++  const seen = [];
++  const realFetch = globalThis.fetch;
++  globalThis.fetch = async (url) => {
++    seen.push(String(url));
++    return new Response(JSON.stringify({ results: [] }), {
++      status: 200, headers: { "content-type": "application/json" },
++    });
++  };
++
++  // The settings service holds a private searxng instance + safeSearch=false.
++  const settings = {
++    describe: () => [{ ns: "unified-search", value: { searxngBaseURL: "http://192.168.1.100:8385", safeSearch: false, enableSearxng: true }, base: {}, user: {} }],
++    mutate: async () => {},
++  };
++  let provider;
++  const ctx = {
++    get: () => undefined,
++    inject: (deps, cb) => { if (deps.includes("settings")) cb({ settings }); },
++    logger: { info() {}, warn() {}, debug() {}, error() {} },
++    web: { registerSearchProvider: (p) => { provider = p; } },
++  };
++
++  try {
++    // Empty config mimics what a DSH 0.2.x entry actually hands to apply().
++    apply(ctx, {});
++    assert.ok(provider, "provider must register");
++    await provider.search({ query: "settings bridge", maxResults: 1 }, new AbortController().signal).catch(() => {});
++    const hits = seen.filter((u) => u.startsWith("http://192.168.1.100:8385"));
++    assert.equal(hits.length, 1, `searxng must use the settings-service baseURL, got ${JSON.stringify(seen)}`);
++    assert.ok(!hits[0].includes("searx.be"), "must not fall back to the public instance");
++    assert.ok(hits[0].includes("safesearch=0"), "safeSearch=false from the settings service must apply");
++  } finally {
++    globalThis.fetch = realFetch;
++    for (const [k, v] of Object.entries(savedProxy)) {
++      if (v === undefined) delete process.env[k]; else process.env[k] = v;
++    }
++  }
++});
++
++// The regex lives inline in provider.js; extract it from the source instead
++// of re-typing it here (a hard-coded copy would make this test tautological).
++test("RFC1918 plain-http baseURL trust gate: regex extracted from provider.js", () => {
++  const src = readFileSync(new URL("../lib/provider.js", HERE), "utf8");
++  const m = src.match(/const privHost = bu \? (\/.*?\/)\.test\(bu\.hostname\)/);
++  assert.ok(m, "privHost regex must be present in provider.js");
++  const re = new RegExp(m[1].slice(1, -1));
++  for (const host of ["localhost", "127.0.0.1", "10.1.2.3", "192.168.1.100", "192.168.0.105", "172.16.5.4", "172.31.255.254"]) {
++    assert.equal(re.test(host), true, `${host} must be recognised as private`);
++  }
++  for (const host of ["8.8.8.8", "192.169.1.1", "172.32.0.1", "example.com", "searx.be", "192.168.1.1.evil.com"]) {
++    assert.equal(re.test(host), false, `${host} must NOT be treated as private`);
++  }
++});
++
++test("current() and the HTTP bridge share findPluginRow; no cross-namespace hijack", async () => {
++  const { findPluginRow } = await import("../lib/util/namespace.js");
++  const src = readFileSync(new URL("../lib/index.js", HERE), "utf8");
++  const api = readFileSync(new URL("../lib/settings-api.js", HERE), "utf8");
++  assert.match(src, /findPluginRow\(settings\.describe\(\)\)/);
++  assert.match(api, /return findPluginRow\(descriptors\)/);
++
++  const pluginRow = { ns: "dsh-websearch", value: { searxngBaseURL: "X", numResults: 8 } };
++  const otherRow = { ns: "OTHER-PLUGIN", value: { numResults: 4, backendTimeoutMs: 1000 } };
++  // A third-party row that appears FIRST must not be selected.
++  assert.equal(findPluginRow([otherRow, pluginRow]), pluginRow);
++  // Exact legacy id still works when the profile id is absent.
++  assert.equal(findPluginRow([{ ns: "unified-search", value: {} }]).ns, "unified-search");
++  // Shape fallback needs >= 2 plugin-specific fields, so a generic row is rejected.
++  assert.equal(findPluginRow([otherRow]), undefined);
++  assert.equal(findPluginRow("not-an-array"), undefined);
++});
++
++// Result-affecting settings must be part of the cache key; otherwise a
++// settings change is masked by a hit within the 900s TTL.
++test("cacheKeyFor: result-affecting settings produce distinct keys", async () => {
++  const { cacheKeyFor } = await import("../lib/cache.js");
++  const base = { query: "q", filters: {}, maxResults: 8, backends: ["exa"], mode: "x" };
++  const a = cacheKeyFor({ ...base, resultOptions: { safeSearch: true, rerank: false, dedupStrategy: "url", searxngBaseURL: "https://a" } });
++  const b = cacheKeyFor({ ...base, resultOptions: { safeSearch: false, rerank: true, dedupStrategy: "url+title", searxngBaseURL: "https://b" } });
++  assert.notEqual(a, b, "different settings must not share a cache key");
++  const c = cacheKeyFor({ ...base, resultOptions: { safeSearch: true, rerank: false, dedupStrategy: "url", searxngBaseURL: "https://a" } });
++  assert.equal(a, c, "identical settings must be stable");
++  // Functions / resolvers are excluded, so passing live opts cannot poison the key.
++  const d = cacheKeyFor({ ...base, resultOptions: { safeSearch: true, rerank: false, dedupStrategy: "url", searxngBaseURL: "https://a", resolveApiKey: () => {} } });
++  assert.equal(a, d);
++});
+--- a/tests/lead-20261107-p0.test.js
++++ b/tests/lead-20261107-p0.test.js
+@@ -0,0 +1,112 @@
++// tests/lead-20261107-p0.test.js — behavioural regression for review 31-b P0.
++// Run: node --test tests/lead-20261107-p0.test.js
++//
++// P0 (independently found by TWO adversarial reviewers, 31 / 31-b):
++//   firecrawl.js / tinyfish.js only read `options.apiKey` (a literal), but
++//   resolveOptions() supplies an async `resolveApiKey()` closure instead. The
++//   optional API key therefore NEVER reached either backend; TinyFish's keyed
++//   branch (X-API-Key + full initialize/Mcp-Session-Id handshake) was
++//   unreachable dead code, and Firecrawl could not raise its keyless quota.
++// P1: both `*BaseURL` config fields were registered but never consumed —
++//   the two backends hardcoded their endpoints, bypassing provider.js's
++//   baseURL trust gate and the sidecar/proxy path.
++//
++// This test drives the REAL backends with a fake global fetch (proxy env
++// cleared so egressFetch() takes the direct-fetch path), and asserts the
++// outgoing request headers/URLs. No live network, no real credentials.
++
++import { test } from "node:test";
++import assert from "node:assert/strict";
++
++const HERE = new URL(".", import.meta.url);
++
++async function withFakeFetch(fn) {
++  const saved = {};
++  for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"]) {
++    saved[k] = process.env[k]; delete process.env[k];
++  }
++  const real = globalThis.fetch;
++  const calls = [];
++  globalThis.fetch = async (url, init) => {
++    calls.push({ url: String(url), headers: init?.headers ?? {} });
++    // Minimal MCP tools/call envelope with an embedded JSON result string.
++    const inner = JSON.stringify({ results: [{ url: "https://x.test", title: "X", snippet: "s" }] });
++    return new Response(
++      JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: inner }] } }),
++      { status: 200, headers: { "content-type": "application/json" } },
++    );
++  };
++  try { return await fn(calls); }
++  finally {
++    globalThis.fetch = real;
++    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
++  }
++}
++
++const hooks = { recordRequest: () => {}, recordOutcome: () => {} };
++
++test("P0: firecrawl consumes resolveApiKey() and honours baseURL", async () => {
++  const { firecrawlBackend } = await import("../lib/backends/firecrawl.js");
++  await withFakeFetch(async (calls) => {
++    await firecrawlBackend.search(
++      { query: "q", maxResults: 2 },
++      undefined,
++      { resolveApiKey: async () => "FC-TEST-KEY", baseURL: "https://fc.test/mcp" },
++      hooks,
++    );
++    const fc = calls.filter((c) => c.url.includes("fc.test"));
++    assert.ok(fc.length > 0, "must call the configured baseURL, not the hardcoded endpoint");
++    assert.ok(fc.every((c) => !c.url.includes("mcp.firecrawl.dev")), "hardcoded endpoint must be gone");
++    assert.ok(fc.some((c) => c.headers.Authorization === "Bearer FC-TEST-KEY"),
++      "resolveApiKey() value must become the Bearer header (P0)");
++  });
++});
++
++test("P0: tinyfish keyed branch becomes reachable (X-API-Key, no keyless header)", async () => {
++  const { tinyfishBackend } = await import("../lib/backends/tinyfish.js");
++  await withFakeFetch(async (calls) => {
++    await tinyfishBackend.search(
++      { query: "q", maxResults: 2 },
++      undefined,
++      { resolveApiKey: async () => "TF-TEST-KEY", baseURL: "https://tf.test/mcp" },
++      hooks,
++    );
++    const tf = calls.filter((c) => c.url.includes("tf.test"));
++    assert.ok(tf.length > 0, "must call the configured baseURL");
++    assert.ok(tf.some((c) => c.headers["X-API-Key"] === "TF-TEST-KEY"),
++      "resolveApiKey() value must become X-API-Key (keyed branch reachable)");
++    assert.ok(tf.every((c) => c.headers["X-TinyFish-Access-Mode"] === undefined),
++      "keyed requests must NOT send the keyless header");
++  });
++});
++
++test("keyless fallback still works when no key resolves", async () => {
++  const { tinyfishBackend } = await import("../lib/backends/tinyfish.js");
++  await withFakeFetch(async (calls) => {
++    await tinyfishBackend.search(
++      { query: "q", maxResults: 2 },
++      undefined,
++      { resolveApiKey: async () => undefined, baseURL: "https://tf2.test/mcp" },
++      hooks,
++    );
++    const tf = calls.filter((c) => c.url.includes("tf2.test"));
++    assert.ok(tf.some((c) => c.headers["X-TinyFish-Access-Mode"] === "keyless"),
++      "missing key must degrade to keyless");
++    assert.ok(tf.every((c) => c.headers["X-API-Key"] === undefined));
++  });
++});
++
++test("source-level: both backends read resolveApiKey and honour baseURL", async () => {
++  const { readFileSync } = await import("node:fs");
++  for (const f of ["firecrawl.js", "tinyfish.js"]) {
++    const src = readFileSync(new URL(`../lib/backends/${f}`, HERE), "utf8");
++    assert.match(src, /await options\.resolveApiKey\(\)/, `${f} must await resolveApiKey()`);
++    assert.match(src, /options\.baseURL/, `${f} must honour baseURL`);
++    assert.doesNotMatch(src, /const apiKey = typeof options\?\.apiKey === "string" \? options\.apiKey : "";\s*\n\s*const (extraHeaders|keyed)/,
++      `${f} must not stop at the literal apiKey`);
++  }
++  const idx = readFileSync(new URL("../lib/index.js", HERE), "utf8");
++  assert.match(idx, /findPluginRow\(settings\.describe\(\)\)/, "current() must use the shared namespace resolver");
++  const ns = readFileSync(new URL("../lib/util/namespace.js", HERE), "utf8");
++  assert.match(ns, /const PROFILE_ID = "dsh-websearch";/, "shared resolver must declare the live profile id");
++});
+--- a/tests/lead-20261108-interaction.test.js
++++ b/tests/lead-20261108-interaction.test.js
+@@ -0,0 +1,184 @@
++// tests/lead-20261108-interaction.test.js — behaviour regressions for the
++// Bug 与官方化行为规范小组 (40-bug-interaction.md, task-19), applied by Lead.
++// Run: node --test tests/lead-20261108-interaction.test.js
++//
++// The bundled client.js is a window.__ModuleLoader__ factory. Load it in a
++// sandbox with stubbed react to reach the real controllers, then drive them
++// with fake hosts. No live network, no credentials, no DSH runtime.
++
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { readFileSync } from "node:fs";
++
++const HERE = new URL(".", import.meta.url);
++const read = (p) => readFileSync(new URL(p, HERE), "utf8");
++
++// The bundled client.js is a window.__ModuleLoader__ factory; these tests
++// assert the applied fixes at source level. Behaviour-level reproductions
++// (fake host, real controller instances) live in 40-bug-interaction.md §6.
++
++test("blank key draft is never staged, so the Save button drains", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /if \(String\(text\)\.trim\(\) === ""\) this\.stagedKeys\.delete\(envRef\)/);
++  // `doneKeys.push(ref)` already exists in client.js.orig, so asserting it is
++  // baseline-true. Pin the NEW cleanup guard instead (absent from the orig).
++  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
++});
++
++test("save() keeps edits that arrive during in-flight writes", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /const savedFieldRefs = new Map\(\)/);
++  assert.match(src, /if \(this\.staged\.get\(f\) === savedFieldRefs\.get\(f\)\) this\.staged\.delete\(f\)/);
++  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
++  assert.match(src, /&& this\.staged\.size === 0 && this\.stagedKeys\.size === 0\) this\.savedAt = Date\.now\(\)/);
++});
++
++test("credential failure reasons are redacted to a stable code", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /function safeFailureReason\(err\)/);
++  assert.match(src, /return \/\^\[a-z\]\[a-z0-9\/_-\]\{0,60\}\$\/i\.test\(code\) \? code : "write rejected";/);
++  assert.match(src, /this\.failedKeys\.set\(ref, safeFailureReason\(keyErr\)\)/);
++  // The old verbatim rendering must be gone.
++  assert.doesNotMatch(src, /String\(keyErr && keyErr\.message \? keyErr\.message : keyErr\)\.slice\(0, 140\)/);
++});
++
++test("concurrent writes are serialised; revision is read at queue turn", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /this\.writeQueue = Promise\.resolve\(\)/);
++  assert.match(src, /write\(ops\) \{\s*const run = \(\) => this\.writeNow\(ops\);/);
++  assert.match(src, /const result = this\.writeQueue\.then\(run, run\)/);
++  assert.match(src, /async writeNow\(ops\) \{\s*const expectedRevision = this\.store\.getSnapshot\(\)\.revision/);
++});
++
++test("a failed toggle resyncs with the host and does not log raw errors", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /if \(typeof this\.scope\.load === "function"\)/);
++  assert.match(src, /try \{ await this\.scope\.load\(\); \} catch/);
++  assert.match(src, /console\.warn\("websearch: toggle write failed", \{ conflict: this\.conflict \}\)/);
++  assert.doesNotMatch(src, /console\.warn\([^)]*err\.message/);
++});
++
++test("settings bridge and provider share one namespace resolver", () => {
++  const src = readFileSync(new URL("../lib/index.js", HERE), "utf8");
++  const api = readFileSync(new URL("../lib/settings-api.js", HERE), "utf8");
++  assert.match(src, /findPluginRow\(settings\.describe\(\)\)/);
++  assert.match(api, /return findPluginRow\(descriptors\)/);
++});
++
++test("cache key includes result-affecting options", () => {
++  const src = readFileSync(new URL("../lib/cache.js", HERE), "utf8");
++  assert.match(src, /resultOptions/);
++  assert.match(src, /o: shaped/);
++  const prov = readFileSync(new URL("../lib/provider.js", HERE), "utf8");
++  assert.match(prov, /cacheKeyFor\(\{[^}]*resultOptions/);
++});
++
++// M-3: a keyed TinyFish call must force a fresh MCP session; a keyless call
++// must remain byte-identical to the stateless path.
++test("M-3: keyed tinyfish forces a fresh session, keyless is unchanged", async () => {
++  const { readFileSync } = await import("node:fs");
++  const tf = readFileSync(new URL("../lib/backends/tinyfish.js", HERE), "utf8");
++  assert.match(tf, /\{ skipInitialize: !keyed, forceFreshSession: keyed \}/);
++  const mc = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
++  assert.match(mc, /async function ensureSession\(url, signal, options = \{\}\)/);
++  assert.match(mc, /!options\.forceFreshSession && cached/);
++  assert.match(mc, /forceFreshSession: options\.forceFreshSession === true/);
++  // The sessionId line prefix is a hard assertion anchor in lead-20261106.
++  assert.match(mc, /const sessionId = options\.skipInitialize \? undefined : await ensureSession\(/);
++});
++
++// M-1: stateless MCP endpoints take the single tools/call path. The
++// sessionful (tinyfish keyed) path keeps id 2 so initialize cannot share an id.
++test("M-1: exa/parallel/firecrawl skip initialize; sessionful keeps id 2", async () => {
++  const { readFileSync } = await import("node:fs");
++  for (const f of ["exa.js", "parallel.js", "firecrawl.js"]) {
++    const src = readFileSync(new URL(`../lib/backends/${f}`, HERE), "utf8");
++    assert.match(src, /skipInitialize: true/, `${f} must skip initialize`);
++  }
++  const mc = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
++  assert.match(mc, /id: options\.skipInitialize \? 1 : 2/);
++  // tinyfish keyless still skips; keyed still uses the handshake + fresh session.
++  const tf = readFileSync(new URL("../lib/backends/tinyfish.js", HERE), "utf8");
++  assert.match(tf, /\{ skipInitialize: !keyed, forceFreshSession: keyed \}/);
++});
++
++// readErrors: READ failures are tracked separately from SAVE failures, with
++// only a fixed code (no raw host message). The readFailed anchors stay intact.
++test("readErrors: fixed-code read failures, distinct from failedKeys", async () => {
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  assert.match(src, /this\.readErrors = new Map\(\)/);
++  assert.match(src, /readErrors: \[\.\.\.this\.readErrors\]/);
++  assert.match(src, /reason = "credential\/read-failed"/);
++  assert.match(src, /this\.readErrors\.set\(ref, safeFailureReason\(\{ code: reason \}\)\)/);
++  assert.match(src, /this\.readErrors\.delete\(ref\)/);
++  // No raw error text is stored.
++  assert.doesNotMatch(src, /readErrors\.set\(ref, String\(err/);
++  // The four readFailed anchors required by lead-20261106 remain.
++  for (const re of [/let readFailed = false;/, /readFailed = true;/, /if \(!readFailed && view === undefined && this\.connection/, /if \(!readFailed && view !== undefined\)/]) {
++    assert.match(src, re);
++  }
++});
++
++// R3: the ApiKeyEnv pattern must accept exactly what the official
++// credentialRef() accepts; an over-strict pattern silently rejects valid
++// user configuration (lowercase / underscore-leading refs are legal).
++test("ApiKeyEnv pattern matches the official credentialRef grammar", async () => {
++  const { credentialRef } = await import("@deepseek-ai/dsh-credentials");
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/index.js", HERE), "utf8");
++  assert.match(src, /pattern\(\/\^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$\/\)/);
++  for (const valid of ["TAVILY_API_KEY", "lower", "_private", "A"]) {
++    assert.doesNotThrow(() => credentialRef(valid), `${valid} must be a legal ref`);
++  }
++  for (const invalid of ["my.key", "a:b", "OPENAI-KEY", ""]) {
++    assert.throws(() => credentialRef(invalid), undefined, `${invalid} must be rejected`);
++  }
++});
++
++// R3 D2: the staged-entry snapshot must be taken BEFORE the awaited host
++// write. Taking it after would capture a concurrently typed edit and delete
++// it as if saved (silent data loss + false "Saved").
++test("save() snapshots staged entries before awaiting host writes", () => {
++  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
++  // Exactly one snapshot write per loop, and it uses the loop variable `staged`.
++  assert.equal((src.match(/savedFieldRefs\.set\(field, staged\)/g) ?? []).length, 1);
++  assert.equal((src.match(/savedKeyRefs\.set\(ref, staged\)/g) ?? []).length, 1);
++  // No snapshot may be recorded via a fresh map lookup after an await.
++  assert.doesNotMatch(src, /savedFieldRefs\.set\(field, this\.staged\.get/);
++  assert.doesNotMatch(src, /savedKeyRefs\.set\(ref, this\.stagedKeys\.get/);
++  // The field-loop snapshot must appear before the first scope.set/unset.
++  const snapshotAt = src.indexOf("savedFieldRefs.set(field, staged)");
++  const firstAwait = src.indexOf("await this.scope.", snapshotAt);
++  assert.ok(firstAwait > snapshotAt, "snapshot must precede the first awaited write");
++});
++
++// V3 D8: observability fields are additive and never expose credentials.
++test("health and history expose cooldown classification without dropping old keys", async () => {
++  const { buildHealthReport } = await import("../lib/health.js");
++  const { toBackendObservability } = await import("../lib/history.js");
++  const now = Date.now();
++  const hm = new Map([["exa", {
++    ok: false, at: now, ms: 5, error: "429", failCount: 1,
++    cooledUntil: now + 30_000, rateLimited: true, keylessRejected: false,
++  }]]);
++  const report = buildHealthReport({
++    resolveOptions: () => ({ enabledBackends: ["exa"], backends: { exa: { requiresKey: false } }, numResults: 3 }),
++    backends: { exa: {} },
++    getBackendHealth: () => hm,
++  });
++  const b = report.backends.find((x) => x.id === "exa");
++  assert.equal(report.requestedMaxResults, 3);
++  assert.equal(b.rateLimited, true);
++  assert.equal(b.keylessRejected, false);
++  assert.equal(typeof b.cooledUntilMs, "number");
++  // Existing consumers keep their keys.
++  for (const key of ["id", "enabled", "keyless", "optionalKey", "metered", "reachable", "lastOk", "lastError"]) {
++    assert.ok(Object.hasOwn(b, key), key);
++  }
++  const obs = toBackendObservability(hm, now)[0];
++  assert.equal(obs.rateLimited, true);
++  assert.equal(typeof obs.cooledUntilMs, "number");
++  assert.equal(obs.cooled, true);
++  assert.ok(!JSON.stringify(obs).includes("apiKey"));
++});
+--- a/tests/lead-20261108-quota.test.js
++++ b/tests/lead-20261108-quota.test.js
+@@ -0,0 +1,149 @@
++// tests/lead-20261108-quota.test.js — 429 3a: classify quota failures and
++// cool them immediately (internal behaviour only; no model-visible text).
++// Run: node --test tests/lead-20261108-quota.test.js
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { foldBreaker } from "../lib/breaker.js";
++import { rateLimited, retryAfterMsFrom } from "../lib/util/failure-label.js";
++import { webErrorFromResponse, RATE_LIMIT_CODE, QUOTA_CODE } from "../lib/util/web-error.js";
++
++test("rateLimited() routes on structured fields, with a narrow legacy fallback", () => {
++  assert.equal(rateLimited(new Error("MCP tools/call HTTP 429: too many requests")), true);
++  assert.equal(rateLimited({ message: "firecrawl returned an MCP error: Anonymous keyless access is unavailable" }), true);
++  assert.equal(rateLimited(new Error("额度不足")), true);
++  // Bare "quota" text is no longer trusted: HTTP 402/200/503 bodies used to
++  // produce false positives (57-audit-error-contract.md F-2).
++  assert.equal(rateLimited(new Error("quota exceeded")), false);
++  assert.equal(rateLimited({ message: "HTTP 200: anonymous user" }), false);
++  // Ordinary failures must NOT be classified as quota.
++  assert.equal(rateLimited(new Error("SearXNG: invalid JSON response")), false);
++  assert.equal(rateLimited(new Error("unified search aborted")), false);
++  assert.equal(rateLimited(new Error("fetch failed")), false);
++});
++
++test("retryAfterMsFrom() falls back to 60s when no header reaches WebError", () => {
++  assert.equal(retryAfterMsFrom(new Error("HTTP 429")), 60_000);
++  assert.equal(retryAfterMsFrom({ retryAfter: 12 }), 12_000);
++  assert.equal(retryAfterMsFrom({ cause: { response: { headers: { get: () => "5" } } } }), 5_000);
++});
++
++test("foldBreaker cools a quota failure immediately, non-quota still needs 3", () => {
++  const now = 1_000_000;
++  const cfg = { threshold: 3, cooldownMs: 60_000 };
++  // First 429: cooled right away (not after 3 failures).
++  const q1 = foldBreaker(undefined, false, now, cfg, { rateLimited: true, retryAfterMs: 30_000 });
++  assert.equal(q1.failCount, 1);
++  assert.equal(q1.cooledUntil, now + 30_000);
++  // Non-quota: first two failures do not open the breaker.
++  const n1 = foldBreaker(undefined, false, now, cfg);
++  const n2 = foldBreaker(n1, false, now + 1, cfg);
++  assert.equal(n1.cooledUntil, 0);
++  assert.equal(n2.cooledUntil, 0);
++  assert.equal(foldBreaker(n2, false, now + 2, cfg).cooledUntil, now + 2 + 60_000);
++  // Success clears state.
++  assert.deepEqual(foldBreaker(q1, true, now, cfg), { failCount: 0, cooledUntil: 0 });
++  // Default opts keep the old behaviour (zero regression for existing callers).
++  assert.equal(foldBreaker(undefined, false, now, cfg).cooledUntil, 0);
++});
++
++test("webErrorFromResponse preserves status, Retry-After and code", () => {
++  const response = new Response("rate limited", {
++    status: 429,
++    headers: { "retry-after": "7" },
++  });
++  const err = webErrorFromResponse(response, "rate limited", "Exa");
++  assert.equal(err.status, 429);
++  assert.equal(err.code, RATE_LIMIT_CODE);
++  assert.equal(err.rateLimited, true);
++  assert.equal(err.retryAfter, "7");
++  assert.equal(rateLimited(err), true);
++  assert.equal(retryAfterMsFrom(err), 7_000);
++  assert.equal(err instanceof Error, true);
++  assert.match(err.message, /HTTP 429/); // N-1: status is not lost to provider detail
++});
++
++test("webErrorFromResponse marks 402/403 as quota without a bare-text false positive", () => {
++  const err = webErrorFromResponse(new Response("quota", { status: 402 }), "quota", "Brave");
++  assert.equal(err.code, QUOTA_CODE);
++  assert.equal(err.quota, true);
++  assert.equal(rateLimited(err), true);
++});
++
++// 3b: the all-cooled branch must fail fast only when every cooled backend is
++// rate-limited; a mixed/non-quota cooldown keeps fail-open. Driven at source
++// level here (the fan-out needs a full provider harness); the branch shape is
++// pinned so it cannot silently regress to unconditional fail-open.
++test("3b: cooled rate-limited backends are excluded; keyless refusal is distinct", async () => {
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/provider.js", import.meta.url), "utf8");
++  // V3 runtime assessment D9/D2: the mixed-outage fix classifies cooled
++  // entries instead of requiring every cooldown to be rate-limited.
++  assert.match(src, /rateLimitedCooled\.set\(c\.id, entry\)/);
++  assert.match(src, /all backends are rate-limited; retry after/);
++  assert.match(src, /all backends need an API key \(keyless access is unavailable\)/);
++  // Behavioural coverage lives in lead-20261109-3b-runtime.test.js
++  // (real provider + fake backends), not in these source-shape assertions.
++  assert.match(src, /failOpen\.length > 0/);
++});
++
++test("breaker: an expired cooldown resets the failure streak", () => {
++  const cfg = { threshold: 3, cooldownMs: 60_000 };
++  const now = 1_000_000;
++  const opened = foldBreaker(undefined, false, now, cfg, { rateLimited: true, retryAfterMs: 1000 });
++  assert.equal(opened.failCount, 1);
++  // Same backend fails again AFTER the window expired: streak restarts at 1.
++  const later = now + 2000;
++  const after = foldBreaker(opened, false, later, cfg);
++  assert.equal(after.failCount, 1);
++  assert.equal(after.cooledUntil, 0);
++});
++
++test("numResults: host cap and user setting are both honoured by min()", async () => {
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/provider.js", import.meta.url), "utf8");
++  assert.match(src, /Math\.min\(hostCap, userMax\)/);
++  assert.match(src, /ddg: 8000/);
++  assert.match(src, /timed out after \$\{effectiveTimeoutMs\}ms/);
++});
++
++test("retryAfterMsFrom: an http-date in the past falls back, not to a zero window", () => {
++  // R1 复核 B-1: Date.parse succeeds on a past date but Math.max(0, ...) used
++  // to produce a 0ms cooldown, effectively disabling the breaker.
++  assert.equal(retryAfterMsFrom({ retryAfter: "Wed, 21 Oct 2015 07:28:00 GMT" }), 60_000);
++  // A genuinely future http-date still yields a positive window.
++  assert.ok(retryAfterMsFrom({ retryAfter: new Date(Date.now() + 30_000).toUTCString() }) > 0);
++});
++
++// R1: guard against a hostile/bogus Retry-After disabling a backend for years,
++// and ensure 403 (often an invalid key) is not classified as quota.
++test("retryAfterMsFrom caps oversized cooldowns; 403 is not quota", () => {
++  assert.equal(retryAfterMsFrom({ retryAfter: "999999999" }), 60_000);
++  assert.equal(retryAfterMsFrom({ retryAfter: "86400" }), 86_400_000); // exactly 1 day is allowed
++  const err403 = webErrorFromResponse(new Response("forbidden", { status: 403 }), "forbidden", "Brave");
++  assert.equal(err403.code, "WEB_PROVIDER_ERROR");
++  assert.equal(err403.quota, false);
++  assert.equal(rateLimited(err403), false);
++});
++
++test("ddg rethrows structured WebError from webErrorFromResponse", async () => {
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/backends/ddg.js", import.meta.url), "utf8");
++  assert.match(src, /if \(err instanceof WebError\) throw err;/);
++});
++
++// V3 D3: the cooldown annotation must be computed at the same instant as the
++// fan-out decision, otherwise a window that expires during a slow search is
++// rendered as a bare "⏸cooled" for an already-retryable backend.
++test("cooledAnnotation is evaluated at fan-out time, not render time", async () => {
++  const { cooledAnnotation } = await import("../lib/breaker.js");
++  const nowMs = 1_000_000;
++  const entry = { cooledUntil: nowMs + 24_000, failCount: 1 };
++  assert.equal(cooledAnnotation(entry, nowMs), "⏸cooled 24s");
++  // At render time (8s later) the window may be gone; the caller must not
++  // fall back to a bare annotation. Assert the render-time value is empty.
++  assert.equal(cooledAnnotation(entry, nowMs + 30_000), "");
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/provider.js", import.meta.url), "utf8");
++  assert.match(src, /cooledAnnotation\(centry, nowMs\)/);
++  assert.doesNotMatch(src, /cooledAnnotation\(centry, Date\.now\(\)\) \|\| "⏸cooled"/);
++});
+--- a/tests/lead-20261108-sse.test.js
++++ b/tests/lead-20261108-sse.test.js
+@@ -0,0 +1,94 @@
++// tests/lead-20261108-sse.test.js — behaviour regression for parseEnvelope's
++// SSE handling. The function is private, so it is extracted from the real
++// source (not re-implemented) and driven with real SSE payloads.
++// Run: node --test tests/lead-20261108-sse.test.js
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { readFileSync } from "node:fs";
++
++const HERE = new URL(".", import.meta.url);
++
++function loadParseEnvelope() {
++  const src = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
++  const start = src.indexOf("function parseEnvelope(text, expectedId) {");
++  const end = src.indexOf("\n}", start) + 2;
++  assert.ok(start > 0 && end > start, "parseEnvelope must exist in mcp-client.js");
++  const fnSrc = src.slice(start, end);
++  const WebError = class extends Error { constructor(m, c) { super(m); this.code = c; } };
++  return new Function("WebError", `${fnSrc}; return parseEnvelope;`)(WebError);
++}
++
++const parseEnvelope = loadParseEnvelope();
++const J = (o) => JSON.stringify(o);
++
++test("SSE: a notification frame before the response no longer breaks parsing", () => {
++  const sse = "event: message\ndata: " + J({ jsonrpc: "2.0", id: 99, method: "notifications/message", params: {} })
++    + "\n\ndata: " + J({ jsonrpc: "2.0", id: 2, result: { content: [] } }) + "\n\n";
++  const r = parseEnvelope(sse, 2);
++  assert.equal(r.id, 2);
++  assert.ok(r.result);
++});
++
++test("SSE: a frame with the wrong id is not returned", () => {
++  const sse = "data: " + J({ jsonrpc: "2.0", id: 7, result: { wrong: true } }) + "\n\n";
++  assert.throws(() => parseEnvelope(sse, 2), /failed to parse response envelope/);
++});
++
++test("SSE: multiple data lines of ONE event are still joined", () => {
++  const sse = "data: " + J({ jsonrpc: "2.0", id: 2 }).slice(0, -1)
++    + "\ndata: ,\"result\":{\"content\":[]}}\n\n";
++  const r = parseEnvelope(sse, 2);
++  assert.equal(r.id, 2);
++  assert.ok(r.result);
++});
++
++test("plain JSON and JSON-RPC batch still work", () => {
++  assert.equal(parseEnvelope(J({ jsonrpc: "2.0", id: 2, result: { ok: true } }), 2).result.ok, true);
++  const batch = J([
++    { jsonrpc: "2.0", id: 1, result: { a: 1 } },
++    { jsonrpc: "2.0", id: 2, result: { b: 2 } },
++  ]);
++  assert.equal(parseEnvelope(batch, 2).result.b, 2);
++});
++
++test("garbage still throws the typed error", () => {
++  assert.throws(() => parseEnvelope("not json", 2), /failed to parse response envelope/);
++});
++
++test("SSE: BOM, CRLF, data:[DONE], event lines and string ids", () => {
++  const bom = "\uFEFFdata: " + J({ jsonrpc: "2.0", id: 2, result: { ok: 1 } }) + "\n\n";
++  assert.equal(parseEnvelope(bom, 2).result.ok, 1);
++  const crlf = "data: " + J({ id: 99, method: "notif" }) + "\r\n\r\ndata: " + J({ id: 2, result: { ok: 2 } }) + "\r\n\r\n";
++  assert.equal(parseEnvelope(crlf, 2).result.ok, 2);
++  const done = "data: [DONE]\n\ndata: " + J({ id: 2, result: { ok: 3 } }) + "\n\n";
++  assert.equal(parseEnvelope(done, 2).result.ok, 3);
++  const evt = "event: message\ndata: " + J({ id: 2, result: { ok: 4 } }) + "\n\n";
++  assert.equal(parseEnvelope(evt, 2).result.ok, 4);
++  // A string id equal to the numeric expectedId is still accepted.
++  assert.equal(parseEnvelope(J({ id: "2", result: { ok: 5 } }), 2).result.ok, 5);
++  // A missing id is tolerated (JSON-RPC notification-style response).
++  assert.equal(parseEnvelope(J({ result: { ok: 6 } }), 2).result.ok, 6);
++});
++
++test("plain JSON keeps permissive id handling for stateless MCP endpoints", () => {
++  // Stateless endpoints may echo a different (or no) id; the plain-JSON path
++  // deliberately returns the parsed envelope, while the SSE path still picks
++  // the frame matching expectedId.
++  assert.equal(parseEnvelope(J({ id: 7, result: { ok: 1 } }), 2).result.ok, 1);
++  assert.equal(parseEnvelope(J({ id: "2", result: { ok: 2 } }), 2).result.ok, 2);
++  assert.equal(parseEnvelope(J({ result: { ok: 3 } }), 2).result.ok, 3);
++});
++
++// R2 P0-1: collect() must reject (not crash the process) when constructing a
++// Response throws inside the "end" event callback. Assert the guard exists
++// at source level; a full socket repro lives in 60-review-network.md.
++test("egress-fetch collect() guards Response construction", async () => {
++  const { readFileSync } = await import("node:fs");
++  const src = readFileSync(new URL("../lib/util/egress-fetch.js", import.meta.url), "utf8");
++  const start = src.indexOf("function collect(res)");
++  const end = src.indexOf("\nfunction headersFromRaw", start);
++  const body = src.slice(start, end);
++  assert.match(body, /res\.on\("end", \(\) => \{/);
++  assert.match(body, /try \{/);
++  assert.match(body, /catch \(err\) \{\s*reject\(err\);/);
++});
+--- a/tests/lead-20261109-3b-runtime.test.js
++++ b/tests/lead-20261109-3b-runtime.test.js
+@@ -0,0 +1,140 @@
++// tests/lead-20261109-3b-runtime.test.js — behaviour-level regression for the
++// 3b all-rate-limited fast-fail branch. Drives the REAL provider with fake
++// backends: after every backend is cooled by a 429, a second search must fail
++// immediately with the rate-limit hint and must NOT call any backend again.
++// Run: node --test tests/lead-20261109-3b-runtime.test.js
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { createUnifiedSearchProvider, getLatestBackendHealth } from "../lib/provider.js";
++import { BREAKER_DEFAULTS } from "../lib/breaker.js";
++
++function fakeBackend(id, calls) {
++  return {
++    id,
++    available: () => true,
++    async search() {
++      calls.push(id);
++      throw new Error("MCP tools/call HTTP 429: too many requests");
++    },
++  };
++}
++
++test("3b: a fully rate-limited fan-out fails fast without re-hitting backends", async () => {
++  const health = getLatestBackendHealth();
++  health.clear();
++  const calls = [];
++  const ids = ["exa", "parallel"];
++  const backends = Object.fromEntries(ids.map((id) => [id, fakeBackend(id, calls)]));
++  const resolveOptions = () => ({
++    enabledBackends: ids,
++    backends: Object.fromEntries(ids.map((id) => [id, { requiresKey: false }])),
++    numResults: 8,
++    filters: {},
++    safeSearch: true,
++    rerank: false,
++    dedupStrategy: "url",
++    cacheEnabled: false,
++    resultTelemetry: true,
++    breakerEnabled: true,
++    breakerThreshold: BREAKER_DEFAULTS.threshold,
++    breakerCooldownMs: BREAKER_DEFAULTS.cooldownMs,
++    multiQueryEnabled: false,
++    deepCoverage: false,
++    backendTimeoutMs: 30000,
++    language: "",
++    recency: "any",
++    resultHeader: true,
++    historyEnabled: false,
++  });
++  const provider = createUnifiedSearchProvider({
++    ctx: {}, resolveOptions, backends, cache: undefined, history: undefined,
++  });
++
++  // First call: both backends fail with 429 -> each is cooled immediately (3a).
++  await assert.rejects(
++    provider.search({ query: "first", maxResults: 8 }, new AbortController().signal),
++  );
++  assert.equal(calls.length, 2, "first search should fan out to both backends");
++  const allCooled = ids.every((id) => {
++    const e = health.get(id);
++    return e && e.rateLimited === true && e.cooledUntil > Date.now();
++  });
++  assert.equal(allCooled, true, "both backends must be recorded as rate-limited & cooled");
++
++  // Second call: all backends are cooled -> fast fail, zero new backend calls.
++  calls.length = 0;
++  await assert.rejects(
++    provider.search({ query: "second", maxResults: 8 }, new AbortController().signal),
++    (err) => /all backends are rate-limited; retry after/.test(String(err?.message)),
++  );
++  assert.equal(calls.length, 0, "fast-fail must not re-hit limited endpoints");
++  health.clear();
++});
++
++test("3b: a non-quota cooldown keeps the existing fail-open behaviour", async () => {
++  const health = getLatestBackendHealth();
++  health.clear();
++  const calls = [];
++  const id = "exa";
++  const now = Date.now();
++  // Pre-seed a cooled backend that is NOT rate-limited.
++  health.set(id, {
++    ok: false, at: now, ms: 1, error: "connection refused",
++    failCount: 3, cooledUntil: now + 60_000, rateLimited: false,
++  });
++  const resolveOptions = () => ({
++    enabledBackends: [id], backends: { [id]: { requiresKey: false } },
++    numResults: 8, filters: {}, safeSearch: true, rerank: false, dedupStrategy: "url",
++    cacheEnabled: false, resultTelemetry: true, breakerEnabled: true,
++    breakerThreshold: 3, breakerCooldownMs: 60_000,
++    multiQueryEnabled: false, deepCoverage: false, backendTimeoutMs: 30000,
++    language: "", recency: "any", resultHeader: true, historyEnabled: false,
++  });
++  const provider = createUnifiedSearchProvider({
++    ctx: {}, resolveOptions, backends: { [id]: fakeBackend(id, calls) },
++    cache: undefined, history: undefined,
++  });
++  // Non-quota cooldown must fail open (backend is called again), not fast-fail.
++  await provider.search({ query: "third", maxResults: 8 }, new AbortController().signal)
++    .catch(() => {});
++  assert.equal(calls.length, 1, "non-quota cooling must still fail open");
++  health.clear();
++});
++
++// V3 runtime assessment: mixed-outage fail-open must NOT re-hit a cooled
++// rate-limited endpoint. Drive the real provider with a fake backend set.
++test("mixed cooldown: rate-limited backend is excluded, non-quota one is retried", async () => {
++  const health = getLatestBackendHealth();
++  health.clear();
++  const calls = [];
++  const now = Date.now();
++  const mk = (id, msg) => ({ id, available: () => true, async search() { calls.push(id); throw new Error(msg); } });
++  const ids = ["limited", "ordinary"];
++  const backends = Object.fromEntries(ids.map((id) => [id, mk(id, "boom")]));
++  const resolveOptions = () => ({
++    enabledBackends: ids,
++    backends: Object.fromEntries(ids.map((id) => [id, { requiresKey: false }])),
++    numResults: 8, filters: {}, safeSearch: true, rerank: false, dedupStrategy: "url",
++    cacheEnabled: false, resultTelemetry: true, breakerEnabled: true,
++    breakerThreshold: 3, breakerCooldownMs: 60_000, multiQueryEnabled: false,
++    deepCoverage: false, backendTimeoutMs: 30000, language: "", recency: "any",
++    resultHeader: true, historyEnabled: false,
++  });
++  const provider = createUnifiedSearchProvider({ ctx: {}, resolveOptions, backends, cache: undefined, history: undefined });
++  // Pre-seed both as cooled; only `limited` is rate-limited.
++  health.set("limited", { ok: false, at: now, ms: 1, error: "429", failCount: 1, cooledUntil: now + 60_000, rateLimited: true });
++  health.set("ordinary", { ok: false, at: now, ms: 1, error: "refused", failCount: 3, cooledUntil: now + 60_000, rateLimited: false });
++  calls.length = 0;
++  await provider.search({ query: "mixed", maxResults: 8 }, new AbortController().signal).catch(() => {});
++  assert.equal(calls.includes("limited"), false, "cooled rate-limited backend must not be re-hit");
++  assert.equal(calls.includes("ordinary"), true, "non-quota outage keeps fail-open");
++  health.clear();
++});
++
++// A keyless permission refusal is not a retryable rate limit.
++test("keylessRejected distinguishes a missing key from a 429", async () => {
++  const { keylessRejected } = await import("../lib/util/failure-label.js");
++  assert.equal(keylessRejected(new Error("Anonymous keyless access is unavailable. Fix: Create an API key")), true);
++  assert.equal(keylessRejected(new Error("HTTP 429 too many requests")), false);
++  assert.equal(keylessRejected(new Error("connection refused")), false);
++});
+--- a/tests/settings-api.test.js
++++ b/tests/settings-api.test.js
+@@ -0,0 +1,215 @@
++// tests/settings-api.test.js — fenced settings bridge: op validation, batch bounds,
++// and optimistic-revision conflicts. Fixtures only: no live host, network, or credentials.
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { registerSettingsRoutes } from "../lib/settings-api.js";
++
++const DICT = {
++  numResults: (v) => { if (!Number.isInteger(v)) throw new Error("int"); return v; },
++  enableExa: (v) => Boolean(v),
++};
++const ROW = [{
++  ns: "dsh-websearch",
++  value: { numResults: 8, enableExa: true },
++  base: {}, user: {}, revision: 7, applies: "live",
++}];
++
++function harness({ mutate = async () => ({}), configDict = DICT } = {}) {
++  let handler;
++  const calls = [];
++  registerSettingsRoutes({ register: (r) => { handler = r.handler; } }, {
++    // trust.js:91-96 — an admit() returning no rejection lets the request through.
++    getConnection: () => ({ admit: () => ({}) }),
++    getSettings: () => ({
++      describe: () => ROW,
++      mutate: async (...args) => { calls.push(args); return mutate(...args); },
++    }),
++    getConfig: () => ({ dict: configDict }),
++  });
++
++  const req = (body, { contentType = "application/json" } = {}) => {
++    const listeners = {};
++    return {
++      method: "POST", url: "/api/unified-search/settings",
++      headers: { host: "127.0.0.1:3080", "content-type": contentType },
++      on(event, fn) { (listeners[event] ??= []).push(fn); return this; },
++      removeAllListeners(event) {
++        if (event) delete listeners[event];
++        else for (const key of Object.keys(listeners)) delete listeners[key];
++        return this;
++      },
++      emit() {
++        const chunk = Buffer.from(JSON.stringify(body));
++        for (const fn of listeners.data ?? []) fn(chunk);
++        for (const fn of listeners.end ?? []) fn();
++      },
++    };
++  };
++  const res = () => ({
++    writableEnded: false, code: 0, payload: null,
++    writeHead(code) { this.code = code; return this; },
++    setHeader() { return this; },
++    end(text) {
++      try { this.payload = JSON.parse(text); } catch { this.payload = text; }
++      this.writableEnded = true;
++      return this;
++    },
++  });
++  return { handler, calls, req, res };
++}
++
++async function call(h, body, opts) {
++  const rq = h.req(body, opts);
++  const rs = h.res();
++  h.handler(rq, rs);
++  // guarded() defers the handler by a microtask; readBody() attaches listeners there.
++  await new Promise(setImmediate);
++  rq.emit();
++  for (let i = 0; i < 50 && !rs.writableEnded; i++) await new Promise(setImmediate);
++  return rs;
++}
++
++// ① validateOp rejects: illegal op / path length / __proto__ bypass / missing value / type
++for (const [name, ops, expected] of [
++  ["bad op",           [{ op: "delete", path: ["enableExa"] }],          /unsupported op/],
++  ["path length 2",    [{ op: "set", path: ["a", "b"], value: 1 }],      /one-element/],
++  ["path non-string",  [{ op: "set", path: [1], value: 1 }],             /one-element/],
++  ["unknown field",    [{ op: "set", path: ["evil"], value: 1 }],        /unknown settings field/],
++  ["proto field",      [{ op: "set", path: ["__proto__"], value: 1 }],   /unknown settings field/],
++  ["missing value",    [{ op: "set", path: ["numResults"] }],            /requires a value/],
++  ["type mismatch",    [{ op: "set", path: ["numResults"], value: "x" }],/invalid value/],
++]) {
++  test(`validateOp rejects: ${name}`, async () => {
++    const h = harness();
++    const r = await call(h, { ops, expectedRevision: 7 });
++    assert.equal(r.code, 400);
++    assert.match(String(r.payload.error), expected);
++    assert.equal(h.calls.length, 0, "invalid ops must not reach mutate");
++  });
++}
++
++// ② MAX_OPS boundaries: 64 accepted, 65 and 0 rejected
++test("MAX_OPS: 64 ok, 65 rejected, 0 rejected", async () => {
++  const ok = Array.from({ length: 64 }, () => ({ op: "unset", path: ["enableExa"] }));
++  const h1 = harness();
++  const r1 = await call(h1, { ops: ok, expectedRevision: 7 });
++  assert.equal(r1.code, 200);
++  for (const n of [65, 0]) {
++    const h = harness();
++    const r = await call(h, {
++      ops: Array.from({ length: n }, () => ({ op: "unset", path: ["enableExa"] })),
++      expectedRevision: 7,
++    });
++    assert.equal(r.code, 400);
++    assert.match(r.payload.error, /at most 64|non-empty/);
++  }
++});
++
++// ③ concurrent writes with the same expectedRevision -> second gets 409
++test("expectedRevision conflict -> 409 SETTINGS_CONFLICT", async () => {
++  let n = 0;
++  const h = harness({
++    mutate: async () => {
++      if (++n > 1) throw Object.assign(new Error("changed"), { code: "SETTINGS_CONFLICT" });
++    },
++  });
++  const body = { ops: [{ op: "set", path: ["numResults"], value: 9 }], expectedRevision: 7 };
++  const r1 = await call(h, body);
++  const r2 = await call(h, body);
++  assert.equal(r1.code, 200);
++  assert.equal(r2.code, 409);
++  assert.equal(r2.payload.code, "SETTINGS_CONFLICT");
++});
++
++// ④ non-integer expectedRevision is not forwarded to mutate (settings-api.js:174)
++test("non-integer expectedRevision -> undefined passed to mutate", async () => {
++  const h = harness();
++  const r = await call(h, { ops: [{ op: "unset", path: ["enableExa"] }], expectedRevision: "7" });
++  assert.equal(r.code, 200);
++  assert.equal(h.calls[0][2], undefined);
++});
++
++// ⑤ non-conflict mutate failure -> 400 (not swallowed as success)
++test("non-conflict mutate error -> 400", async () => {
++  const h = harness({ mutate: async () => { throw new Error("disk full"); } });
++  const r = await call(h, { ops: [{ op: "unset", path: ["enableExa"] }], expectedRevision: 7 });
++  assert.equal(r.code, 400);
++  assert.match(r.payload.error, /disk full/);
++});
++
++// ⑥ a legal op reaches mutate with the schema-checked value and integer revision
++test("legal set reaches mutate with checked value", async () => {
++  const h = harness();
++  const r = await call(h, { ops: [{ op: "set", path: ["numResults"], value: 9 }], expectedRevision: 7 });
++  assert.equal(r.code, 200);
++  assert.deepEqual(h.calls[0][1], [{ op: "set", path: ["numResults"], value: 9 }]);
++  assert.equal(h.calls[0][2], 7);
++});
++
++// A registry's register() returns the disposer. Route registration must
++// hand those disposers back so the plugin's effect can unregister on reload.
++test("route registration returns disposers that remove every route", async () => {
++  const { registerSettingsRoutes } = await import("../lib/settings-api.js");
++  const { registerHealthRoute } = await import("../lib/health.js");
++  const { registerHistoryRoutes } = await import("../lib/history.js");
++  const routes = new Map();
++  const ws = { register(route) { routes.set(route.path, route); return () => routes.delete(route.path); } };
++  const noop = () => undefined;
++  const ds = [
++    ...registerSettingsRoutes(ws, { getSettings: () => null, getConfig: () => ({}), getConnection: noop }),
++    ...registerHealthRoute(ws, { resolveOptions: () => ({}), backends: {}, getBackendHealth: () => new Map(), getConnection: noop }),
++    ...registerHistoryRoutes(ws, { getStore: () => null, getBackendHealth: () => new Map(), getConnection: noop }),
++  ];
++  assert.equal(ds.length, 4, "one disposer per registered route");
++  assert.ok(routes.size === 4);
++  ds.forEach((d) => d());
++  assert.equal(routes.size, 0, "all routes must be removable");
++});
++
++// V3 D6: a stale revision must not be disguised as a field-validation error.
++// When the op is invalid AND the caller's revision is stale, report the
++// actionable concurrency conflict first.
++test("stale revision + invalid op reports SETTINGS_CONFLICT, not a field error", async () => {
++  const h = harness();
++  const rs = await call(h, {
++    ops: [{ op: "set", path: ["numResults"], value: 1.5 }],
++    expectedRevision: 0,
++  });
++  assert.equal(rs.code, 409);
++  assert.equal(rs.payload.code, "SETTINGS_CONFLICT");
++  assert.equal(h.calls.length, 0, "mutate must not run on a conflict");
++});
++
++test("current revision + invalid op still reports the field error", async () => {
++  const h = harness();
++  const rs = await call(h, {
++    ops: [{ op: "set", path: ["numResults"], value: 1.5 }],
++    expectedRevision: 7,
++  });
++  assert.equal(rs.code, 400);
++  assert.notEqual(rs.payload.code, "SETTINGS_CONFLICT");
++});
++
++// V3 D6 (complete): a stale revision is reported even when the op is valid.
++test("stale revision + valid op still reports SETTINGS_CONFLICT", async () => {
++  const h = harness();
++  const rs = await call(h, {
++    ops: [{ op: "set", path: ["numResults"], value: 7 }],
++    expectedRevision: 0,
++  });
++  assert.equal(rs.code, 409);
++  assert.equal(rs.payload.code, "SETTINGS_CONFLICT");
++  assert.equal(h.calls.length, 0);
++});
++
++// G2 P1: write() must stay in the guarded promise chain so a thrown error
++// produces a 500 response rather than an unhandled rejection with no reply.
++test("a write() failure is caught by guarded and returns a response", async () => {
++  const h = harness({ mutate: async () => { throw new Error("host broke"); } });
++  const rs = await call(h, {
++    ops: [{ op: "set", path: ["numResults"], value: 7 }],
++    expectedRevision: 7,
++  });
++  assert.ok(rs.writableEnded, "the client must receive a response");
++  assert.ok(rs.code >= 400);
++});

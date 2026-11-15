@@ -114,3 +114,43 @@ test("cacheKeyFor: result-affecting settings produce distinct keys", async () =>
   const d = cacheKeyFor({ ...base, resultOptions: { safeSearch: true, rerank: false, dedupStrategy: "url", searxngBaseURL: "https://a", resolveApiKey: () => {} } });
   assert.equal(a, d);
 });
+
+// 65 号 N2 / E1: per-backend settings live under opts.backends[id], not as
+// top-level opts keys. Drive the REAL provider with a real disk cache: two
+// identical queries with different backend settings must NOT share a key.
+test("N2: changing a backend's baseURL invalidates the cache", async () => {
+  const { createUnifiedSearchProvider } = await import("../lib/provider.js");
+  const { createSearchCache } = await import("../lib/cache.js");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const fs = await import("node:fs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-n2-"));
+  const cache = createSearchCache({ dir, ttlMs: 900_000, maxEntries: 10 });
+  let calls = 0;
+  const backend = {
+    available: () => true,
+    async search() {
+      calls++;
+      return [{ url: `https://example.com/${calls}`, title: "t", snippet: "s" }];
+    },
+  };
+  const mkOpts = (baseURL) => ({
+    enabledBackends: ["brave"],
+    backends: { brave: { requiresKey: false, baseURL, model: "m1", searchDepth: "basic", safeSearch: true } },
+    numResults: 8, filters: {}, safeSearch: true, rerank: false, dedupStrategy: "url",
+    cacheEnabled: true, resultTelemetry: false, breakerEnabled: false,
+    multiQueryEnabled: false, deepCoverage: false, backendTimeoutMs: 30000,
+    language: "", recency: "any", resultHeader: false, historyEnabled: false,
+  });
+  let opts = mkOpts("https://a.example");
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, resolveOptions: () => opts, backends: { brave: backend }, cache, history: undefined,
+  });
+  const req = { query: "same query", maxResults: 8 };
+  await provider.search(req, new AbortController().signal);
+  assert.equal(calls, 1);
+  opts = mkOpts("https://b.example");
+  await provider.search(req, new AbortController().signal);
+  assert.equal(calls, 2, "a changed backend setting must not be served from the old cache key");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
