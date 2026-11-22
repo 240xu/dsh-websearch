@@ -21,7 +21,10 @@ fi
 G="$HERE"
 OUT="$G/G5-authoritative.patch"
 
-git -C "$R" diff d2602823 HEAD -- lib tests README.md package.json .gitignore > "$OUT"
+# `.gitignore` is publish-repo bookkeeping (it only ignores node_modules to
+# keep the branch clean); it is NOT part of the plugin patch and must not be
+# applied to the installed tree. Keep the range to the shipped surface.
+git -C "$R" diff d2602823 HEAD -- lib tests README.md package.json > "$OUT"
 [[ "$(grep -c '^diff --git' "$OUT")" -ge 35 ]] || { echo "patch has fewer than 35 segments" >&2; exit 1; }
 
 V="$(mktemp -d)"; trap 'rm -rf "$V"' EXIT
