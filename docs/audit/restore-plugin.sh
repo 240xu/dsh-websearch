@@ -47,6 +47,11 @@ HTTP_PROXY=http://172.30.66.1:1091 HTTPS_PROXY=http://172.30.66.1:1091 \
   "$NODE" "$PNPM" install --lockfile-only --no-frozen-lockfile
 
 echo "== 4/5 install (applies the patch)"
+# pnpm skips re-extraction when the lockfile already matches, so a tree that
+# was damaged in place (overwritten files, a replaced version) would NOT be
+# repaired by install alone. Remove the package directory first so pnpm
+# re-extracts from the store and re-applies the patch.
+rm -rf "$PF/node_modules/@240xu/dsh-websearch"
 HTTP_PROXY=http://172.30.66.1:1091 HTTPS_PROXY=http://172.30.66.1:1091 \
   "$NODE" "$PNPM" install --frozen-lockfile
 

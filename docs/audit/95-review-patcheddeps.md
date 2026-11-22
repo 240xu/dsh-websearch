@@ -77,3 +77,26 @@ R3 骨架未填此项；按 [93 号](93-review-pin-decision.md) 与 R1（92 号�
 
 ---
 无凭证值写入本文件。
+
+## 9. **本轮最重要的发现：`restore-plugin.sh` 曾有一个假绿**（已修）
+
+**Lead 用「故意破坏 → restore」的端到端测试抓到了它**：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 把 `lib/settings-api.js` 的 `req.resume()` 改回 `req.destroy()`（模拟事故） | 破坏成功 |
+| 跑加固前的 `restore-plugin.sh` | **`Lockfile is up to date, resolution step is skipped` → `Packages: -12` → 脚本自检通过，但 `req.resume=0`** |
+| 手工 `rm -rf node_modules/@240xu/dsh-websearch` + frozen install | `req.resume=1` 恢复 |
+
+**根因**：pnpm 在 lock 匹配时**跳过重解包**（复用已装目录），所以 patch 不会被重新应用。加固前的脚本前三步（校验 G5 / 写 pin / 重算 lock）都是幂等的，lock 不会因此变化 ⇒ 脚本报「恢复成功」但树仍是坏的。
+
+**修法**（已落到 `restore-plugin.sh` 第 4 步）：
+
+```bash
+rm -rf "$PF/node_modules/@240xu/dsh-websearch"
+"$NODE" "$PNPM" install --frozen-lockfile   # 重解包 + 重打 patch
+```
+
+**加固后重测**：破坏 → `bash restore-plugin.sh` → `patched tree restored: 36 segments byte-identical`，`req.resume=1`，`version=2.8.4`，耗时 2.6s。**这才是真的幂等恢复。**
+
+**教训**：`restore` 脚本自身的「自检通过」也可能是假绿——自检必须检查**被破坏的那个具体标志位**，而不是「版本对 + 段数对」。本轮的自检恰好查了 `req.resume()` 才没漏，但脚本原先在 lock 未变时根本没走到重解包那一步。
