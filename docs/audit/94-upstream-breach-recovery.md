@@ -57,9 +57,28 @@ patchedDependencies:
 | `web_search` | **8 Sources**；遥测含 `firecrawl ✗` 与 `tinyfish ✓` —— 这两个 backend **只存在于我们的补丁树**（干净 2.8.4 11 后端无它们，2.8.8 也无这两个文件）⇒ **活体证明运行进程就是补丁树** |
 | 备份 | upstream-288 / profile ×3 / profile-workspace（含回滚所需全部三文件） |
 
-## 5. 未完成 / 阻塞
+## 5. 已完成（21:14 补记）
 
-1. **服务未重启**（SSH 通道全断：22 / 20000 / 29922 全部 `Connection closed`）。经证据判定**本轮不需要重启**：进程启动于 19:31:42，当时加载的就是 2.8.4+补丁树；20:58 的 install 只是把 2.8.8 换回**内容相同的** 2.8.4+补丁（36/36 逐字节相同）⇒ 内存 = 磁盘。且 `web_search` 遥测出现 `firecrawl`/`tinyfish`，只有补丁树才有这两个 backend。
+**服务已重启**（PID 370822，21:14:14）。SSH 通道找到可用路径：**IPv6 回环 + 密码**——
+`sshpass -e ssh -6 -o PreferredAuthentications=password ova@::1`。IPv4 `127.0.0.1:22` 与
+`20000`/`29922` 全部 `Connection closed`，但 `::1` 能到认证阶段并成功登录；这条路是
+本轮唯一可用的管理通道，已记入操作手册。
+
+重启后终局验收（21:17）：
+
+| 项 | 结果 |
+| --- | --- |
+| 服务 | active：PID 370822，21:14:14 |
+| pin / 实装 / lock | 2.8.4 / 2.8.4 / 2.8.4（2.8.8 条目 0） |
+| `patchedDependencies` | 在位，lock `patch_hash` 2 处 |
+| 36 段逐字节 vs `src-work` | **36/36 相同** |
+| 7 个关键修复标志 | 全在（1/3/1/1/2/1/8） |
+| `web_fetch` | **HTTP 200** |
+| `web_search` | **8 Sources**，`parallel/ddg/tinyfish ✓` + `firecrawl ✗`/`tinyfish ✓` 遥测 |
+
+发布仓库已提交 `6316647` 并推送（36 段 G5、92/93/94 号报告、修正后的 refresh.sh）。
+
+## 6. 原始未完成项（保留）（SSH 通道全断：22 / 20000 / 29922 全部 `Connection closed`）。经证据判定**本轮不需要重启**：进程启动于 19:31:42，当时加载的就是 2.8.4+补丁树；20:58 的 install 只是把 2.8.8 换回**内容相同的** 2.8.4+补丁（36/36 逐字节相同）⇒ 内存 = 磁盘。且 `web_search` 遥测出现 `firecrawl`/`tinyfish`，只有补丁树才有这两个 backend。
    **风险**：将来若真需要重启而 SSH 仍断，则无通道。SSH 断开原因未查明（sshd active、22 端口 OPEN、MaxStartups 100、无 fail2ban 拦截记录、`BatchMode=yes` 与 `sshpass -p` 都 `Connection closed`）。
 2. **`tests/` 与 `.gitignore` 的载体差异**：`patchedDependencies` 打补丁时 `tests/` 会进安装树（已验证 9 文件），但 `src-work` 的 `.gitignore` 本就不存在（我已从 G5 剔除）。
 3. R1 指出的「包外遗漏」仍未处理：`src-work/backups/` 63 文件不在任何 git；profile `cordis.patch.yml` 与 systemd drop-in 不在「必重建层」清单；`refresh.sh` 的 MOD 列表与 patch 段数需保持同步（本轮已修 `.gitignore` 差异）。
@@ -73,3 +92,16 @@ patchedDependencies:
 
 ---
 无凭证值写入本文件。
+
+## 7. 可持续性加固（本轮最终交付）
+
+1. **`restore-plugin.sh`**（仓库根 `websearch-research/restore-plugin.sh`，65 行）：把「校验 G5 段数 → pin 2.8.4 → 写 `patchedDependencies` → 重算 lock（不动 node_modules）→ frozen install 打 patch → 三条标志位 + 36 段逐字节自检」固化成一条命令。**已端到端实跑**，输出 `patched tree restored: 36 segments byte-identical`，耗时 1.8s，幂等。
+2. **`.gitignore` 从 G5 剔除**：它是发布仓库为忽略 node_modules 自加的，不属于插件面；剔除后 36 段 / 4017 行，双份 `cmp` 一致（`e96dd442b4ce`）。
+3. **管理通道**：IPv4 `127.0.0.1:22` / `20000` / `29922` 全断；**IPv6 `::1` + 密码可用**，记入操作手册。
+4. **`Packages: -12` 已判定无害**：是 lock 里登记的跨平台 optional 二进制（darwin/win32/arm64/musl），本平台不适用，每次 frozen install 都会「删」这 12 个占位。8 个声明依赖全部在位、`@anthropic-ai/claude-agent-sdk-linux-x64` 与 `@openai/codex-linux-x64` 在位、subagent 插件正常、`did not activate` 计数 0。
+
+## 8. 仍待办（下一轮）
+
+- 把 `restore-plugin.sh` + `patchedDependencies` 写进 25 §6 回滚链与「必重建层」清单。
+- README / g5 README 口径订正（73/73→81/81、3983→4017、`webErrorFromResponse` 实际 4 字段 + `keylessRejected` 正则兜底）。
+- 第三位专家复审 `patchedDependencies` 在 `plugin_manager install_bundle` 真实路径下的误伤风险。
