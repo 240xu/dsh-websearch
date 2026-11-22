@@ -34,10 +34,13 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 ### Adding a backend | 新增后端
 
 Non-2xx responses must be thrown through `webErrorFromResponse()` from
-`lib/util/web-error.js`. It attaches `status`, `code` (`RATE_LIMIT` / `QUOTA` /
-`WEB_PROVIDER_ERROR`), `retryAfter`, `rateLimited`, `quota` and `keylessRejected`
-after constructing the `WebError`; downstream routing (`failure-label.js`, the
-breaker, 3b) reads those fields, never the message text. Do not hand-write
+`lib/util/web-error.js`. It attaches four fields after constructing the
+`WebError` — `status`, `retryAfter`, `rateLimited`, `quota` — and picks the
+`code` from `RATE_LIMIT` / `QUOTA` / `WEB_PROVIDER_ERROR`. A keyless permission
+refusal arrives as an MCP `isError` result rather than a non-2xx response, so
+`keylessRejected` is derived by `failure-label.js` from that exact text, not
+attached here. Downstream routing (`failure-label.js`,
+the breaker, 3b) reads those fields, never the message text. Do not hand-write
 `new WebError(..., "WEB_PROVIDER_ERROR")` for an HTTP failure — that drops the
 status and makes a 429 look like an ordinary outage. A source-level test pins
 all 11 call sites.
@@ -248,7 +251,7 @@ tests/
 node --test tests/
 ```
 
-当前 73/73 pass（`node --test tests/*.test.js`）。
+当前 81/81 pass（`node --test tests/*.test.js`）。
 
 ### Test-only dependencies
 
@@ -261,7 +264,7 @@ live service before running the suite:
 ```bash
 bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 find node_modules/@deepseek-ai -xtype l   # expect no output
-node --test tests/*.test.js                 # 73/73
+node --test tests/*.test.js                 # 81/81
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。
