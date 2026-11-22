@@ -80,9 +80,32 @@ src-work/plugin 与安装目录 7 个文件逐字节 MATCH：
 4. **提上游 PR**：本次 8 处代码改动 + drop-in 均以本地副本/服务级配置落地；若要持久化到插件仓库，需由您决定是否开 PR（含 `tests/lead-20261106.test.js`）。
 5. **出口抖动**：14:00–16:00 期间 `172.30.66.1:1091` 曾多次 000；V7 在 16:21 恢复后通过。若再次全 000，属网络环境，不是代码回归——按 [22 Lead 附记](22-execution-drafts.md) 先探测出口再复跑。
 
-## 6. 完整回滚（2026-11-10 第 2 轮修订：**35 文件版本 + 运行时前提声明**）
+## 6. 完整回滚（2026-11-22 修订：**36 段补丁 + patchedDependencies 载体 + 运行时前提**）
 
-> 历史：4cp+3rm → 10 → 17 → 23 → 34 → 35 文件，前几版都与实际改动数脱节（54 号全量审计判为 P0「不可执行」）。本版按 **2026-11-10 19:25 实测**逐文件核对：**35 个改动 = 23 个修改（有 `.orig` 备份）+ 12 个新增（需 rm）**，备份目录 26 个 `*.orig`（其中 3 个属 profile/包级，不在本链）。**这是 websearch 插件本身唯一可执行的完整链**。
+> **⚠️ 2026-11-22 重大变更：补丁载体已从「手工 rsync」改为「pnpm patchedDependencies」**
+>
+> 事件：08:54 有人把 `@240xu/dsh-websearch` 换成干净 npm 2.8.8，pin 也改 `2.8.8` ⇒ 35 文件补丁全丢、
+> 2.8.8 走 `DSH_EGRESS_FORWARDER`（13070 无监听）⇒ `web_search` 全后端失败。详见 [94 号](94-upstream-breach-recovery.md)。
+>
+> 现在的载体（**这是回滚与恢复都必须知道的四条**）：
+> 1. `profiles/web/package.json` pin **精确 `2.8.4`**
+> 2. `profiles/web/pnpm-workspace.yaml` 有 `patchedDependencies: { '@240xu/dsh-websearch@2.8.4': patches/@240xu__dsh-websearch@2.8.4.patch }`
+> 3. `profiles/web/patches/@240xu__dsh-websearch@2.8.4.patch` = G5 权威补丁（**36 段 / 4017 行**）
+> 4. `pnpm-lock.yaml` 里有 `patch_hash=…`（两处）——改 patch 文件必须重算 lock，否则 frozen install 会失败
+>
+> **一条命令恢复**（覆盖事故后、或改完 patch 后）：`bash /home/ova/dsh/.artifacts/websearch-research/restore-plugin.sh`
+> 它做：校验 G5 段数 → pin 2.8.4 → 写 patchedDependencies → 重算 lock（不动 node_modules）→ frozen install 打 patch
+> → 三条标志位 + 36 段逐字节自检。**已端到端实跑**，输出 `patched tree restored: 36 segments byte-identical`。
+>
+> **已验证的安全动作**：`pnpm add <别的包>` 补丁存活 / `pnpm install --no-frozen-lockfile` 补丁存活 /
+> `pnpm add @240xu/dsh-websearch@2.8.8` 被 `ERR_PNPM_UNUSED_PATCH` **拒绝**（实装仍 2.8.4）。
+>
+> **改 patch 文件的正确顺序**（顺序错会 34/35 假绿）：先在发布仓库提交源码/README 改动 →
+> `bash g5/refresh.sh` 重生成 → 拷到 `profiles/web/patches/` → 重算 lock → frozen install。
+>
+> 历史：4cp+3rm → 10 → 17 → 23 → 34 → 35 文件 → **36 段补丁（2026-11-22）**。
+
+> 历史：4cp+3rm → 10 → 17 → 23 → 34 → 35 文件，前几版都与实际改动数脱节（54 号全量审计判为 P0「不可执行」）。本版按 **2026-11-22 实测**核对：**36 段 = 23 个修改（有 `.orig` 备份）+ 13 个新增**（含 `tests/relink-test-deps.sh`；`.gitignore` 已剔除），备份目录 26 个 `*.orig`（其中 3 个属 profile/包级，不在本链）。**这是 websearch 插件本身唯一可执行的完整链**。
 >
 > **⚠️ 运行时前提（62 号附录二 H-1/H-2/H-3，2026-11-10 补；2026-11-12 按第三次切换修订，见 [71 号](71-goal-runtime-switch.md)）**：
 > 1. 服务 cmdline 自 **11-11 21:26** 起为 `/opt/node24/bin/node /opt/dsh-0222/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open --host ...`（**无 `--patch` 参数**）；此前自 **11-09 21:25 服务重启**起为 `/home/dsh/.dsh-exp022/runtime/.../bin.js web --patch ...`（launcher 的对应改写发生在同日 **20:17**，见前提 3；两者是不同事件，不是时间笔误），**两版都不含字面 `dsh web --patch`** ⇒ environ 验证步必须用 `systemctl show -p MainPID --value dsh-web.service`（已在下方 4b 修正）。G3 用 `plugin_manager list_plugins` 实时确认 `include:dsh-websearch enabled=true fiberPhase=active`。

@@ -105,3 +105,14 @@ patchedDependencies:
 - 把 `restore-plugin.sh` + `patchedDependencies` 写进 25 §6 回滚链与「必重建层」清单。
 - README / g5 README 口径订正（73/73→81/81、3983→4017、`webErrorFromResponse` 实际 4 字段 + `keylessRejected` 正则兜底）。
 - 第三位专家复审 `patchedDependencies` 在 `plugin_manager install_bundle` 真实路径下的误伤风险。
+
+## 9. 环境抖动记录（2026-11-22 21:24–21:27）
+
+| 时刻 | 现象 | 判定 |
+| --- | --- | --- |
+| 21:24 | 一次 `web_search`：`all enabled backends failed (5)` — `parallel`/`firecrawl` 30s 超时、`ddg`/`searxng` 8s 超时 | **瞬时出口抖动**，非补丁回归 |
+| 21:27 | 同一 query 复跑：6 后端正常（`ddg`/`parallel`/`tinyfish` ✓、`exa` 已冷却、`searxng`/`firecrawl` 已知降级） | 恢复正常 |
+
+同时刻旁证：`36/36` 逐字节、`81/81` 单测全部成立；`curl` 经代理拉 `example.com` 200（6.5s）、`api.tavily.com` 200（4.1s）、`mcp.exa.ai` 405（2.6s）、`search.parallel.ai` 404（2.5s）—— 网络与 DNS 正常，只是那一分钟内后端响应慢到超时。
+
+**判别规则（写进排查清单）**：`all enabled backends failed` 不一定是代码问题；先看「同一 query 复跑是否恢复 + 补丁标志位是否还在」，两条都成立就是出口抖动。
