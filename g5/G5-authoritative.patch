@@ -1,5 +1,5 @@
 diff --git a/README.md b/README.md
-index 21efb1a..2f3eaa7 100644
+index 21efb1a..22ad11c 100644
 --- a/README.md
 +++ b/README.md
 @@ -3,13 +3,13 @@
@@ -18,17 +18,20 @@ index 21efb1a..2f3eaa7 100644
  
  纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
  
-@@ -31,6 +31,17 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：
+@@ -31,6 +31,20 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：
  
  > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
  
 +### Adding a backend | 新增后端
 +
 +Non-2xx responses must be thrown through `webErrorFromResponse()` from
-+`lib/util/web-error.js`. It attaches `status`, `code` (`RATE_LIMIT` / `QUOTA` /
-+`WEB_PROVIDER_ERROR`), `retryAfter`, `rateLimited`, `quota` and `keylessRejected`
-+after constructing the `WebError`; downstream routing (`failure-label.js`, the
-+breaker, 3b) reads those fields, never the message text. Do not hand-write
++`lib/util/web-error.js`. It attaches four fields after constructing the
++`WebError` — `status`, `retryAfter`, `rateLimited`, `quota` — and picks the
++`code` from `RATE_LIMIT` / `QUOTA` / `WEB_PROVIDER_ERROR`. A keyless permission
++refusal arrives as an MCP `isError` result rather than a non-2xx response, so
++`keylessRejected` is derived by `failure-label.js` from that exact text, not
++attached here. Downstream routing (`failure-label.js`,
++the breaker, 3b) reads those fields, never the message text. Do not hand-write
 +`new WebError(..., "WEB_PROVIDER_ERROR")` for an HTTP failure — that drops the
 +status and makes a 429 look like an ordinary outage. A source-level test pins
 +all 11 call sites.
@@ -36,7 +39,7 @@ index 21efb1a..2f3eaa7 100644
  ### SearXNG 实例 | Public instances
  
  SearXNG 默认指向 `https://searx.be`；公共实例可用性随网络环境波动，失败时错误信息会提示换源。
-@@ -96,7 +107,7 @@ pnpm install
+@@ -96,7 +110,7 @@ pnpm install
  **结果健康遥测（默认开）**：每次搜索的 `content` 尾部附一行 `[websearch backends] exa ✓5ms/3 · ddg ✗30000ms`，
  模型可据此自诊断并建议用户调整设置；设置面板「结果策略」可关闭（`resultTelemetry`）。
  
@@ -45,7 +48,7 @@ index 21efb1a..2f3eaa7 100644
  
  **API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
  
-@@ -113,7 +124,7 @@ pnpm install
+@@ -113,7 +127,7 @@ pnpm install
  
  **Base URL / Model**：每个 key-gated 后端都有对应 `${id}BaseURL`；DeepSeek/Anthropic/OpenAI 另有 `${id}Model`；Tavily 有 `tavilySearchDepth`（basic/advanced）。
  
@@ -54,7 +57,7 @@ index 21efb1a..2f3eaa7 100644
  
  ## v2.8.1 SettingsForms 适配 | What's new in v2.8.1
  
-@@ -128,7 +139,7 @@ pnpm install
+@@ -128,7 +142,7 @@ pnpm install
  ### 1. multiQuery 多查询 RRF 融合（`multiQueryEnabled`，默认关）
  
  - 门控启发式（刻意从严）：查询长度 > 60 字符，或含 `vs / and / 比较 / 对比 / 和` 分隔词，才触发；简单查询单扇出，行为与旧版完全一致（arXiv:2404.01037：盲目多查询会劣化）。
@@ -63,12 +66,12 @@ index 21efb1a..2f3eaa7 100644
  - 遥测行合并各变体并截断至 12 条，避免淹没结果。
  
  ### 2. deepCoverage 深度覆盖（`deepCoverage`，默认关）
-@@ -237,7 +248,23 @@ tests/
+@@ -237,7 +251,23 @@ tests/
  node --test tests/
  ```
  
 -v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）。
-+当前 73/73 pass（`node --test tests/*.test.js`）。
++当前 81/81 pass（`node --test tests/*.test.js`）。
 +
 +### Test-only dependencies
 +
@@ -81,7 +84,7 @@ index 21efb1a..2f3eaa7 100644
 +```bash
 +bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 +find node_modules/@deepseek-ai -xtype l   # expect no output
-+node --test tests/*.test.js                 # 73/73
++node --test tests/*.test.js                 # 81/81
 +```
 +
 +v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。

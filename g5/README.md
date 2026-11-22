@@ -8,9 +8,9 @@
 - 基线提交 `d2602823`：npm `@240xu/dsh-websearch@2.8.4` tarball（33 文件）
 - HEAD：当前分支 `local-audit-35files-20261115`，含 35 文件补丁 + README 测试章节 + `tests/relink-test-deps.sh` + `.gitignore`
 - 范围：`git diff d2602823 HEAD -- lib tests README.md package.json .gitignore`（**不含 `g5/archive/` 等归档**，否则会把 3 份旧补丁塞进来）
-- 当前 37 段 / 3983 行
+- 当前 **36 段 / 4017 行**（2026-11-22 剔除 `.gitignore` 后的口径）
 
-**验收（2026-11-15 21:55，`bash g5/refresh.sh` 输出）**：`37 segments, 35/35 byte-identical`。脚本会重新生成补丁、对洁净 2.8.4 树 `git apply --check` + 真实 apply、再逐文件 `cmp` 到 `src-work`，不满足 35/35 就 exit 1。
+**验收（2026-11-22 21:20，`bash g5/refresh.sh` 输出）**：`36 segments, 35/35 byte-identical`。脚本会重新生成补丁、对洁净 2.8.4 树 `git apply --check` + 真实 apply、再逐文件 `cmp` 到 `src-work`，不满足 35/35 就 exit 1。
 
 > **⚠️ A1 事故（2026-11-15）**：E1 那轮修完 N1–N4 后提交了 `52e26ae`，但**没有重新生成补丁**，`G5-authoritative.patch` 仍是 `230c1cf` 时代的 39 段旧快照（含 `req.destroy()`、`id: skipInitialize?1:2`、无 `sessionCacheKey`/后端级缓存键）。用它 apply 到 2.8.4 只有 **25/35** 与 src-work 相同，会把 4 条 P1 全部重新引入。现由 `refresh.sh` 把「重新生成 + 35/35 验收」固化成一步，杜绝再次脱节。
 
@@ -24,8 +24,12 @@ bash /home/ova/dsh/.artifacts/websearch-research/g5/refresh.sh
 ## 对 2.8.8 不兼容（精确口径）
 
 `git apply --check` / `patch --dry-run` 对 npm 2.8.8 树均失败：
-**4 文件 6 hunk FAILED**（`provider.js` 3、`ddg.js` 1、`searxng.js` 1、`package.json` 1，按 E2 的逐文件表）。
-历轮写的「11 段冲突」是 `patch` 日志里含 `1 out of N hunks FAILED` 汇总行的行数，**不是失败 hunk 数**，已订正。
+R2（93 号）用严格 `git apply --check` 复核出**两种口径都对不上**：
+
+- `git apply --check`：**7 文件**（6 真冲突 + `util/failure-label.js` 同名已存在）
+- `patch -F0`（不允许 fuzz）：**6 文件 11 hunk**（`ddg` 2、`searxng` 1、`index` 1、`provider` 5、`mcp-client` 1、`package.json` 1）
+
+**fuzz=2 会假成功**：只留 5 个 `.rej`，但产出树 **11/27 文件偏离**。历轮写的「4 文件 6 hunk」是 E2 的 PR 级补丁（不是本 G5），已订正为上述两种口径。
 ⇒ 不能直接套到 2.8.8；对外 PR 若以 2.8.8 为 base，须先 rebase 并逐段裁决。
 
 ## 归档（仅参考，非权威）
