@@ -131,7 +131,16 @@ test("N2: changing a backend's baseURL invalidates the cache", async () => {
     available: () => true,
     async search() {
       calls++;
-      return [{ url: `https://example.com/${calls}`, title: "t", snippet: "s" }];
+      // The real backend contract is { sources, content, truncated }, not a
+      // bare array. Returning an array here stored `sources: []`, which made
+      // the hit predicate (sources.length > 0) permanently false, so this test
+      // could not observe a cache hit at all: it passed even with the whole
+      // per-backend key block deleted.
+      return {
+        sources: [{ url: `https://example.com/${calls}`, title: "t", snippet: "s" }],
+        content: "body",
+        truncated: false,
+      };
     },
   };
   const mkOpts = (baseURL) => ({
