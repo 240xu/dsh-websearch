@@ -609,7 +609,7 @@ index 7218312..154ae0b 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..583f381 100644
+index 88dc8c3..627e65a 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
 @@ -31,16 +31,26 @@ export const CACHE_DEFAULTS = {
@@ -641,6 +641,42 @@ index 88dc8c3..583f381 100644
    });
    return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
  }
+@@ -97,11 +107,19 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+     return out.sort((a, b) => a.mtime - b.mtime);
+   }
+ 
++  // Entry count kept in memory so a write need not walk the directory. `null`
++  // means unknown: the first write scans once, because a previous process may
++  // have left more entries than the cap.
++  let knownCount = null;
++
+   function evict() {
++    if (knownCount === null) knownCount = listEntries().length;
++    if (knownCount <= cap) return;
+     const entries = listEntries();
+     for (let i = 0; i < entries.length - cap; i++) {
+       try { unlinkSync(entries[i].file); } catch { /* raced */ }
+     }
++    knownCount = Math.min(knownCount, cap);
+   }
+ 
+   return {
+@@ -132,6 +150,7 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+       try {
+         ensureDir();
+         atomicWrite(fileFor(key), JSON.stringify({ key, time: nowMs, value }));
++        if (knownCount !== null) knownCount += 1;
+         evict();
+       } catch {
+         // cache write failures are non-fatal by design
+@@ -144,6 +163,7 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+         for (const e of listEntries()) {
+           try { unlinkSync(e.file); } catch { /* raced */ }
+         }
++        knownCount = 0;
+       } catch {
+         // nothing to do
+       }
 diff --git a/lib/client.js b/lib/client.js
 index 783cbe6..de783e9 100644
 --- a/lib/client.js
