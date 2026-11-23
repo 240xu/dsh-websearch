@@ -1194,9 +1194,18 @@ index 783cbe6..4197e86 100644
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
 diff --git a/lib/health.js b/lib/health.js
-index 4e54f1a..f0344ad 100644
+index 4e54f1a..0a9669c 100644
 --- a/lib/health.js
 +++ b/lib/health.js
+@@ -7,7 +7,7 @@
+ // provider's own telemetry truncation) and run through a defensive redaction
+ // pass for token-like fragments.
+ 
+-import { rejectionFor } from "./trust.js";
++import { rejectionFor, rejectionBody } from "./trust.js";
+ 
+ const MAX_ERROR_CHARS = 120;
+ 
 @@ -60,6 +60,14 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
        id,
        enabled,
@@ -1234,6 +1243,15 @@ index 4e54f1a..f0344ad 100644
      kind: "exact",
      path: "/api/unified-search/health",
      handler: (req, res) => {
+@@ -93,7 +105,7 @@ export function registerHealthRoute(ws, deps) {
+       };
+       const rejection = rejectionFor(req, typeof deps.getConnection === "function" ? deps.getConnection() : undefined);
+       if (rejection !== undefined) {
+-        send(rejection, { ok: false, error: rejection === 503 ? "admission unavailable" : "untrusted request" });
++        send(rejection, rejectionBody(rejection));
+         return;
+       }
+       if (req.method !== "GET" && req.method !== "HEAD") {
 @@ -107,4 +119,5 @@ export function registerHealthRoute(ws, deps) {
        }
      },
@@ -1241,9 +1259,18 @@ index 4e54f1a..f0344ad 100644
 +  return typeof disposer === "function" ? [disposer] : [];
  }
 diff --git a/lib/history.js b/lib/history.js
-index dd15b37..1083d89 100644
+index dd15b37..59b8ebb 100644
 --- a/lib/history.js
 +++ b/lib/history.js
+@@ -8,7 +8,7 @@
+ 
+ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+ import path from "node:path";
+-import { rejectionFor } from "./trust.js";
++import { rejectionFor, rejectionBody } from "./trust.js";
+ 
+ /** Ring-buffer cap (spec: 50). */
+ export const HISTORY_MAX_ENTRIES = 50;
 @@ -82,40 +82,21 @@ export function createHistoryStore({ dir, maxEntries = HISTORY_MAX_ENTRIES }) {
        return readAll().slice(0, cap).map(toPublicEntry);
      },
@@ -1314,7 +1341,13 @@ index dd15b37..1083d89 100644
    const send = (res, code, body) => {
      res.writeHead(code, { "content-type": "application/json" });
      res.end(JSON.stringify(body));
-@@ -161,7 +145,7 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -156,12 +140,12 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+   const guarded = (handler) => (req, res) => {
+     const rejection = rejectionFor(req, typeof getConnection === "function" ? getConnection() : undefined);
+     if (rejection !== undefined) {
+-      send(res, rejection, { ok: false, error: rejection === 503 ? "admission unavailable" : "untrusted request" });
++      send(res, rejection, rejectionBody(rejection));
+       return;
      }
      handler(req, res);
    };
@@ -1611,7 +1644,7 @@ index 549b13b..5ada34c 100644
    });
  }
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..073ee5c 100644
+index 744917e..e73cf8e 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -25,6 +25,7 @@ import { normalizeFilters } from "./util/filters.js";
@@ -1637,11 +1670,18 @@ index 744917e..073ee5c 100644
  };
  
  /** Effective per-backend timeout = min(override ?? ∞, global). Exported for tests. */
-@@ -59,14 +61,19 @@ export function getLatestBackendHealth() {
+@@ -59,14 +61,26 @@ export function getLatestBackendHealth() {
    return latestBackendHealth;
  }
  
 -function recordBackendHealth(id, entry, breakerCfg) {
++/** Append one entry to the search history with the shape every caller needs.
++ * Four call sites (cache hit, results, empty-but-successful, total failure)
++ * differ only in `resultCount` and the per-backend counters. */
++function recordHistory(history, query, resultCount, backendsOk, backendsTotal) {
++  history?.record({ query, time: Date.now(), resultCount, backendsOk, backendsTotal });
++}
++
 +function recordBackendHealth(id, entry, breakerCfg, opts = {}) {
    const prev = latestBackendHealth.get(id);
 -  const breaker = foldBreaker(prev, entry.ok === true, entry.at, breakerCfg ?? undefined);
@@ -1659,7 +1699,7 @@ index 744917e..073ee5c 100644
    });
  }
  
-@@ -84,6 +91,10 @@ export function getBackendBreaker(id) {
+@@ -84,6 +98,10 @@ export function getBackendBreaker(id) {
   */
  // 2.8.2: exported for P1 regression tests (limiter sync-throw deadlock)
  export function createLimiter(concurrency) {
@@ -1670,7 +1710,7 @@ index 744917e..073ee5c 100644
    const queue = [];
    let running = 0;
    
-@@ -93,7 +104,7 @@ export function createLimiter(concurrency) {
+@@ -93,7 +111,7 @@ export function createLimiter(concurrency) {
        process();
        
        function process() {
@@ -1679,7 +1719,7 @@ index 744917e..073ee5c 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -191,7 +202,13 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -191,7 +209,13 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        ...(opts.filters ?? {}),
        ...(request?.filters ?? {}),
        });
@@ -1694,7 +1734,7 @@ index 744917e..073ee5c 100644
        // 系统性查询整形（Tavily/Exa best practices）：扇出前对口语化查询做
        // 确定性归一 —— 剥离寒暄前缀、压缩空白、截断到 1500 字符；
        // 专名/版本号/日期原样保留，不改写语义。
-@@ -228,7 +245,26 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -228,7 +252,26 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const cacheEnabled = opts.cacheEnabled === true && cache;
        let cacheKey = null;
        if (cacheEnabled) {
@@ -1722,20 +1762,25 @@ index 744917e..073ee5c 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -247,8 +283,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
-             query: request?.query,
-             time: Date.now(),
-             resultCount: hit.value.sources.length,
+@@ -243,13 +286,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
+           const cacheNote = `[websearch cache] cache hit, age ${hit.age}s`;
+           hitContent = hitContent === undefined ? cacheNote : hitContent + "\n\n" + cacheNote;
+-          history?.record({
+-            query: request?.query,
+-            time: Date.now(),
+-            resultCount: hit.value.sources.length,
 -            backendsOk: 0,
 -            backendsTotal: 0,
-+            // A cache hit is served from a prior successful fan-out; zeroing
-+            // the counters made it indistinguishable from a total outage.
-+            backendsOk: hit.value.sources.length > 0 ? 1 : 0,
-+            backendsTotal: hit.value.sources.length > 0 ? 1 : 0,
-           });
+-          });
++          // A cache hit is served from a prior successful fan-out; a zero
++          // counter made it indistinguishable from a total outage.
++          const hitCount = hit.value.sources.length > 0 ? 1 : 0;
++          recordHistory(history, request?.query, hit.value.sources.length, hitCount, hitCount);
            return {
              sources: safeSources,
-@@ -279,17 +317,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+             ...(hitContent !== undefined ? { content: hitContent } : {}),
+@@ -279,17 +319,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -1790,7 +1835,7 @@ index 744917e..073ee5c 100644
        }
  
        if (eligible.length === 0) {
-@@ -313,7 +384,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -313,7 +386,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            if (beOpts.baseURL !== undefined) {
              let bu = null;
              try { bu = new URL(beOpts.baseURL); } catch { bu = null; }
@@ -1802,7 +1847,7 @@ index 744917e..073ee5c 100644
              const schemeOk = bu && (bu.protocol === "https:" || (bu.protocol === "http:" && privHost));
              if (!schemeOk || bu.username || bu.password) {
                throw new WebError(`backend "${id}" has an invalid baseURL: https required (plain http only for private hosts), credentials-in-URL rejected`, "WEB_PROVIDER_ERROR");
-@@ -334,9 +408,17 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -334,9 +410,17 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
                  return value;
                },
                (err) => {
@@ -1822,7 +1867,18 @@ index 744917e..073ee5c 100644
                  throw err;
                },
              )
-@@ -408,10 +490,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -395,6 +479,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+         perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
+       }
+ 
++      // Counted once: every history record below needs it, and the fan-out is
++      // finished by this point so the array no longer grows.
++      const okCount = allTelemetry.filter((t) => t.ok).length;
++
+       // PHASE 4 fuse: multi-query mode fuses the per-variant ranked lists with
+       // RRF (k=60); single-query mode keeps the historical behavior (the one
+       // list, unchanged ordering).
+@@ -408,10 +496,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          const sources = ordered.slice(0, maxResults);
          // 结果呈现头（Anthropic web-search / OpenAI grounding 官方指引）：
          // 置于结果块最前，要求逐条引用来源 URL、优先官方/一手与较新来源；
@@ -1836,25 +1892,33 @@ index 744917e..073ee5c 100644
            const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
            outContent = outContent === undefined ? header : header + "\n\n" + outContent;
          }
-@@ -430,8 +512,15 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -420,18 +508,16 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+         if (cacheKey && cache) {
+           cache.set(cacheKey, { sources, content: outContent, truncated: ordered.length > maxResults });
+         }
+-        history?.record({
+-          query: request?.query,
+-          time: Date.now(),
+-          resultCount: sources.length,
+-          backendsOk: allTelemetry.filter((t) => t.ok).length,
+-          backendsTotal: allTelemetry.length,
+-        });
++        recordHistory(history, request?.query, sources.length, okCount, allTelemetry.length);
          if (opts.resultTelemetry !== false && (allTelemetry.length > 0 || cooled.size > 0)) {
            const cooledParts = [];
            for (const [cid, centry] of cooled) {
 -            const ann = cooledAnnotation(centry, Date.now()) || "⏸cooled";
 -            cooledParts.push(cid + " " + ann);
-+            // The cooldown set was captured at fan-out start. Recomputing with
-+            // Date.now() here (after every backend returned) can find the
-+            // window already expired and emit a bare "⏸cooled" for a backend
-+            // The note is anchored to fan-out time. If the window expires
-+            // while a slow search is running, say so instead of claiming the
-+            // backend is still cooling (65 号 A.8).
++            // The note is anchored to fan-out time (the instant the cooldown
++            // decision was made). If the window expires while a slow search is
++            // still running, say so instead of claiming the backend is cooling.
 +            const ann = cooledAnnotation(centry, nowMs);
 +            if (ann) cooledParts.push(cid + " " + ann
 +              + (isCooled(centry, Date.now()) ? "" : " (expired during search)"));
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -456,7 +545,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -456,17 +542,11 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
        if (allFailures.length === 0) {
          let emptyContent = perVariant.find((v) => v.mergedContent !== undefined)?.mergedContent;
@@ -1863,7 +1927,18 @@ index 744917e..073ee5c 100644
            const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
            emptyContent = header + "\n\n" + emptyContent;
          }
-@@ -478,7 +567,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+-        history?.record({
+-          query: request?.query,
+-          time: Date.now(),
+-          resultCount: 0,
+-          backendsOk: allTelemetry.filter((t) => t.ok).length,
+-          backendsTotal: allTelemetry.length,
+-        });
++        recordHistory(history, request?.query, 0, okCount, allTelemetry.length);
+         if (cacheKey && cache) cache.set(cacheKey, { sources: [], content: emptyContent, truncated: false });
+         return {
+           sources: [],
+@@ -478,7 +558,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // All enabled backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.
        const detail = allFailures.slice(0, 4)
@@ -1872,31 +1947,27 @@ index 744917e..073ee5c 100644
          .join("; ");
        const allKeyMissing =
          allFailures.length > 0 &&
-@@ -486,6 +575,16 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -486,6 +566,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const hint = allKeyMissing
          ? " (every enabled backend is missing its API key - add keys in Settings > Web Search, or enable a keyless backend)"
          : "";
 +      // A total outage must be visible in history: otherwise the newest entry
 +      // still shows the last success while health already records failures,
 +      // making failure-rate/availability statistics silently omit outages.
-+      history?.record({
-+        query: request?.query,
-+        time: Date.now(),
-+        resultCount: 0,
-+        backendsOk: allTelemetry.filter((t) => t.ok).length,
-+        backendsTotal: allTelemetry.length,
-+      });
++      recordHistory(history, request?.query, 0, okCount, allTelemetry.length);
        throw new WebError(
          `unified search: all enabled backends failed (${allFailures.length}) - ${detail}` + hint,
          "WEB_PROVIDER_ERROR",
 diff --git a/lib/settings-api.js b/lib/settings-api.js
-index 7765df5..1187a59 100644
+index 7765df5..4336663 100644
 --- a/lib/settings-api.js
 +++ b/lib/settings-api.js
-@@ -33,16 +33,11 @@
+@@ -32,17 +32,12 @@
+  *
   * @module lib/settings-api.js
   */
- import { rejectionFor } from "./trust.js";
+-import { rejectionFor } from "./trust.js";
++import { rejectionFor, rejectionBody } from "./trust.js";
 +import { findPluginRow } from "./util/namespace.js";
  
  const SETTINGS_PATH = "/api/unified-search/settings";
@@ -1940,6 +2011,15 @@ index 7765df5..1187a59 100644
  }
  
  /* ------------------------------------------------------------------ */
+@@ -83,7 +80,7 @@ function guarded(deps, handler) {
+   return (req, res) => {
+     const rejection = rejectionFor(req, typeof deps.getConnection === "function" ? deps.getConnection() : undefined);
+     if (rejection !== undefined) {
+-      sendJson(res, rejection, { ok: false, error: rejection === 503 ? "admission unavailable" : "untrusted request" });
++      sendJson(res, rejection, rejectionBody(rejection));
+       return;
+     }
+     Promise.resolve()
 @@ -95,7 +92,10 @@ function guarded(deps, handler) {
    };
  }
@@ -2041,6 +2121,23 @@ index 7765df5..1187a59 100644
    });
  }
  
+diff --git a/lib/trust.js b/lib/trust.js
+index 7a75fc2..0d7d952 100644
+--- a/lib/trust.js
++++ b/lib/trust.js
+@@ -128,6 +128,12 @@ export function structuralRejection(req) {
+   return structuralReason(req) === undefined ? undefined : 403
+ }
+ 
++/** The response body every guarded route returns for a rejection. Fixed
++ * strings only: the rejection code is a number, never caller-supplied text. */
++export function rejectionBody(code) {
++  return { ok: false, error: code === 503 ? 'admission unavailable' : 'untrusted request' }
++}
++
+ /** Return a fixed reason without exposing caller-supplied strings. */
+ function structuralReason(req) {
+   const host = authorityOf(req.headers.host, 'http')
 diff --git a/lib/util/egress-fetch.js b/lib/util/egress-fetch.js
 index 867902a..7a19ddc 100644
 --- a/lib/util/egress-fetch.js
