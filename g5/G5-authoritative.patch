@@ -2996,10 +2996,10 @@ index 0000000..b562acf
 +});
 diff --git a/tests/lead-20261107.test.js b/tests/lead-20261107.test.js
 new file mode 100644
-index 0000000..3a3310a
+index 0000000..e648622
 --- /dev/null
 +++ b/tests/lead-20261107.test.js
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,188 @@
 +// tests/lead-20261107.test.js — regression for the "saving a setting does
 +// nothing" bug (upstream PR #7) + the RFC1918 baseURL trust gate.
 +// Run: node --test tests/lead-20261107.test.js
@@ -3133,7 +3133,16 @@ index 0000000..3a3310a
 +    available: () => true,
 +    async search() {
 +      calls++;
-+      return [{ url: `https://example.com/${calls}`, title: "t", snippet: "s" }];
++      // The real backend contract is { sources, content, truncated }, not a
++      // bare array. Returning an array here stored `sources: []`, which made
++      // the hit predicate (sources.length > 0) permanently false, so this test
++      // could not observe a cache hit at all: it passed even with the whole
++      // per-backend key block deleted.
++      return {
++        sources: [{ url: `https://example.com/${calls}`, title: "t", snippet: "s" }],
++        content: "body",
++        truncated: false,
++      };
 +    },
 +  };
 +  const mkOpts = (baseURL) => ({
