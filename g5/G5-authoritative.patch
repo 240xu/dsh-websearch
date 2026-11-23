@@ -1420,7 +1420,7 @@ index dd15b37..59b8ebb 100644
 +  return [disposerA, disposerB].filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 549b13b..5ada34c 100644
+index 549b13b..d780b4b 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,7 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -1566,17 +1566,31 @@ index 549b13b..5ada34c 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -299,6 +343,9 @@ export function resolveOptions(ctx, config) {
-       deepseek: config?.enableDeepseek,
-       anthropic: config?.enableAnthropic,
-       openai: config?.enableOpenai,
-+      // Keep in sync with BACKENDS / Config toggles.
-+      firecrawl: config?.enableFirecrawl,
-+      tinyfish: config?.enableTinyfish,
-     };
-     enabledBackends = ALL_BACKENDS.filter((id) => toggleMap[id] === true);
+@@ -287,20 +331,9 @@ export function resolveOptions(ctx, config) {
    }
-@@ -330,7 +377,9 @@ export function resolveOptions(ctx, config) {
+ 
+   if (enabledBackends.length === 0) {
+-    const toggleMap = {
+-      exa: config?.enableExa,
+-      parallel: config?.enableParallel,
+-      ddg: config?.enableDdg,
+-      searxng: config?.enableSearxng,
+-      brave: config?.enableBrave,
+-      tavily: config?.enableTavily,
+-      serper: config?.enableSerper,
+-      mojeek: config?.enableMojeek,
+-      deepseek: config?.enableDeepseek,
+-      anthropic: config?.enableAnthropic,
+-      openai: config?.enableOpenai,
+-    };
+-    enabledBackends = ALL_BACKENDS.filter((id) => toggleMap[id] === true);
++    // The Config schema names each backend's toggle `enable<Capitalized id>`;
++    // deriving the key keeps this in sync with BACKENDS automatically.
++    enabledBackends = ALL_BACKENDS.filter((id) => config?.[`enable${id.charAt(0).toUpperCase()}${id.slice(1)}`] === true);
+   }
+ 
+   if (enabledBackends.length === 0) {
+@@ -330,7 +363,9 @@ export function resolveOptions(ctx, config) {
        ...(id === "tavily" ? { searchDepth: config?.tavilySearchDepth ?? "basic" } : {}),
        safeSearch: config?.safeSearch !== false,
        label: DEFAULT_LABELS[id] ?? id,
@@ -1587,7 +1601,7 @@ index 549b13b..5ada34c 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -407,11 +456,28 @@ export function apply(ctx, config) {
+@@ -407,11 +442,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -1621,7 +1635,21 @@ index 549b13b..5ada34c 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -460,26 +526,48 @@ export function apply(ctx, config) {
+@@ -433,10 +485,9 @@ export function apply(ctx, config) {
+     ctx,
+     resolveOptions: () => resolveOptions(ctx, current()),
+     backends: BACKENDS,
+-    cache: {
+-      get: (key) => searchCache.get(key),
+-      set: (key, value) => searchCache.set(key, value),
+-    },
++    // The provider only reads and writes through get/set, both of which the
++    // store already exposes; wrapping them added nothing but indirection.
++    cache: searchCache,
+     history: {
+       record: (entry) => {
+         if (resolveOptions(ctx, current()).historyEnabled !== true) return;
+@@ -460,26 +511,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
