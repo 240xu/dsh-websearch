@@ -457,3 +457,49 @@ test("the keyed card forwards key edits to the controller action", async () => {
   await props.save();
   assert.deepEqual(written[0], { ref: "BRAVE_API_KEY", value: "sk-sent" }, "the card's edit reaches the host write");
 });
+
+test("the status strip reports enabled and keyed counts", async () => {
+  const module = loadModule();
+  const registrations = [];
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({
+      ok: true, writable: true,
+      value: { numResults: 8, enableExa: true, enableBrave: true },
+      base: {}, user: {}, revision: 1,
+    }),
+  });
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_name, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
+  const injected = desc.inject();
+  const hostProps = { ...injected, t: (key) => key };
+  hostProps.useUnifiedSearchCard = () => injected.hooks.unifiedSearchCard.getSnapshot();
+  const seen = [];
+  const strings = [];
+  const walk = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.type === "function") { try { walk(node.type(node.props ?? {})); } catch { /* skip */ } return; }
+    seen.push(node);
+    const c = node.props?.children;
+    if (typeof c === "string") strings.push(c);
+    if (Array.isArray(c)) c.forEach((x) => { if (typeof x === "string") strings.push(x); });
+    walk(node.props?.children ?? []);
+  };
+  walk(component(hostProps));
+  // Both counters must render as <b>; dropping one leaves a single <b>.
+  const bolds = seen.filter((n) => n.type === "b");
+  assert.equal(bolds.length, 2, "enabled/total and keys/total each render a <b>");
+  // And the labels must be present somewhere in the tree.
+  const allStrings = strings.join("|");
+  assert.ok(allStrings.includes("statusEnabled"), "the enabled counter keeps its label");
+  assert.ok(allStrings.includes("statusKeys"), "the keyed counter keeps its label");
+});
