@@ -362,7 +362,6 @@ test("a credential read failure is reported as readErrors, not failedKeys", asyn
   });
   // apply() calls refreshAllCredentials() on mount; give it a tick to land.
   await new Promise((resolve) => setTimeout(resolve, 20));
-  props.refreshAllCredentials?.();
   await new Promise((resolve) => setTimeout(resolve, 20));
   const snap = store.getSnapshot();
   const readFailure = (snap.readErrors ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
@@ -543,4 +542,27 @@ test("a host settingsScope is used instead of the HTTP bridge", async () => {
   assert.equal(fetches, 0, "a bound settingsScope must bypass the HTTP bridge entirely");
   assert.equal(calls[0][1], "unified-search", "the scope is bound to the plugin namespace");
   assert.deepEqual(calls[1], ["set", "numResults", 3], "the write goes through the scope");
+});
+
+test("the legacy connection credentials API is used when the remote face is absent", async () => {
+  // Older DSH lines expose credentials on the connection controller instead of
+  // the remote namespace; that branch had no coverage at all.
+  const described = [];
+  const { props, store } = bootCard({
+    connection: {
+      api: {
+        credentials: {
+          describe: async ({ refs }) => { described.push(refs); return { result: { ok: true, value: { credentials: { BRAVE_API_KEY: { configured: true, writable: true } } } } }; },
+          set: async () => ({ ok: true }),
+        },
+      },
+    },
+  });
+  // apply() calls refreshAllCredentials() on mount; no manual kick needed.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.ok(described.length >= 1, "the legacy describe() is called");
+  assert.ok(described.every((refs) => refs.length === 1), "one ref per describe call");
+  assert.ok(described.some((refs) => refs[0] === "BRAVE_API_KEY"), "BRAVE_API_KEY is among the read refs");
+  assert.equal(store.getSnapshot().keyState["BRAVE_API_KEY"]?.configured, true, "the configured badge is set");
+  assert.equal((store.getSnapshot().readErrors ?? []).length, 0, "a successful read records no error");
 });
