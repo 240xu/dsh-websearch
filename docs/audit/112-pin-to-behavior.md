@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 总测试 | 81 | **89** |
 | `client.js` 行为测试 | **0** | **9** |
-| 源码 pin（`lead-20261106` + `interaction`） | 41 | **38**（转掉 3 条 / 含 4 个断言） |
+| 源码 `assert.match(src)`（两个文件） | **48** | **41**（删掉 7 条已被行为测试覆盖的） |
 | 补丁段数 | 37 | **38**（新增 `tests/client-behavior.test.js`） |
 
 ## 1. 怎么做到的（技术上最关键的三个突破）
@@ -101,7 +101,8 @@ body: {"ops":[{"op":"set","path":["numResults"],"value":3}]}
 | `interaction` 的「save() keeps edits arriving during in-flight writes」 | 需要竞态注入（在 await 间插一次 edit），当前 fake 架构做不到精确时序 |
 | `interaction` 的「credential failure reasons are redacted」 | 需要 fake `connection.api.credentials`，可做但属下一批 |
 | `interaction` 的「a failed toggle resyncs with the host」 | 需要观察 `scope.load()` 被二次调用，可做但属下一批 |
-| `lead-20261106` 的 `assert.doesNotMatch(src, /state.failedKeys.includes(b.keyEnv)/)` | **反例断言**：pin「旧 bug 的写法不存在」，行为测试天然覆盖但保留一层廉价护栏 |
+| `lead-20261106` 的 5 条 `assert.doesNotMatch` | **反例断言**：pin「旧 bug 的写法不存在」，保留为廉价护栏 |
+| `interaction` 其余 22 条 `assert.match` | 含 M-1/M-3/N4 等非 client.js 的 pin，与 `client.js` 行为测试无关 |
 | 7 条 i18n 死键 / 4 条 `findPluginRow` 等 | 不在 `client.js`，与本工程无关 |
 
 ## 6. 解锁了什么
