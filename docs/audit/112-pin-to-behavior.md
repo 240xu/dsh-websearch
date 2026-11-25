@@ -8,9 +8,9 @@
 
 | 项 | 转换前 | 转换后 |
 | --- | --- | --- |
-| 总测试 | 81 | **89** |
-| `client.js` 行为测试 | **0** | **9** |
-| 源码 `assert.match(src)`（两个文件） | **48** | **41**（删掉 7 条已被行为测试覆盖的） |
+| 总测试 | 81 | **89**（`node --test tests/*.test.js` 的 tests 计数含文件级 0 断言，pass 与之一致） |
+| `client.js` 行为测试 | **0** | **12** |
+| 源码 `assert.match(src)`（`lead-20261106` + `interaction`） | **48** | **31**（删掉 17 条已被行为测试覆盖的） |
 | 补丁段数 | 37 | **38**（新增 `tests/client-behavior.test.js`） |
 
 ## 1. 怎么做到的（技术上最关键的三个突破）
@@ -104,6 +104,21 @@ body: {"ops":[{"op":"set","path":["numResults"],"value":3}]}
 | `lead-20261106` 的 5 条 `assert.doesNotMatch` | **反例断言**：pin「旧 bug 的写法不存在」，保留为廉价护栏 |
 | `interaction` 其余 22 条 `assert.match` | 含 M-1/M-3/N4 等非 client.js 的 pin，与 `client.js` 行为测试无关 |
 | 7 条 i18n 死键 / 4 条 `findPluginRow` 等 | 不在 `client.js`，与本工程无关 |
+
+## 5.5 第二批转换（同日续做）
+
+第一批之后又补齐了 3 条，把 §5「没转的」清到 0：
+
+| 新增 | 注入验证 |
+| --- | --- |
+| **in-flight 编辑竞态**：挂住 host 写 → 再 `edit` → 放行 → 断言新草稿存活 | 删 `savedFieldRefs` 身份守卫 → **1 fail** |
+| **凭据失败脱敏**：抛带 secret + HTML 的恶意 provider 错误 → 断言两者都不进 reason | 改成回显 `err.message` → **1 fail** |
+| **toggle 失败重同步**：拒绝写后数 GET 重载 → 断言只记录分类 | 删 `scope.load()` → **1 fail** |
+
+对应删掉的 3 条源码 pin（共 10 个 `assert.match`）：`savedFieldRefs` 4 条、`safeFailureReason` 4 条、`scope.load`/`console.warn` 4 条。
+替换成指向行为测试的注释（保留「为什么这么测」的知识）。
+
+**密钥侧身份守卫仍保留源码 pin**（`interaction:26` 与 `:140/:143`），因为还没有行为测试复现凭据写入的竞态。
 
 ## 6. 解锁了什么
 

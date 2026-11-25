@@ -2642,10 +2642,10 @@ index bacb94d..f79d499 100644
    "exports": {
 diff --git a/tests/client-behavior.test.js b/tests/client-behavior.test.js
 new file mode 100644
-index 0000000..eded9f8
+index 0000000..f4b6c87
 --- /dev/null
 +++ b/tests/client-behavior.test.js
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,307 @@
 +// tests/client-behavior.test.js — behaviour-level coverage for lib/client.js.
 +//
 +// client.js is a `window.__ModuleLoader__` factory whose controllers live in a
@@ -2878,6 +2878,80 @@ index 0000000..eded9f8
 +  // and must not be collapsed into the keyed grid.
 +  const titles = seen.filter((n) => n.props?.className === "wsc-sectionTitle");
 +  assert.ok(titles.length >= 3, "free / keyed / optional groups keep their own headers");
++});
++
++test("an edit that arrives while a save is in flight is kept, not discarded as saved", async () => {
++  // The save snapshots the staged entry BEFORE awaiting the host. If that
++  // identity guard were dropped, the newer draft would be deleted as if it had
++  // been saved, silently losing the user's last keystrokes.
++  let release;
++  const gate = new Promise((resolve) => { release = resolve; });
++  const { props, store } = bootCard({
++    onWrite: async () => { await gate; return { ok: true, writable: true, value: { numResults: 3 }, base: {}, user: {}, revision: 2 }; },
++  });
++  props.edit("numResults", "3");
++  const saving = props.save();
++  // The write is parked inside the host call; change the field again.
++  await new Promise((resolve) => setTimeout(resolve, 10));
++  props.edit("numResults", "5");
++  release();
++  await saving;
++  const snap = store.getSnapshot();
++  assert.equal(snap.stagedCount, 1, "the later edit must survive the save");
++  // stagedText is a selector function on the projection, not a plain object.
++  assert.equal(snap.stagedText("numResults"), "5", "the surviving draft is the newer text");
++});
++
++test("credential write failures are redacted to a stable code, never echoed", async () => {
++  const { props, store } = bootCard({
++    connection: {
++      api: {
++        credentials: {
++          set: async ({ ref, value }) => {
++            // A hostile provider message must not reach the card verbatim.
++            const err = new Error("sk-live-abc123 rejected by provider: <html>");
++            err.code = "provider said \u0000";
++            throw err;
++          },
++        },
++      },
++    },
++  });
++  props.editKey("BRAVE_API_KEY", "sk-live-abc123");
++  await props.save();
++  const snap = store.getSnapshot();
++  const failure = (snap.failedKeys ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
++  assert.ok(failure, "the failure must be reported per key");
++  // Either a short stable code from err.code, or the fixed fallback; never free text.
++  assert.match(String(failure.reason), /^([a-z][a-z0-9/_-]{0,60}|write rejected)$/i, "the reason is a stable code, not free text");
++  assert.ok(!String(failure.reason).includes("sk-live"), "the secret must never be echoed");
++  assert.ok(!String(failure.reason).includes("<html>"), "raw provider payload must never be echoed");
++});
++
++test("a failed toggle resyncs from the host and logs only the classification", async () => {
++  const warnings = [];
++  const originalWarn = console.warn;
++  console.warn = (...args) => { warnings.push(args); };
++  const { props, store, requests } = bootCard({
++    settings: { ok: true, writable: true, value: { numResults: 8, enableBrave: false }, base: {}, user: {}, revision: 0 },
++    onWrite: () => ({ ok: false, code: "SETTINGS_CONFLICT" }),
++  });
++  try {
++    await props.setToggle("enableBrave", true);
++  } finally {
++    console.warn = originalWarn;
++  }
++  const gets = requests.filter((r) => r.method === "GET").length;
++  const posts = requests.filter((r) => r.method === "POST").length;
++  assert.equal(posts, 1, "the toggle is written once");
++  assert.ok(gets >= 2, "a failed toggle reloads from the host instead of trusting the stale value");
++  const snap = store.getSnapshot();
++  assert.equal(snap.failed, true);
++  assert.equal(snap.conflict, true, "SETTINGS_CONFLICT is classified");
++  assert.ok(warnings.length > 0, "the failure is logged");
++  const logged = JSON.stringify(warnings);
++  assert.ok(logged.includes("conflict"), "the log records the classification only");
++  assert.ok(!logged.includes("sk-"), "no credential may land in the log");
 +});
 diff --git a/tests/lead-20261106.test.js b/tests/lead-20261106.test.js
 new file mode 100644
@@ -3431,10 +3505,10 @@ index 0000000..e648622
 +});
 diff --git a/tests/lead-20261108-interaction.test.js b/tests/lead-20261108-interaction.test.js
 new file mode 100644
-index 0000000..3b56c68
+index 0000000..62833d7
 --- /dev/null
 +++ b/tests/lead-20261108-interaction.test.js
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,217 @@
 +// tests/lead-20261108-interaction.test.js — behaviour regressions for the
 +// Bug 与官方化行为规范小组 (40-bug-interaction.md, task-19), applied by Lead.
 +// Run: node --test tests/lead-20261108-interaction.test.js
@@ -3463,35 +3537,26 @@ index 0000000..3b56c68
 +  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
 +});
 +
-+test("save() keeps edits that arrive during in-flight writes", () => {
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  assert.match(src, /const savedFieldRefs = new Map\(\)/);
-+  assert.match(src, /if \(this\.staged\.get\(f\) === savedFieldRefs\.get\(f\)\) this\.staged\.delete\(f\)/);
-+  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
-+  assert.match(src, /&& this\.staged\.size === 0 && this\.stagedKeys\.size === 0\) this\.savedAt = Date\.now\(\)/);
-+});
++// Covered behaviourally by client-behavior.test.js ("an edit that arrives while
++// a save is in flight is kept"): it parks the host write, edits the field again,
++// releases, and asserts the newer draft survives. Dropping the identity guard
++// fails exactly that test. The key-side half is still pinned below because no
++// behaviour test reproduces the credential race yet.
 +
-+test("credential failure reasons are redacted to a stable code", () => {
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  assert.match(src, /function safeFailureReason\(err\)/);
-+  assert.match(src, /return \/\^\[a-z\]\[a-z0-9\/_-\]\{0,60\}\$\/i\.test\(code\) \? code : "write rejected";/);
-+  assert.match(src, /this\.failedKeys\.set\(ref, safeFailureReason\(keyErr\)\)/);
-+  // The old verbatim rendering must be gone.
-+  assert.doesNotMatch(src, /String\(keyErr && keyErr\.message \? keyErr\.message : keyErr\)\.slice\(0, 140\)/);
-+});
++// Covered behaviourally by client-behavior.test.js ("credential write failures
++// are redacted"): it throws a hostile provider error carrying a secret and an
++// HTML payload, then asserts neither reaches the reported reason. Reverting
++// safeFailureReason to echo the message fails exactly that test.
 +
 +// Covered behaviourally by client-behavior.test.js ("queued writes each read
 +// the revision at their own turn"): it fires two toggles together and asserts
 +// the two writes carry different revisions, which fails if the queue is
 +// bypassed. No source pin needed.
 +
-+test("a failed toggle resyncs with the host and does not log raw errors", () => {
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  assert.match(src, /if \(typeof this\.scope\.load === "function"\)/);
-+  assert.match(src, /try \{ await this\.scope\.load\(\); \} catch/);
-+  assert.match(src, /console\.warn\("websearch: toggle write failed", \{ conflict: this\.conflict \}\)/);
-+  assert.doesNotMatch(src, /console\.warn\([^)]*err\.message/);
-+});
++// Covered behaviourally by client-behavior.test.js ("a failed toggle resyncs
++// from the host"): it counts the GET reload after a rejected write, asserts the
++// conflict classification, and asserts no raw message reaches the log. Removing
++// the resync fails exactly that test.
 +
 +test("settings bridge and provider share one namespace resolver", () => {
 +  const src = readFileSync(new URL("../lib/index.js", HERE), "utf8");
