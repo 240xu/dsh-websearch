@@ -2642,10 +2642,10 @@ index bacb94d..f79d499 100644
    "exports": {
 diff --git a/tests/client-behavior.test.js b/tests/client-behavior.test.js
 new file mode 100644
-index 0000000..f4b6c87
+index 0000000..7295634
 --- /dev/null
 +++ b/tests/client-behavior.test.js
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,459 @@
 +// tests/client-behavior.test.js — behaviour-level coverage for lib/client.js.
 +//
 +// client.js is a `window.__ModuleLoader__` factory whose controllers live in a
@@ -2708,7 +2708,10 @@ index 0000000..f4b6c87
 +  const ctx = {
 +    effect: (fn) => { fn(); return () => {}; },
 +    locale: { register() {}, bind: () => (key) => key },
-+    get: () => undefined,
++    // The controller reads `ctx.get("connection")` / `ctx.get("remote")`; a
++    // constant undefined would silently disable credential writes and make any
++    // test that exercises them pass with nothing written.
++    get: (name) => (name === "connection" ? options.connection : name === "remote" ? options.remote : undefined),
 +    slots: { inject: (_name, fn) => { sections.push(fn?.()); }, register: (desc) => { sections.push(desc); return () => {}; } },
 +    remote: { $on: () => () => {} },
 +  };
@@ -2953,12 +2956,161 @@ index 0000000..f4b6c87
 +  assert.ok(logged.includes("conflict"), "the log records the classification only");
 +  assert.ok(!logged.includes("sk-"), "no credential may land in the log");
 +});
++
++test("a key re-typed while its save is in flight keeps the newer draft", async () => {
++  // save() snapshots the staged KEY entry before awaiting credentials.set. If
++  // the snapshot were taken after the await (or compared by text instead of
++  // object identity), the newer draft would be deleted as if it had been saved.
++  let release;
++  const gate = new Promise((resolve) => { release = resolve; });
++  const written = [];
++  const { props, store } = bootCard({
++    connection: {
++      api: {
++        credentials: {
++          set: async ({ ref, value }) => { written.push([ref, value]); await gate; return { ok: true }; },
++        },
++      },
++    },
++  });
++  props.editKey("BRAVE_API_KEY", "sk-first");
++  const saving = props.save();
++  await new Promise((resolve) => setTimeout(resolve, 10));
++  props.editKey("BRAVE_API_KEY", "sk-second");
++  release();
++  await saving;
++  const snap = store.getSnapshot();
++  assert.equal(written.length, 1, "the first draft is the one written");
++  assert.equal(written[0][1], "sk-first");
++  assert.equal(snap.stagedCount, 1, "the newer draft survives");
++  assert.equal(snap.stagedKeys["BRAVE_API_KEY"], "sk-second", "the surviving draft is the newer text");
++});
++
++test("a key draft that was not re-edited is dropped after a successful save", async () => {
++  const { props, store } = bootCard({
++    connection: { api: { credentials: { set: async () => ({ ok: true }) } } },
++  });
++  props.editKey("BRAVE_API_KEY", "sk-once");
++  await props.save();
++  const snap = store.getSnapshot();
++  assert.equal(snap.stagedCount, 0, "an untouched draft is consumed by the save");
++  assert.equal(snap.keyState["BRAVE_API_KEY"]?.configured, true, "the key is now configured");
++});
++
++test("a credential read failure is reported as readErrors, not failedKeys", async () => {
++  // READ failures must not be confused with SAVE failures, and only a fixed
++  // code may surface (never the host's raw message).
++  const { props, store } = bootCard({
++    remote: {
++      credentials: {
++        describe: async ([ref]) => ({ ok: false, error: { message: "boom: <html>" }, ref }),
++        set: async () => ({ ok: true }),
++      },
++    },
++  });
++  // apply() calls refreshAllCredentials() on mount; give it a tick to land.
++  await new Promise((resolve) => setTimeout(resolve, 20));
++  props.refreshAllCredentials?.();
++  await new Promise((resolve) => setTimeout(resolve, 20));
++  const snap = store.getSnapshot();
++  const readFailure = (snap.readErrors ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
++  assert.ok(readFailure, "a failed read is reported");
++  assert.equal(readFailure.reason, "credential/read-failed", "the reason is a fixed code");
++  assert.ok(!JSON.stringify(snap.readErrors).includes("<html>"), "no raw host payload is stored");
++  assert.equal((snap.failedKeys ?? []).length, 0, "read failures never leak into failedKeys");
++});
++
++test("metered backends render in their own group and never in the keyless group", async () => {
++  const module = loadModule();
++  const registrations = [];
++  globalThis.fetch = async () => ({
++    ok: true, status: 200,
++    json: async () => ({ ok: true, writable: true, value: { numResults: 8 }, base: {}, user: {}, revision: 1 }),
++  });
++  const ctx = {
++    effect: (fn) => { fn(); return () => {}; },
++    locale: { register() {}, bind: () => (key) => key },
++    get: () => undefined,
++    slots: { inject: (_name, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
++    remote: { $on: () => () => {} },
++  };
++  module.apply(ctx);
++  // apply() kicks off bridge.load() without awaiting it; settle before rendering.
++  await new Promise((resolve) => setTimeout(resolve, 20));
++  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
++  const injected = desc.inject();
++  const hostProps = { ...injected, t: (key) => key };
++  hostProps.useUnifiedSearchCard = () => injected.hooks.unifiedSearchCard.getSnapshot();
++  const seen = [];
++  const walk = (node) => {
++    if (node === null || typeof node !== "object") return;
++    if (Array.isArray(node)) { node.forEach(walk); return; }
++    if (typeof node.type === "function") { try { walk(node.type(node.props ?? {})); } catch { /* skip */ } return; }
++    seen.push(node);
++    walk(node.props?.children ?? []);
++  };
++  walk(component(hostProps));
++  // The metered group is rendered under its own header; its toggles must not
++  // also appear in the keyless group, and vice versa.
++  const meteredHeader = seen.findIndex((n) => n.props?.className === "wsc-sectionTitle" && String(n.props?.children) === "groupMetered");
++  assert.ok(meteredHeader >= 0, "the metered group keeps its own header");
++  const freeHeader = seen.findIndex((n) => n.props?.className === "wsc-sectionTitle" && String(n.props?.children) === "groupFree");
++  assert.ok(freeHeader >= 0, "the keyless group keeps its header");
++  const grids = seen.filter((n) => n.props?.className === "wsc-toggles");
++  assert.ok(grids.length >= 2, "each group renders its own toggle grid");
++  // Count the toggles INSIDE the first (keyless) grid. METERED must not leak
++  // into it: keyless is exa/parallel/ddg/searxng, so four rows and no metered
++  // label. Asserting only that both headers exist would pass even when filter
++  // drops the !b.metered guard, so the count is what makes this test bite.
++  const countToggles = (node) => {
++    let rows = 0;
++    const inner = (n) => {
++      if (n === null || typeof n !== "object") return;
++      if (Array.isArray(n)) { n.forEach(inner); return; }
++      if (typeof n.type === "function") { try { inner(n.type(n.props ?? {})); } catch { /* skip */ } return; }
++      if (n.props?.className === "wsc-toggle") rows += 1;
++      inner(n.props?.children ?? []);
++    };
++    inner(node);
++    return rows;
++  };
++  assert.equal(countToggles(grids[0]), 4, "the keyless grid holds exactly the four non-metered backends");
++  assert.ok(!JSON.stringify(grids[0].props?.children ?? [], (k, v) => (typeof v === "function" ? undefined : v)).includes("Firecrawl"),
++    "Firecrawl (metered) must not appear in the keyless grid");
++});
++
++test("a rejected credential write is reported, not silently accepted", async () => {
++  // RemoteResult envelopes resolve with ok:false instead of throwing; treating
++  // that as success would leave an unusable key marked as configured.
++  const { props, store } = bootCard({
++    connection: { api: { credentials: { set: async () => ({ ok: false, error: { message: "rejected" } }) } } },
++  });
++  props.editKey("BRAVE_API_KEY", "sk-bad");
++  await props.save();
++  const snap = store.getSnapshot();
++  const failure = (snap.failedKeys ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
++  assert.ok(failure, "an ok:false envelope is a failure");
++  assert.notEqual(snap.keyState["BRAVE_API_KEY"]?.configured, true, "the key must not be marked configured");
++  assert.equal(failure.reason, "write rejected", "the reason is the fixed fallback, not the host text");
++});
++
++test("the keyed card forwards key edits to the controller action", async () => {
++  // The render layer passes onEditKey to KeyedBackendCard; if that wiring broke,
++  // typing in the card would stage nothing and Save would silently do nothing.
++  const written = [];
++  const { props } = bootCard({
++    connection: { api: { credentials: { set: async (arg) => { written.push(arg); return { ok: true }; } } } },
++  });
++  props.editKey("BRAVE_API_KEY", "sk-sent");
++  await props.save();
++  assert.deepEqual(written[0], { ref: "BRAVE_API_KEY", value: "sk-sent" }, "the card's edit reaches the host write");
++});
 diff --git a/tests/lead-20261106.test.js b/tests/lead-20261106.test.js
 new file mode 100644
-index 0000000..1f47946
+index 0000000..493141d
 --- /dev/null
 +++ b/tests/lead-20261106.test.js
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,228 @@
 +// tests/lead-20261106.test.js — regression tests for the lead-owned fixes.
 +// Run: node --test tests/lead-20261106.test.js
 +//
@@ -3080,11 +3232,10 @@ index 0000000..1f47946
 +test("client.js UX: metered backends are separate, labelled and i18n-complete", () => {
 +  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
 +
-+  // 1. Two metered entries, marked and NOT counted as plain keyless.
-+  assert.match(src, /metered: true, label: "Firecrawl/);
-+  assert.match(src, /metered: true, label: "TinyFish/);
-+  assert.match(src, /const METERED = BACKENDS\.filter\(\(b\) => b\.metered\)/);
-+  assert.match(src, /const KEYLESS = BACKENDS\.filter\(\(b\) => \(!b\.keyEnv \|\| b\.optionalKey\) && !b\.metered\)/);
++  // 1. The metered/keyless split is covered behaviourally by
++  // client-behavior.test.js ("metered backends render in their own group"):
++  // it counts the toggles inside the keyless grid (exactly 4) and asserts no
++  // metered label leaks into it. Dropping `&& !b.metered` fails that test.
 +
 +  // 2. Description no longer hardcodes the stale "11 backends".
 +  assert.doesNotMatch(src, /11 个后端/);
@@ -3109,12 +3260,11 @@ index 0000000..1f47946
 +test("client.js UX: key switch merged with key input; failedKeys bug fixed", () => {
 +  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
 +
-+  // 1. The combined card is covered behaviourally by client-behavior.test.js
-+  // ("the card renders one row per ..."): it counts the wsc-keyCard elements,
-+  // which fails if children: KEYED.map(...) is dropped. What stays pinned here
-+  // is the wiring that render alone does not prove: the card must forward key
-+  // edits to the controller action.
-+  assert.match(src, /onEditKey: \(ref, text\) => card\.editKey\(ref, text\)/);
++  // 1. The combined card is covered behaviourally by client-behavior.test.js:
++  // "the card renders one row per ..." counts the wsc-keyCard elements, and
++  // "the keyed card forwards key edits" asserts a typed key reaches
++  // credentials.set. Dropping the card render or the onEditKey wiring fails one
++  // of those tests; no source pin is needed here.
 +
 +  // 2. The old separate "API keys" grid is gone (no duplicate inputs).
 +  assert.doesNotMatch(src, /children: props\.t\("keysTitle"\)/);
@@ -3177,9 +3327,10 @@ index 0000000..1f47946
 +// production check at source level (no mirrored copy of the logic here) and
 +// exercise the real shared error factory behaviourally.
 +test("issue #8: ok:false envelope is rejected, not reported as saved", async () => {
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  assert.match(src, /res\.ok === false/);
-+  assert.match(src, /throw new Error\(res\.error\?\.message \?\? "credential write rejected"\)/);
++  // The ok:false envelope handling is covered behaviourally by
++  // client-behavior.test.js ("a rejected credential write is reported"): it
++  // returns { ok: false } from credentials.set and asserts the key is reported
++  // as failed, not marked configured. Hard-coding `rejected = false` fails it.
 +  const { webErrorFromResponse } = await import("../lib/util/web-error.js");
 +  const { rateLimited } = await import("../lib/util/failure-label.js");
 +  const err = webErrorFromResponse(new Response("rate limited", { status: 429 }), "rate limited", "Exa");
@@ -3505,10 +3656,10 @@ index 0000000..e648622
 +});
 diff --git a/tests/lead-20261108-interaction.test.js b/tests/lead-20261108-interaction.test.js
 new file mode 100644
-index 0000000..62833d7
+index 0000000..70e178f
 --- /dev/null
 +++ b/tests/lead-20261108-interaction.test.js
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,199 @@
 +// tests/lead-20261108-interaction.test.js — behaviour regressions for the
 +// Bug 与官方化行为规范小组 (40-bug-interaction.md, task-19), applied by Lead.
 +// Run: node --test tests/lead-20261108-interaction.test.js
@@ -3532,10 +3683,10 @@ index 0000000..62833d7
 +// ("a blank key draft never stages"), which drives the real controller. What
 +// remains here is the save-time identity guard: it needs an in-flight edit to
 +// exercise, so it stays pinned at source level until that race is reproduced.
-+test("a saved key draft is dropped only when it was not re-edited", () => {
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
-+});
++// Covered behaviourally by client-behavior.test.js ("a key re-typed while
++// its save is in flight keeps the newer draft"): it parks the credential write,
++// re-types the key, releases, and asserts the newer draft survives. Dropping
++// the identity guard fails exactly that test.
 +
 +// Covered behaviourally by client-behavior.test.js ("an edit that arrives while
 +// a save is in flight is kept"): it parks the host write, edits the field again,
@@ -3609,21 +3760,11 @@ index 0000000..62833d7
 +
 +// readErrors: READ failures are tracked separately from SAVE failures, with
 +// only a fixed code (no raw host message). The readFailed anchors stay intact.
-+test("readErrors: fixed-code read failures, distinct from failedKeys", async () => {
-+  const { readFileSync } = await import("node:fs");
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  assert.match(src, /this\.readErrors = new Map\(\)/);
-+  assert.match(src, /readErrors: \[\.\.\.this\.readErrors\]/);
-+  assert.match(src, /reason = "credential\/read-failed"/);
-+  assert.match(src, /this\.readErrors\.set\(ref, safeFailureReason\(\{ code: reason \}\)\)/);
-+  assert.match(src, /this\.readErrors\.delete\(ref\)/);
-+  // No raw error text is stored.
-+  assert.doesNotMatch(src, /readErrors\.set\(ref, String\(err/);
-+  // The four readFailed anchors required by lead-20261106 remain.
-+  for (const re of [/let readFailed = false;/, /readFailed = true;/, /if \(!readFailed && view === undefined && this\.connection/, /if \(!readFailed && view !== undefined\)/]) {
-+    assert.match(src, re);
-+  }
-+});
++// Covered behaviourally by client-behavior.test.js ("a credential read failure
++// is reported as readErrors, not failedKeys"): it makes describe() return
++// ok:false with a hostile message and asserts the fixed code lands in
++// readErrors, the raw payload does not, and failedKeys stays empty.
++// Flipping the envelope check fails exactly that test.
 +
 +// R3: the ApiKeyEnv pattern must accept exactly what the official
 +// credentialRef() accepts; an over-strict pattern silently rejects valid
@@ -3644,19 +3785,11 @@ index 0000000..62833d7
 +// R3 D2: the staged-entry snapshot must be taken BEFORE the awaited host
 +// write. Taking it after would capture a concurrently typed edit and delete
 +// it as if saved (silent data loss + false "Saved").
-+test("save() snapshots staged entries before awaiting host writes", () => {
-+  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-+  // Exactly one snapshot write per loop, and it uses the loop variable `staged`.
-+  assert.equal((src.match(/savedFieldRefs\.set\(field, staged\)/g) ?? []).length, 1);
-+  assert.equal((src.match(/savedKeyRefs\.set\(ref, staged\)/g) ?? []).length, 1);
-+  // No snapshot may be recorded via a fresh map lookup after an await.
-+  assert.doesNotMatch(src, /savedFieldRefs\.set\(field, this\.staged\.get/);
-+  assert.doesNotMatch(src, /savedKeyRefs\.set\(ref, this\.stagedKeys\.get/);
-+  // The field-loop snapshot must appear before the first scope.set/unset.
-+  const snapshotAt = src.indexOf("savedFieldRefs.set(field, staged)");
-+  const firstAwait = src.indexOf("await this.scope.", snapshotAt);
-+  assert.ok(firstAwait > snapshotAt, "snapshot must precede the first awaited write");
-+});
++// R3 D2 (snapshot before the awaited write) is now covered behaviourally on both
++// loops: client-behavior.test.js "an edit that arrives while a save is in
++// flight" (field loop) and "a key re-typed while its save is in flight" (key
++// loop). Removing either snapshot, or moving it after the await, fails one of
++// those two tests. No source pin needed.
 +
 +// V3 D8: observability fields are additive and never expose credentials.
 +test("health and history expose cooldown classification without dropping old keys", async () => {
