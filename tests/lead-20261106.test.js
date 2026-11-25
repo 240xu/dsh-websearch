@@ -148,9 +148,11 @@ test("client.js UX: metered backends are separate, labelled and i18n-complete", 
 test("client.js UX: key switch merged with key input; failedKeys bug fixed", () => {
   const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
 
-  // 1. Combined card exists and is used for the KEYED group.
-  assert.match(src, /function KeyedBackendCard\(props\)/);
-  assert.match(src, /children: KEYED\.map\(\(b\) =>\s*react_jsx_runtime\.jsx\(KeyedBackendCard/);
+  // 1. The combined card is covered behaviourally by client-behavior.test.js
+  // ("the card renders one row per ..."): it counts the wsc-keyCard elements,
+  // which fails if children: KEYED.map(...) is dropped. What stays pinned here
+  // is the wiring that render alone does not prove: the card must forward key
+  // edits to the controller action.
   assert.match(src, /onEditKey: \(ref, text\) => card\.editKey\(ref, text\)/);
 
   // 2. The old separate "API keys" grid is gone (no duplicate inputs).

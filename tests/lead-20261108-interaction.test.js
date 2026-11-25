@@ -17,11 +17,12 @@ const read = (p) => readFileSync(new URL(p, HERE), "utf8");
 // assert the applied fixes at source level. Behaviour-level reproductions
 // (fake host, real controller instances) live in 40-bug-interaction.md §6.
 
-test("blank key draft is never staged, so the Save button drains", () => {
+// The blank-draft half of this regression now lives in client-behavior.test.js
+// ("a blank key draft never stages"), which drives the real controller. What
+// remains here is the save-time identity guard: it needs an in-flight edit to
+// exercise, so it stays pinned at source level until that race is reproduced.
+test("a saved key draft is dropped only when it was not re-edited", () => {
   const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /if \(String\(text\)\.trim\(\) === ""\) this\.stagedKeys\.delete\(envRef\)/);
-  // `doneKeys.push(ref)` already exists in client.js.orig, so asserting it is
-  // baseline-true. Pin the NEW cleanup guard instead (absent from the orig).
   assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
 });
 
@@ -42,13 +43,10 @@ test("credential failure reasons are redacted to a stable code", () => {
   assert.doesNotMatch(src, /String\(keyErr && keyErr\.message \? keyErr\.message : keyErr\)\.slice\(0, 140\)/);
 });
 
-test("concurrent writes are serialised; revision is read at queue turn", () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /this\.writeQueue = Promise\.resolve\(\)/);
-  assert.match(src, /write\(ops\) \{\s*const run = \(\) => this\.writeNow\(ops\);/);
-  assert.match(src, /const result = this\.writeQueue\.then\(run, run\)/);
-  assert.match(src, /async writeNow\(ops\) \{\s*const expectedRevision = this\.store\.getSnapshot\(\)\.revision/);
-});
+// Covered behaviourally by client-behavior.test.js ("queued writes each read
+// the revision at their own turn"): it fires two toggles together and asserts
+// the two writes carry different revisions, which fails if the queue is
+// bypassed. No source pin needed.
 
 test("a failed toggle resyncs with the host and does not log raw errors", () => {
   const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
