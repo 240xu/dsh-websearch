@@ -32,10 +32,10 @@ cp -a "$BASE/." "$V/"
 (cd "$V" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base \
   && git apply --check "$OUT" 2>/dev/null && git apply "$OUT" 2>/dev/null)
 
-MOD="lib/util/egress-fetch.js lib/util/mcp-client.js lib/util/failure-label.js lib/index.js lib/client.js lib/cache.js lib/health.js lib/history.js lib/provider.js lib/settings-api.js lib/breaker.js lib/backends/exa.js lib/backends/parallel.js lib/backends/tavily.js lib/backends/serper.js lib/backends/brave.js lib/backends/mojeek.js lib/backends/ddg.js lib/backends/searxng.js lib/backends/openai.js lib/backends/anthropic-like.js README.md package.json lib/util/namespace.js lib/util/web-error.js lib/backends/firecrawl.js lib/backends/tinyfish.js lib/trust.js tests/lead-20261106.test.js tests/lead-20261107.test.js tests/lead-20261107-p0.test.js tests/lead-20261108-interaction.test.js tests/lead-20261108-quota.test.js tests/lead-20261108-sse.test.js tests/lead-20261109-3b-runtime.test.js tests/settings-api.test.js tests/relink-test-deps.sh"
+MOD="lib/util/egress-fetch.js lib/util/mcp-client.js lib/util/failure-label.js lib/index.js lib/client.js lib/cache.js lib/health.js lib/history.js lib/provider.js lib/settings-api.js lib/breaker.js lib/backends/exa.js lib/backends/parallel.js lib/backends/tavily.js lib/backends/serper.js lib/backends/brave.js lib/backends/mojeek.js lib/backends/ddg.js lib/backends/searxng.js lib/backends/openai.js lib/backends/anthropic-like.js README.md package.json lib/util/namespace.js lib/util/web-error.js lib/backends/firecrawl.js lib/backends/tinyfish.js lib/trust.js tests/lead-20261106.test.js tests/lead-20261107.test.js tests/lead-20261107-p0.test.js tests/lead-20261108-interaction.test.js tests/lead-20261108-quota.test.js tests/lead-20261108-sse.test.js tests/lead-20261109-3b-runtime.test.js tests/settings-api.test.js tests/relink-test-deps.sh tests/client-behavior.test.js"
 n=0; for f in $MOD; do cmp -s "$V/$f" "$S/$f" && n=$((n+1)) || echo "DIFF $f" >&2; done
-echo "G5-authoritative.patch: $(wc -l < "$OUT") lines, $(grep -c '^diff --git' "$OUT") segments, $n/37 byte-identical"
-[[ "$n" -eq 37 ]] || exit 1
+echo "G5-authoritative.patch: $(wc -l < "$OUT") lines, $(grep -c '^diff --git' "$OUT") segments, $n/38 byte-identical"
+[[ "$n" -eq 38 ]] || exit 1
 
 # Keep the artifacts-tree copy and the branch checkout byte-identical.
 # A1 (2026-11-15) found these two drifted when refresh ran from one side only.
