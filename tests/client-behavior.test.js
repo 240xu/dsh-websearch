@@ -503,3 +503,44 @@ test("the status strip reports enabled and keyed counts", async () => {
   assert.ok(allStrings.includes("statusEnabled"), "the enabled counter keeps its label");
   assert.ok(allStrings.includes("statusKeys"), "the keyed counter keeps its label");
 });
+
+test("a host settingsScope is used instead of the HTTP bridge", async () => {
+  // selectBridge prefers ctx.get("settingsScope") when it exposes bind(); with
+  // that face present, no /api/unified-search/settings request may be issued.
+  const calls = [];
+  const module = loadModule();
+  const registrations = [];
+  let fetches = 0;
+  globalThis.fetch = async () => { fetches += 1; throw new Error("routes bridge must not be used"); };
+  // The bound object is the same bridge face the routes implementation exposes:
+  // the controller reads getSnapshot()/subscribe() and calls accept(), load(),
+  // set() and unset(). A partial fake fails in the constructor.
+  let snapshot = { status: "ready", writable: true, value: { numResults: 8 }, base: {}, user: {}, revision: 1, mode: "scope" };
+  const listeners = new Set();
+  const settingsScope = {
+    bind: ({ namespace }) => ({
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener); },
+      accept: (payload) => { calls.push(["accept", payload?.revision]); if (payload) snapshot = { ...snapshot, ...payload }; },
+      load: async () => { calls.push(["load", namespace]); return snapshot; },
+      set: async (field, value) => { calls.push(["set", field, value]); return { ok: true }; },
+      unset: async (field) => { calls.push(["unset", field]); return { ok: true }; },
+    }),
+  };
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: (name) => (name === "settingsScope" ? settingsScope : undefined),
+    slots: { inject: (_name, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const { desc } = registrations.find((r) => r && r.component) ?? {};
+  const injected = desc.inject();
+  injected.edit("numResults", "3");
+  await injected.save();
+  assert.equal(fetches, 0, "a bound settingsScope must bypass the HTTP bridge entirely");
+  assert.equal(calls[0][1], "unified-search", "the scope is bound to the plugin namespace");
+  assert.deepEqual(calls[1], ["set", "numResults", 3], "the write goes through the scope");
+});
