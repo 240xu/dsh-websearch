@@ -60,7 +60,10 @@ function bootCard(options = {}) {
   const ctx = {
     effect: (fn) => { fn(); return () => {}; },
     locale: { register() {}, bind: () => (key) => key },
-    get: () => undefined,
+    // The controller reads `ctx.get("connection")` / `ctx.get("remote")`; a
+    // constant undefined would silently disable credential writes and make any
+    // test that exercises them pass with nothing written.
+    get: (name) => (name === "connection" ? options.connection : name === "remote" ? options.remote : undefined),
     slots: { inject: (_name, fn) => { sections.push(fn?.()); }, register: (desc) => { sections.push(desc); return () => {}; } },
     remote: { $on: () => () => {} },
   };
@@ -304,4 +307,153 @@ test("a failed toggle resyncs from the host and logs only the classification", a
   const logged = JSON.stringify(warnings);
   assert.ok(logged.includes("conflict"), "the log records the classification only");
   assert.ok(!logged.includes("sk-"), "no credential may land in the log");
+});
+
+test("a key re-typed while its save is in flight keeps the newer draft", async () => {
+  // save() snapshots the staged KEY entry before awaiting credentials.set. If
+  // the snapshot were taken after the await (or compared by text instead of
+  // object identity), the newer draft would be deleted as if it had been saved.
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const written = [];
+  const { props, store } = bootCard({
+    connection: {
+      api: {
+        credentials: {
+          set: async ({ ref, value }) => { written.push([ref, value]); await gate; return { ok: true }; },
+        },
+      },
+    },
+  });
+  props.editKey("BRAVE_API_KEY", "sk-first");
+  const saving = props.save();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  props.editKey("BRAVE_API_KEY", "sk-second");
+  release();
+  await saving;
+  const snap = store.getSnapshot();
+  assert.equal(written.length, 1, "the first draft is the one written");
+  assert.equal(written[0][1], "sk-first");
+  assert.equal(snap.stagedCount, 1, "the newer draft survives");
+  assert.equal(snap.stagedKeys["BRAVE_API_KEY"], "sk-second", "the surviving draft is the newer text");
+});
+
+test("a key draft that was not re-edited is dropped after a successful save", async () => {
+  const { props, store } = bootCard({
+    connection: { api: { credentials: { set: async () => ({ ok: true }) } } },
+  });
+  props.editKey("BRAVE_API_KEY", "sk-once");
+  await props.save();
+  const snap = store.getSnapshot();
+  assert.equal(snap.stagedCount, 0, "an untouched draft is consumed by the save");
+  assert.equal(snap.keyState["BRAVE_API_KEY"]?.configured, true, "the key is now configured");
+});
+
+test("a credential read failure is reported as readErrors, not failedKeys", async () => {
+  // READ failures must not be confused with SAVE failures, and only a fixed
+  // code may surface (never the host's raw message).
+  const { props, store } = bootCard({
+    remote: {
+      credentials: {
+        describe: async ([ref]) => ({ ok: false, error: { message: "boom: <html>" }, ref }),
+        set: async () => ({ ok: true }),
+      },
+    },
+  });
+  // apply() calls refreshAllCredentials() on mount; give it a tick to land.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  props.refreshAllCredentials?.();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const snap = store.getSnapshot();
+  const readFailure = (snap.readErrors ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
+  assert.ok(readFailure, "a failed read is reported");
+  assert.equal(readFailure.reason, "credential/read-failed", "the reason is a fixed code");
+  assert.ok(!JSON.stringify(snap.readErrors).includes("<html>"), "no raw host payload is stored");
+  assert.equal((snap.failedKeys ?? []).length, 0, "read failures never leak into failedKeys");
+});
+
+test("metered backends render in their own group and never in the keyless group", async () => {
+  const module = loadModule();
+  const registrations = [];
+  globalThis.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, writable: true, value: { numResults: 8 }, base: {}, user: {}, revision: 1 }),
+  });
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_name, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  // apply() kicks off bridge.load() without awaiting it; settle before rendering.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
+  const injected = desc.inject();
+  const hostProps = { ...injected, t: (key) => key };
+  hostProps.useUnifiedSearchCard = () => injected.hooks.unifiedSearchCard.getSnapshot();
+  const seen = [];
+  const walk = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.type === "function") { try { walk(node.type(node.props ?? {})); } catch { /* skip */ } return; }
+    seen.push(node);
+    walk(node.props?.children ?? []);
+  };
+  walk(component(hostProps));
+  // The metered group is rendered under its own header; its toggles must not
+  // also appear in the keyless group, and vice versa.
+  const meteredHeader = seen.findIndex((n) => n.props?.className === "wsc-sectionTitle" && String(n.props?.children) === "groupMetered");
+  assert.ok(meteredHeader >= 0, "the metered group keeps its own header");
+  const freeHeader = seen.findIndex((n) => n.props?.className === "wsc-sectionTitle" && String(n.props?.children) === "groupFree");
+  assert.ok(freeHeader >= 0, "the keyless group keeps its header");
+  const grids = seen.filter((n) => n.props?.className === "wsc-toggles");
+  assert.ok(grids.length >= 2, "each group renders its own toggle grid");
+  // Count the toggles INSIDE the first (keyless) grid. METERED must not leak
+  // into it: keyless is exa/parallel/ddg/searxng, so four rows and no metered
+  // label. Asserting only that both headers exist would pass even when filter
+  // drops the !b.metered guard, so the count is what makes this test bite.
+  const countToggles = (node) => {
+    let rows = 0;
+    const inner = (n) => {
+      if (n === null || typeof n !== "object") return;
+      if (Array.isArray(n)) { n.forEach(inner); return; }
+      if (typeof n.type === "function") { try { inner(n.type(n.props ?? {})); } catch { /* skip */ } return; }
+      if (n.props?.className === "wsc-toggle") rows += 1;
+      inner(n.props?.children ?? []);
+    };
+    inner(node);
+    return rows;
+  };
+  assert.equal(countToggles(grids[0]), 4, "the keyless grid holds exactly the four non-metered backends");
+  assert.ok(!JSON.stringify(grids[0].props?.children ?? [], (k, v) => (typeof v === "function" ? undefined : v)).includes("Firecrawl"),
+    "Firecrawl (metered) must not appear in the keyless grid");
+});
+
+test("a rejected credential write is reported, not silently accepted", async () => {
+  // RemoteResult envelopes resolve with ok:false instead of throwing; treating
+  // that as success would leave an unusable key marked as configured.
+  const { props, store } = bootCard({
+    connection: { api: { credentials: { set: async () => ({ ok: false, error: { message: "rejected" } }) } } },
+  });
+  props.editKey("BRAVE_API_KEY", "sk-bad");
+  await props.save();
+  const snap = store.getSnapshot();
+  const failure = (snap.failedKeys ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
+  assert.ok(failure, "an ok:false envelope is a failure");
+  assert.notEqual(snap.keyState["BRAVE_API_KEY"]?.configured, true, "the key must not be marked configured");
+  assert.equal(failure.reason, "write rejected", "the reason is the fixed fallback, not the host text");
+});
+
+test("the keyed card forwards key edits to the controller action", async () => {
+  // The render layer passes onEditKey to KeyedBackendCard; if that wiring broke,
+  // typing in the card would stage nothing and Save would silently do nothing.
+  const written = [];
+  const { props } = bootCard({
+    connection: { api: { credentials: { set: async (arg) => { written.push(arg); return { ok: true }; } } } },
+  });
+  props.editKey("BRAVE_API_KEY", "sk-sent");
+  await props.save();
+  assert.deepEqual(written[0], { ref: "BRAVE_API_KEY", value: "sk-sent" }, "the card's edit reaches the host write");
 });

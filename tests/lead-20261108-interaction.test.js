@@ -21,10 +21,10 @@ const read = (p) => readFileSync(new URL(p, HERE), "utf8");
 // ("a blank key draft never stages"), which drives the real controller. What
 // remains here is the save-time identity guard: it needs an in-flight edit to
 // exercise, so it stays pinned at source level until that race is reproduced.
-test("a saved key draft is dropped only when it was not re-edited", () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
-});
+// Covered behaviourally by client-behavior.test.js ("a key re-typed while
+// its save is in flight keeps the newer draft"): it parks the credential write,
+// re-types the key, releases, and asserts the newer draft survives. Dropping
+// the identity guard fails exactly that test.
 
 // Covered behaviourally by client-behavior.test.js ("an edit that arrives while
 // a save is in flight is kept"): it parks the host write, edits the field again,
@@ -98,21 +98,11 @@ test("M-1: exa/parallel/firecrawl skip initialize; call ids avoid initialize's",
 
 // readErrors: READ failures are tracked separately from SAVE failures, with
 // only a fixed code (no raw host message). The readFailed anchors stay intact.
-test("readErrors: fixed-code read failures, distinct from failedKeys", async () => {
-  const { readFileSync } = await import("node:fs");
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /this\.readErrors = new Map\(\)/);
-  assert.match(src, /readErrors: \[\.\.\.this\.readErrors\]/);
-  assert.match(src, /reason = "credential\/read-failed"/);
-  assert.match(src, /this\.readErrors\.set\(ref, safeFailureReason\(\{ code: reason \}\)\)/);
-  assert.match(src, /this\.readErrors\.delete\(ref\)/);
-  // No raw error text is stored.
-  assert.doesNotMatch(src, /readErrors\.set\(ref, String\(err/);
-  // The four readFailed anchors required by lead-20261106 remain.
-  for (const re of [/let readFailed = false;/, /readFailed = true;/, /if \(!readFailed && view === undefined && this\.connection/, /if \(!readFailed && view !== undefined\)/]) {
-    assert.match(src, re);
-  }
-});
+// Covered behaviourally by client-behavior.test.js ("a credential read failure
+// is reported as readErrors, not failedKeys"): it makes describe() return
+// ok:false with a hostile message and asserts the fixed code lands in
+// readErrors, the raw payload does not, and failedKeys stays empty.
+// Flipping the envelope check fails exactly that test.
 
 // R3: the ApiKeyEnv pattern must accept exactly what the official
 // credentialRef() accepts; an over-strict pattern silently rejects valid
@@ -133,19 +123,11 @@ test("ApiKeyEnv pattern matches the official credentialRef grammar", async () =>
 // R3 D2: the staged-entry snapshot must be taken BEFORE the awaited host
 // write. Taking it after would capture a concurrently typed edit and delete
 // it as if saved (silent data loss + false "Saved").
-test("save() snapshots staged entries before awaiting host writes", () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  // Exactly one snapshot write per loop, and it uses the loop variable `staged`.
-  assert.equal((src.match(/savedFieldRefs\.set\(field, staged\)/g) ?? []).length, 1);
-  assert.equal((src.match(/savedKeyRefs\.set\(ref, staged\)/g) ?? []).length, 1);
-  // No snapshot may be recorded via a fresh map lookup after an await.
-  assert.doesNotMatch(src, /savedFieldRefs\.set\(field, this\.staged\.get/);
-  assert.doesNotMatch(src, /savedKeyRefs\.set\(ref, this\.stagedKeys\.get/);
-  // The field-loop snapshot must appear before the first scope.set/unset.
-  const snapshotAt = src.indexOf("savedFieldRefs.set(field, staged)");
-  const firstAwait = src.indexOf("await this.scope.", snapshotAt);
-  assert.ok(firstAwait > snapshotAt, "snapshot must precede the first awaited write");
-});
+// R3 D2 (snapshot before the awaited write) is now covered behaviourally on both
+// loops: client-behavior.test.js "an edit that arrives while a save is in
+// flight" (field loop) and "a key re-typed while its save is in flight" (key
+// loop). Removing either snapshot, or moving it after the await, fails one of
+// those two tests. No source pin needed.
 
 // V3 D8: observability fields are additive and never expose credentials.
 test("health and history expose cooldown classification without dropping old keys", async () => {

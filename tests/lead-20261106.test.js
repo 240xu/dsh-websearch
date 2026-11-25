@@ -119,11 +119,10 @@ test("mcp-client: skipInitialize option keeps the default handshake", () => {
 test("client.js UX: metered backends are separate, labelled and i18n-complete", () => {
   const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
 
-  // 1. Two metered entries, marked and NOT counted as plain keyless.
-  assert.match(src, /metered: true, label: "Firecrawl/);
-  assert.match(src, /metered: true, label: "TinyFish/);
-  assert.match(src, /const METERED = BACKENDS\.filter\(\(b\) => b\.metered\)/);
-  assert.match(src, /const KEYLESS = BACKENDS\.filter\(\(b\) => \(!b\.keyEnv \|\| b\.optionalKey\) && !b\.metered\)/);
+  // 1. The metered/keyless split is covered behaviourally by
+  // client-behavior.test.js ("metered backends render in their own group"):
+  // it counts the toggles inside the keyless grid (exactly 4) and asserts no
+  // metered label leaks into it. Dropping `&& !b.metered` fails that test.
 
   // 2. Description no longer hardcodes the stale "11 backends".
   assert.doesNotMatch(src, /11 个后端/);
@@ -148,12 +147,11 @@ test("client.js UX: metered backends are separate, labelled and i18n-complete", 
 test("client.js UX: key switch merged with key input; failedKeys bug fixed", () => {
   const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
 
-  // 1. The combined card is covered behaviourally by client-behavior.test.js
-  // ("the card renders one row per ..."): it counts the wsc-keyCard elements,
-  // which fails if children: KEYED.map(...) is dropped. What stays pinned here
-  // is the wiring that render alone does not prove: the card must forward key
-  // edits to the controller action.
-  assert.match(src, /onEditKey: \(ref, text\) => card\.editKey\(ref, text\)/);
+  // 1. The combined card is covered behaviourally by client-behavior.test.js:
+  // "the card renders one row per ..." counts the wsc-keyCard elements, and
+  // "the keyed card forwards key edits" asserts a typed key reaches
+  // credentials.set. Dropping the card render or the onEditKey wiring fails one
+  // of those tests; no source pin is needed here.
 
   // 2. The old separate "API keys" grid is gone (no duplicate inputs).
   assert.doesNotMatch(src, /children: props\.t\("keysTitle"\)/);
@@ -216,9 +214,10 @@ test("client.js issue #8: credential save path is actually usable on DSH 0.2.x",
 // production check at source level (no mirrored copy of the logic here) and
 // exercise the real shared error factory behaviourally.
 test("issue #8: ok:false envelope is rejected, not reported as saved", async () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /res\.ok === false/);
-  assert.match(src, /throw new Error\(res\.error\?\.message \?\? "credential write rejected"\)/);
+  // The ok:false envelope handling is covered behaviourally by
+  // client-behavior.test.js ("a rejected credential write is reported"): it
+  // returns { ok: false } from credentials.set and asserts the key is reported
+  // as failed, not marked configured. Hard-coding `rejected = false` fails it.
   const { webErrorFromResponse } = await import("../lib/util/web-error.js");
   const { rateLimited } = await import("../lib/util/failure-label.js");
   const err = webErrorFromResponse(new Response("rate limited", { status: 429 }), "rate limited", "Exa");
