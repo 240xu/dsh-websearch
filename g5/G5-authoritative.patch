@@ -658,7 +658,7 @@ index 88dc8c3..ec1e4ed 100644
      for (let i = 0; i < entries.length - cap; i++) {
        try { unlinkSync(entries[i].file); } catch { /* raced */ }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..8810cb0 100644
+index 783cbe6..f9de42d 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,6 +23,13 @@ window.__ModuleLoader__.load({
@@ -838,7 +838,19 @@ index 783cbe6..8810cb0 100644
  				this.failedFields = new Set();
  				this.savedAt = 0;
  				this.store = createStore(this.projection());
-@@ -292,6 +339,7 @@ window.__ModuleLoader__.load({
+@@ -276,6 +323,11 @@ window.__ModuleLoader__.load({
+ 				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
+ 			}
+ 
++			/**
++			 * Project the controller state into the snapshot the card renders from.
++			 * Everything the render layer needs is derived here, so the store never
++			 * exposes the raw staging maps.
++			 */
+ 			projection() {
+ 				const snap = this.scope.getSnapshot();
+ 				return {
+@@ -292,6 +344,7 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -846,11 +858,19 @@ index 783cbe6..8810cb0 100644
  					failedFields: [...this.failedFields],
  					saving: this.saving,
  					failed: this.failed,
-@@ -303,7 +351,14 @@ window.__ModuleLoader__.load({
+@@ -299,11 +352,22 @@ window.__ModuleLoader__.load({
+ 				};
+ 			}
  
++			/** Push the current projection to the store and notify subscribers. */
+ 			republish() { this.store.set(this.projection()); }
+ 
++			/** Stage a field edit (clears the saved marker so the card shows "unsaved"). */
  			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
++			/** Drop a staged field edit; the stored value is untouched. */
  			reset(field) { this.staged.delete(field); this.republish(); }
 -			editKey(envRef, text) { this.savedAt = 0; this.stagedKeys.set(envRef, { text }); this.republish(); }
++			/** Stage a credential draft; a blank draft is never staged so Save can drain. */
 +			editKey(envRef, text) {
 +				this.savedAt = 0;
 +				// A blank draft is not a pending change; staging it would keep
@@ -862,7 +882,7 @@ index 783cbe6..8810cb0 100644
  
  			/** Toggles write immediately (no staging); globals/keys stage + save. */
  			async setToggle(id, checked) {
-@@ -312,39 +367,82 @@ window.__ModuleLoader__.load({
+@@ -312,39 +376,82 @@ window.__ModuleLoader__.load({
  				} catch (err) {
  					this.failed = true;
  					this.conflict = String(err).includes("SETTINGS_CONFLICT");
@@ -960,7 +980,20 @@ index 783cbe6..8810cb0 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -360,8 +458,20 @@ window.__ModuleLoader__.load({
+@@ -354,14 +461,33 @@ window.__ModuleLoader__.load({
+ 				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
+ 			}
+ 
++			/**
++			 * Commit every staged field and credential draft.
++			 *
++			 * Entries are snapshotted before each await so an edit that arrives while a
++			 * write is in flight keeps its own unsaved state instead of being deleted
++			 * as if it had been saved. A second call while one is running is a no-op.
++			 */
+ 			async save() {
+ 				if (this.saving) return;
+ 				this.saving = true; this.failed = false;
  			this.conflict = false; this.failedFields.clear(); this.republish();
  				const doneFields = [];
  				const doneKeys = [];
@@ -981,7 +1014,7 @@ index 783cbe6..8810cb0 100644
  						// Empty draft clears the override so the schema default applies again.
  						if (staged.clear || staged.text === "") { await this.scope.unset(field); doneFields.push(field); continue; }
  						if (SELECT_FIELDS[field]) {
-@@ -395,6 +505,8 @@ window.__ModuleLoader__.load({
+@@ -395,6 +521,8 @@ window.__ModuleLoader__.load({
  						}
  					}
  					for (const [ref, staged] of this.stagedKeys) {
@@ -990,7 +1023,7 @@ index 783cbe6..8810cb0 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,14 +517,24 @@ window.__ModuleLoader__.load({
+@@ -405,14 +533,24 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -1019,7 +1052,18 @@ index 783cbe6..8810cb0 100644
  				} catch (err) {
  					this.failed = true;
  					this.conflict = String(err).includes("SETTINGS_CONFLICT");
-@@ -436,7 +558,7 @@ window.__ModuleLoader__.load({
+@@ -421,6 +559,10 @@ window.__ModuleLoader__.load({
+ 				this.republish();
+ 			}
+ 
++			/**
++			 * Props handed to the settings section: the store as an observable hook
++			 * plus the actions the card calls.
++			 */
+ 			inject() {
+ 				// Slot contract: hooks.{name} must be an observable store; the renderer
+ 				// converts it into props.use{Name} (observableHook). Actions go top-level.
+@@ -436,7 +578,7 @@ window.__ModuleLoader__.load({
  			}
  		}
  
@@ -1028,7 +1072,7 @@ index 783cbe6..8810cb0 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -457,6 +579,55 @@ window.__ModuleLoader__.load({
+@@ -457,6 +599,55 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -1084,7 +1128,7 @@ index 783cbe6..8810cb0 100644
  		/** Labeled <select> for enum / boolean settings. */
  		function SelectField(props) {
  			return react_jsx_runtime.jsxs("div", { children: [
-@@ -473,180 +644,217 @@ window.__ModuleLoader__.load({
+@@ -473,180 +664,217 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
