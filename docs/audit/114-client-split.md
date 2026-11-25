@@ -117,6 +117,22 @@ test("the status strip reports enabled and keyed counts", ...)
 - **C**：`SettingsFields` 把 4 个 option 数组移入是否算「过度内聚」，取决于后续是否要给其它组件复用。
 - **E**：真机浏览器渲染仍未验证（fake react）。
 
+## 7.5 第 2 轮补测（同日续做）
+
+第一轮之后又补了 2 条行为测试，覆盖两个从未被测的分支：
+
+| 新增 | 注入验证 |
+| --- | --- |
+| **`settingsScope` 分支**：`ctx.get("settingsScope")` 有 `bind` ⇒ 完全不发 HTTP（`fetches === 0`） | 把 `selectBridge` 改成永远走 routes → **1 fail** |
+| **legacy connection 分支**：`connection.api.credentials.describe({refs})` → 置 configured | 删掉该分支 → **2 fail**（连带 readErrors 测试） |
+
+`settingsScope.bind()` 返回的必须是**完整 bridge 面孔**（`getSnapshot`/`subscribe`/`accept`/`load`/`set`/`unset`）——
+我第一次只给 `load/set/unset`，构造函数就 `this.scope.getSnapshot is not a function`。
+
+**`readCredential` 44 行经评估不抽纯函数**：9 处 `this` 里 6 处是写状态（`keyState`/`readErrors`/`republish`），
+抽成 `describeCredential(remote, connection, ref)` 只能省 ~6 行，却要 fake 两套 API ⇒ **收益不抵测试成本**。
+替代做法是**把三个分支全测到**（本轮已 done）。
+
 ## 8. 下一轮可做（如果继续）
 
 1. **`UnifiedSearchCardController` 的 `readCredential`（44 行）**：它有三个分支（remote face / legacy connection / catch），可以抽成 `describeCredential(api, ref)` 纯函数 —— 但需要 fake 两种 API，测试成本高。
