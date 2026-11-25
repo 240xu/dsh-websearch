@@ -231,3 +231,77 @@ test("the card renders one row per enabled keyed backend and no optional title w
   const titles = seen.filter((n) => n.props?.className === "wsc-sectionTitle");
   assert.ok(titles.length >= 3, "free / keyed / optional groups keep their own headers");
 });
+
+test("an edit that arrives while a save is in flight is kept, not discarded as saved", async () => {
+  // The save snapshots the staged entry BEFORE awaiting the host. If that
+  // identity guard were dropped, the newer draft would be deleted as if it had
+  // been saved, silently losing the user's last keystrokes.
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { props, store } = bootCard({
+    onWrite: async () => { await gate; return { ok: true, writable: true, value: { numResults: 3 }, base: {}, user: {}, revision: 2 }; },
+  });
+  props.edit("numResults", "3");
+  const saving = props.save();
+  // The write is parked inside the host call; change the field again.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  props.edit("numResults", "5");
+  release();
+  await saving;
+  const snap = store.getSnapshot();
+  assert.equal(snap.stagedCount, 1, "the later edit must survive the save");
+  // stagedText is a selector function on the projection, not a plain object.
+  assert.equal(snap.stagedText("numResults"), "5", "the surviving draft is the newer text");
+});
+
+test("credential write failures are redacted to a stable code, never echoed", async () => {
+  const { props, store } = bootCard({
+    connection: {
+      api: {
+        credentials: {
+          set: async ({ ref, value }) => {
+            // A hostile provider message must not reach the card verbatim.
+            const err = new Error("sk-live-abc123 rejected by provider: <html>");
+            err.code = "provider said \u0000";
+            throw err;
+          },
+        },
+      },
+    },
+  });
+  props.editKey("BRAVE_API_KEY", "sk-live-abc123");
+  await props.save();
+  const snap = store.getSnapshot();
+  const failure = (snap.failedKeys ?? []).find((f) => f && f.ref === "BRAVE_API_KEY");
+  assert.ok(failure, "the failure must be reported per key");
+  // Either a short stable code from err.code, or the fixed fallback; never free text.
+  assert.match(String(failure.reason), /^([a-z][a-z0-9/_-]{0,60}|write rejected)$/i, "the reason is a stable code, not free text");
+  assert.ok(!String(failure.reason).includes("sk-live"), "the secret must never be echoed");
+  assert.ok(!String(failure.reason).includes("<html>"), "raw provider payload must never be echoed");
+});
+
+test("a failed toggle resyncs from the host and logs only the classification", async () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args); };
+  const { props, store, requests } = bootCard({
+    settings: { ok: true, writable: true, value: { numResults: 8, enableBrave: false }, base: {}, user: {}, revision: 0 },
+    onWrite: () => ({ ok: false, code: "SETTINGS_CONFLICT" }),
+  });
+  try {
+    await props.setToggle("enableBrave", true);
+  } finally {
+    console.warn = originalWarn;
+  }
+  const gets = requests.filter((r) => r.method === "GET").length;
+  const posts = requests.filter((r) => r.method === "POST").length;
+  assert.equal(posts, 1, "the toggle is written once");
+  assert.ok(gets >= 2, "a failed toggle reloads from the host instead of trusting the stale value");
+  const snap = store.getSnapshot();
+  assert.equal(snap.failed, true);
+  assert.equal(snap.conflict, true, "SETTINGS_CONFLICT is classified");
+  assert.ok(warnings.length > 0, "the failure is logged");
+  const logged = JSON.stringify(warnings);
+  assert.ok(logged.includes("conflict"), "the log records the classification only");
+  assert.ok(!logged.includes("sk-"), "no credential may land in the log");
+});

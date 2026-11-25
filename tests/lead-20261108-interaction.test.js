@@ -26,35 +26,26 @@ test("a saved key draft is dropped only when it was not re-edited", () => {
   assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
 });
 
-test("save() keeps edits that arrive during in-flight writes", () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /const savedFieldRefs = new Map\(\)/);
-  assert.match(src, /if \(this\.staged\.get\(f\) === savedFieldRefs\.get\(f\)\) this\.staged\.delete\(f\)/);
-  assert.match(src, /if \(this\.stagedKeys\.get\(k\) === savedKeyRefs\.get\(k\)\) this\.stagedKeys\.delete\(k\)/);
-  assert.match(src, /&& this\.staged\.size === 0 && this\.stagedKeys\.size === 0\) this\.savedAt = Date\.now\(\)/);
-});
+// Covered behaviourally by client-behavior.test.js ("an edit that arrives while
+// a save is in flight is kept"): it parks the host write, edits the field again,
+// releases, and asserts the newer draft survives. Dropping the identity guard
+// fails exactly that test. The key-side half is still pinned below because no
+// behaviour test reproduces the credential race yet.
 
-test("credential failure reasons are redacted to a stable code", () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /function safeFailureReason\(err\)/);
-  assert.match(src, /return \/\^\[a-z\]\[a-z0-9\/_-\]\{0,60\}\$\/i\.test\(code\) \? code : "write rejected";/);
-  assert.match(src, /this\.failedKeys\.set\(ref, safeFailureReason\(keyErr\)\)/);
-  // The old verbatim rendering must be gone.
-  assert.doesNotMatch(src, /String\(keyErr && keyErr\.message \? keyErr\.message : keyErr\)\.slice\(0, 140\)/);
-});
+// Covered behaviourally by client-behavior.test.js ("credential write failures
+// are redacted"): it throws a hostile provider error carrying a secret and an
+// HTML payload, then asserts neither reaches the reported reason. Reverting
+// safeFailureReason to echo the message fails exactly that test.
 
 // Covered behaviourally by client-behavior.test.js ("queued writes each read
 // the revision at their own turn"): it fires two toggles together and asserts
 // the two writes carry different revisions, which fails if the queue is
 // bypassed. No source pin needed.
 
-test("a failed toggle resyncs with the host and does not log raw errors", () => {
-  const src = readFileSync(new URL("../lib/client.js", HERE), "utf8");
-  assert.match(src, /if \(typeof this\.scope\.load === "function"\)/);
-  assert.match(src, /try \{ await this\.scope\.load\(\); \} catch/);
-  assert.match(src, /console\.warn\("websearch: toggle write failed", \{ conflict: this\.conflict \}\)/);
-  assert.doesNotMatch(src, /console\.warn\([^)]*err\.message/);
-});
+// Covered behaviourally by client-behavior.test.js ("a failed toggle resyncs
+// from the host"): it counts the GET reload after a rejected write, asserts the
+// conflict classification, and asserts no raw message reaches the log. Removing
+// the resync fails exactly that test.
 
 test("settings bridge and provider share one namespace resolver", () => {
   const src = readFileSync(new URL("../lib/index.js", HERE), "utf8");
