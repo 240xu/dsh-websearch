@@ -124,9 +124,44 @@ A3 的核心警告值得记：**版本钉死的补丁键把 profile 的包管理
 | `cache` 第一次只改初值没改门槛 | 我的实测 | 残留仍 12 |
 | 自己写的 3 条渲染测试用不存在的 `bootRender` | 跑测试 | 全失败，改用 A5 的 |
 
+## 8.5 选项 C：已落地（2026-11-26 第 2 轮）
+
+A2/A4 都指出「非配额冷却后端被 fail-open 重打 → 熔断实质失效」。三个选项：
+
+| 选项 | 语义 |
+| --- | --- |
+| A | 保留 fail-open（容错优先） |
+| B | 改回 UP（熔断优先，冷却的绝不重试） |
+| **C（已选）** | **有 active 就只跑 active；全冷却才 fail-open** |
+
+**实测确认（`net` 冷却 + `good` 健康）**：
+
+| 场景 | 修前 | 修后 |
+| --- | --- | --- |
+| 有健康后端（4 次搜索） | `net` 被调 **3 次** | `net` 被调 **1 次** |
+| 全冷却（3 次搜索） | 都重打 | 仍全部重打（保住可用性） |
+
+**真机验证（3082 / parallel + exa）**：
+
+```
+第1次: exa ✗429 ⏸cooled 56340s · parallel ✓
+第2次: parallel ✓ · exa ⏸cooled 56340s   ← 不再调用
+```
+
+顺带核实：`exa` 的 `56340s` 是**真实 Retry-After**（Exa 返回「到 UTC 零点」，实测 UTC 08:21 → 零点 56308s，差 32s 是我的采样延迟）。24h 上限是刻意的防恶意 Retry-After，不截断。
+
+**选项 C 的额外收益**：它让两个上游测试从「必挂」变成「全过」——
+
+- `v27`（cooled backend not called）：**2/2**
+- `v286-failures`（failed(6)≠5）：**12/12**
+
+于是又搬了 4 组（`v27` 2 · `v286-failures` 12 · `v21` 17 · `provider` 6 = **37 条**）。
+
+**搬迁细节**：`v21`/`provider` 会 stub `globalThis.fetch`，但本树所有请求走 `egressFetch`（它自己读 `HTTP_PROXY`）⇒ 在带代理的环境下 stub 永远看不到调用。故命名为 `.network.js`（不进 `node --test tests/*.test.js` 的 glob），由 `run-upstream-network.sh` 清代理单独跑。
+
 ## 9. 未做 / 待决策
 
-1. **`breakerFailOpenOnOutage` 产品语义**：保留 fail-open（现状，容错优先）还是改回 UP（熔断优先）。**需要用户拍板**。
+1. ~~`breakerFailOpenOnOutage` 产品语义~~ → **已按选项 C 落地**。
 2. **A6 的 CHANGELOG 搬迁**。
 3. **主实例 3080 尚未加载最终树**（`lib` mtime 14:39，进程 11:07 启动）。需要一次重启。
 4. **A5 的 C9/C13**（P3/P4 打磨）。
