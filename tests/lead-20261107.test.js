@@ -186,3 +186,33 @@ test("all non-2xx throws use webErrorFromResponse (structured error contract)", 
   }
   assert.equal(calls, 11, "expected 11 structured non-2xx throw sites");
 });
+
+// opts.resultHeader === false must actually suppress the model-facing header.
+// The provider used to prepend it unconditionally, so the setting was inert.
+test("resultHeader:false suppresses the model-facing header", async () => {
+  const { createUnifiedSearchProvider } = await import("../lib/provider.js");
+  const { createSearchCache } = await import("../lib/cache.js");
+  const os = await import("node:os");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-rh-"));
+  const backend = { id: "b", available: () => true, async search() { return { sources: [{ url: "https://e.com/1", title: "t" }], content: "BODY", truncated: false }; } };
+  const mkOpts = (resultHeader) => ({
+    enabledBackends: ["b"], numResults: 4, concurrency: 1, backendTimeoutMs: 5000,
+    deepCoverage: false, multiQueryEnabled: false, cacheEnabled: false, resultTelemetry: false,
+    breakerEnabled: false, resultHeader, safeSearch: true, rerank: false,
+    dedupStrategy: "url", historyEnabled: false, filters: {}, backends: {},
+  });
+  for (const flag of [true, false]) {
+    const opts = mkOpts(flag);
+    const provider = createUnifiedSearchProvider({
+      ctx: {}, resolveOptions: () => opts, backends: { b: backend },
+      cache: createSearchCache({ dir, ttlMs: 900_000 }), history: undefined,
+    });
+    const r = await provider.search({ query: "q", maxResults: 4 }, AbortSignal.timeout(5000));
+    const content = String(r.content ?? "");
+    assert.equal(content.includes("Web search results"), flag, `resultHeader=${flag} header presence`);
+    assert.ok(content.includes("BODY"), "the backend body always survives");
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
