@@ -10,9 +10,17 @@
 set -euo pipefail
 D=/home/ova/dsh/.artifacts/websearch-research
 PF=/home/dsh/.dsh/profiles/web
-PATCH="$PF/patches/@240xu__dsh-websearch@2.8.4.patch"
+# The patch file, the dependency pin, and the patchedDependencies key must all
+# name the SAME version, or pnpm refuses every operation in this profile with
+# ERR_PNPM_UNUSED_PATCH. Nothing here is hardcoded to one release: pick the
+# patch that matches the pin instead of silently reverting to an older one.
+PF_PIN=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path('$PF/package.json').read_text())['dependencies']['@240xu/dsh-websearch'])")
+VER="${1:-$PF_PIN}"
 G5="$D/g5/G5-authoritative.patch"
-VER=2.8.4
+if [[ -f "$D/g5/patch-288-from-clean-288.patch" && "$VER" == "2.8.8" ]]; then
+  G5="$D/g5/patch-288-from-clean-288.patch"
+fi
+PATCH="$PF/patches/@240xu__dsh-websearch@$VER.patch"
 
 echo "== 1/5 verify patch source"
 [[ -f "$G5" ]] || { echo "missing $G5" >&2; exit 1; }
@@ -20,22 +28,26 @@ echo "== 1/5 verify patch source"
 mkdir -p "$PF/patches"; cp "$G5" "$PATCH"
 
 echo "== 2/5 pin $VER and enforce the patch"
-python3 - "$PF" <<'PY'
-import json, pathlib, sys
+VER="$VER" python3 - "$PF" <<'PY'
+import json, os, pathlib, sys
 pf = pathlib.Path(sys.argv[1])
 p = pf / 'package.json'
 d = json.loads(p.read_text())
-d.setdefault('dependencies', {})['@240xu/dsh-websearch'] = '2.8.4'
+d.setdefault('dependencies', {})['@240xu/dsh-websearch'] = os.environ['VER']
 p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + '\n')
 w = pf / 'pnpm-workspace.yaml'
 s = w.read_text()
-if 'patchedDependencies' not in s:
-    s = s.rstrip('\n') + """
-
-patchedDependencies:
-  '@240xu/dsh-websearch@2.8.4': patches/@240xu__dsh-websearch@2.8.4.patch
-"""
-    w.write_text(s)
+import re, os
+ver = os.environ['VER']
+# Replace any existing key for this package: a stale key with a different
+# version is exactly what strands the profile.
+s = re.sub(r"\n?  '?@240xu/dsh-websearch@[0-9.]+'?: patches/@240xu__dsh-websearch@[0-9.]+\\.patch", "", s)
+if 'patchedDependencies:' in s:
+    s = s.replace('patchedDependencies:',
+        "patchedDependencies:\n  '@240xu/dsh-websearch@" + ver + "': patches/@240xu__dsh-websearch@" + ver + ".patch", 1)
+else:
+    s = s.rstrip('\n') + "\n\npatchedDependencies:\n  '@240xu/dsh-websearch@" + ver + "': patches/@240xu__dsh-websearch@" + ver + ".patch\n"
+w.write_text(s)
 print('pin + patchedDependencies ok')
 PY
 
