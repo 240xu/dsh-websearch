@@ -102,6 +102,67 @@ createRequire('/opt/dsh-0222/node_modules/@deepseek-ai/cordis-plugin-loader/lib/
 → /opt/dsh-0222/node_modules/@deepseek-ai/dsh-credentials/lib/index.js
 ```
 
+## 5.5 A1 复审抓到的 P0（已修并验证）
+
+`agent-12` 指出我在 7042161 里新加的 `forwarderUsable` 探测闸门是**真回归**：
+
+> `if (!forwarderUsable(endpoint)) return undefined` 让每个 endpoint 的**第一次请求永远走不到 sidecar**，
+> `ok:true` 后**永不回探、也不回落代理**。这把 2.8.5/2.8.6 的 JA3 修复在「进程刚起第一搜」这个
+> 最需要它的位置关掉了。实测同桩连发两次：UP `sidecarHits=2 proxyHits=0`；MERGED `call#1 走代理、call#2 才用 sidecar`。
+
+**根因**：我把「探针未知」当成「不可用」。上游从不这样做。
+
+**修法（两条）**：
+
+1. **C1**：未知/过期一律**乐观**返回 `true`，后台探测只用于「已确认死掉则退休 60s」。
+2. **C2**：`forwarderFetch` 传输失败时**回落代理一次**。但只对「确实没东西在那」的错误码
+   （`ECONNREFUSED` / `EHOSTUNREACH` / `ENETUNREACH`）；**`stalled sidecar`（`did not respond within Nms`）
+   必须原样抛出**，否则会把「sidecar 坏了」粉饰成成功。
+
+**双向验证**：
+
+| 场景 | 结果 |
+| --- | --- |
+| sidecar 活（假服务 13081） | 第 1 次就 `sidecarHits=1`（不再是先走代理） |
+| sidecar 死（无监听 13082） | **200 in 1.2–1.5s**（回落代理成功） |
+| sidecar 停滞（接受但不响应） | 正确抛 `forwarder did not respond within 300ms`（不回落） |
+
+**C3**：把上游 `tests/egress-fetch.test.js`（13 用例）搬进合并树，**13/13 逐条 pass**
+（唯一的 `no proxy env -> native fetch passthrough` 在本机跑不了——本机无直连外网，是环境限制）。
+
+## 5.6 另一个 P0：插件根本没加载（bundles 被 GUI 移除）
+
+截图里「停止并移除 2.8.4」不只是移除包，还**把 `@240xu/dsh-websearch` 从 `package.json` 的
+`dsh.profile.bundles` 删了**。后果是插件完全不加载：
+
+| 证据 | 值 |
+| --- | --- |
+| `/api/unified-search/health` | **404 not found** |
+| `web_search` | 走 `web-deepseek-api`（报 503 `deepseek-search` 无可用 distributor） |
+| `bundles.filter(websearch)` | **`[]`**（而 2026-11-22 的备份里是 `['@240xu/dsh-websearch']`） |
+
+**修法**：把 `'@240xu/dsh-websearch'` 加回 `dsh.profile.bundles`（插在 `dsh-purge-community` 之后，与历史位置一致），重启后：
+
+```
+/api/unified-search/health -> 200
+{"ok":true,"enabled":6,"keyless":6,"requestedMaxResults":8,"backends":[13 个]}
+```
+
+## 5.7 关于 `dsh-credentials` 的误判（澄清）
+
+我一度以为插件损坏，因为从 profile 目录 `import()` 报 `Cannot find package '@deepseek-ai/dsh-credentials'`。
+
+**这是我测试方式的问题**：cordis loader 用 `createRequire(import.meta.url)`（位置在
+`/opt/dsh-0222/node_modules/@deepseek-ai/cordis-plugin-loader/lib/`）解析依赖，能拿到
+`/opt/dsh-0222/node_modules/@deepseek-ai/dsh-credentials`。直接 `import` 文件路径走的是
+「文件所在位置」解析，拿不到。实测：
+
+```
+createRequire('/opt/dsh-0222/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js')
+  .resolve('@deepseek-ai/dsh-credentials')
+→ /opt/dsh-0222/node_modules/@deepseek-ai/dsh-credentials/lib/index.js
+```
+
 ## 6. 仍未做 / 无法验证
 
 1. **服务尚未重启** —— 2.8.8 已装好但进程内存里还是 2.8.4。重启 `dsh-web.service` 会杀掉承载本会话的进程（前几次都 abort），所以我把重启留到最后并接受中断。
