@@ -210,7 +210,7 @@ test("the card renders one row per enabled keyed backend and no optional title w
     // The fake jsx keeps component functions in `type` without invoking them;
     // expand them so nested render functions (KeyedBackendCard) participate.
     if (typeof node.type === "function") {
-      try { walk(node.type(node.props ?? {})); } catch { /* ignore unmockable */ }
+      walk(node.type(node.props ?? {}));
       return;
     }
     seen.push(node);
@@ -396,7 +396,7 @@ test("metered backends render in their own group and never in the keyless group"
   const walk = (node) => {
     if (node === null || typeof node !== "object") return;
     if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (typeof node.type === "function") { try { walk(node.type(node.props ?? {})); } catch { /* skip */ } return; }
+    if (typeof node.type === "function") { walk(node.type(node.props ?? {})); return; }
     seen.push(node);
     walk(node.props?.children ?? []);
   };
@@ -418,7 +418,7 @@ test("metered backends render in their own group and never in the keyless group"
     const inner = (n) => {
       if (n === null || typeof n !== "object") return;
       if (Array.isArray(n)) { n.forEach(inner); return; }
-      if (typeof n.type === "function") { try { inner(n.type(n.props ?? {})); } catch { /* skip */ } return; }
+      if (typeof n.type === "function") { inner(n.type(n.props ?? {})); return; }
       if (n.props?.className === "wsc-toggle") rows += 1;
       inner(n.props?.children ?? []);
     };
@@ -486,7 +486,7 @@ test("the status strip reports enabled and keyed counts", async () => {
   const walk = (node) => {
     if (node === null || typeof node !== "object") return;
     if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (typeof node.type === "function") { try { walk(node.type(node.props ?? {})); } catch { /* skip */ } return; }
+    if (typeof node.type === "function") { walk(node.type(node.props ?? {})); return; }
     seen.push(node);
     const c = node.props?.children;
     if (typeof c === "string") strings.push(c);
@@ -565,4 +565,115 @@ test("the legacy connection credentials API is used when the remote face is abse
   assert.ok(described.some((refs) => refs[0] === "BRAVE_API_KEY"), "BRAVE_API_KEY is among the read refs");
   assert.equal(store.getSnapshot().keyState["BRAVE_API_KEY"]?.configured, true, "the configured badge is set");
   assert.equal((store.getSnapshot().readErrors ?? []).length, 0, "a successful read records no error");
+});
+
+
+// ---- R3: regressions pinned from the client.js split audit (120-m5) ----
+// Each of these fails on lib/client.js before C1/C2 and passes after.
+
+test("R3-1 the language field stays free text, not a select", async () => {
+  const module = loadModule();
+  const registrations = [];
+  let requests = 0;
+  globalThis.fetch = async () => { requests += 1; return { ok:true, status:200, json: async () => ({ ok:true, writable:true, value:{ numResults:8, language:"zh-CN" }, base:{}, user:{}, revision:1 }) }; };
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_n, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  await new Promise((r) => setTimeout(r, 20));
+  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
+  const injected = desc.inject();
+  const hostProps = { ...injected, t: (key) => key };
+  hostProps.useUnifiedSearchCard = () => injected.hooks.unifiedSearchCard.getSnapshot();
+  const nodes = [];
+  const walk = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.type === "function") { walk(node.type(node.props ?? {})); return; }
+    nodes.push(node);
+    walk(node.props?.children ?? []);
+  };
+  walk(component(hostProps));
+  assert.ok(requests >= 1, "the card must load its settings");
+  const langInput = nodes.find((n) => n.type === "input" && n.props?.placeholder === "langPlaceholder");
+  assert.ok(langInput, "language must render as an input with the langPlaceholder hint");
+  assert.equal(String(langInput.props.value), "zh-CN", "the input shows the stored language");
+  const selects = nodes.filter((n) => n.type === "select");
+  assert.equal(selects.length, 5, "exactly five enum selects (recency/dedup/rerank/safeSearch/telemetry)");
+});
+
+test("R3-2 the save button is disabled while the scope is read-only", async () => {
+  const module = loadModule();
+  const registrations = [];
+  globalThis.fetch = async () => ({ ok:true, status:200, json: async () => ({ ok:true, writable:false, value:{ numResults:8 }, base:{}, user:{}, revision:1 }) });
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_n, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  await new Promise((r) => setTimeout(r, 20));
+  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
+  const injected = desc.inject();
+  injected.edit("numResults", "3");
+  const hostProps = { ...injected, t: (key) => key };
+  hostProps.useUnifiedSearchCard = () => injected.hooks.unifiedSearchCard.getSnapshot();
+  const buttons = [];
+  const walk = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.type === "function") { walk(node.type(node.props ?? {})); return; }
+    if (node.type === "button") buttons.push(node);
+    walk(node.props?.children ?? []);
+  };
+  walk(component(hostProps));
+  const save = buttons.find((b) => b.props.children === "save");
+  assert.ok(save, "the save button renders");
+  assert.equal(save.props.disabled, true, "a read-only scope must not offer a write");
+});
+
+test("R3-3 every key the card renders through t() exists in the dictionaries", async () => {
+  const module = loadModule();
+  const registrations = [];
+  globalThis.fetch = async () => ({ ok:true, status:200, json: async () => ({ ok:true, writable:true, value:{ numResults:8 }, base:{}, user:{}, revision:1 }) });
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_n, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  await new Promise((r) => setTimeout(r, 20));
+  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
+  const injected = desc.inject();
+  const used = [];
+  const hostProps = { ...injected, t: (key) => { used.push(key); return key; } };
+  hostProps.useUnifiedSearchCard = () => injected.hooks.unifiedSearchCard.getSnapshot();
+  const walk = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.type === "function") { walk(node.type(node.props ?? {})); return; }
+    walk(node.props?.children ?? []);
+  };
+  walk(component(hostProps));
+  // Pull the real dictionaries straight out of the module source.
+  const src = readFileSync(CLIENT, "utf8");
+  const grab = (name) => {
+    const i = src.indexOf("const " + name + " = {");
+    let d = 0, k = src.indexOf("{", i);
+    for (; k < src.length; k += 1) { if (src[k] === "{") d += 1; else if (src[k] === "}") { d -= 1; if (d === 0) break; } }
+    return src.slice(src.indexOf("{", i), k + 1);
+  };
+  const zh = (0, eval)("(" + grab("zh") + ")");
+  const en = (0, eval)("(" + grab("en") + ")");
+  const known = new Set([...Object.keys(zh), ...Object.keys(en)]);
+  const missing = [...new Set(used)].filter((k) => !known.has(k));
+  assert.deepEqual(missing, [], "the card must not render a literal key name");
 });
