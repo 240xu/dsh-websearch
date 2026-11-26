@@ -138,3 +138,34 @@ test("keylessRejected distinguishes a missing key from a 429", async () => {
   assert.equal(keylessRejected(new Error("HTTP 429 too many requests")), false);
   assert.equal(keylessRejected(new Error("connection refused")), false);
 });
+
+// Regression: fail-open puts non-quota cooled backends back into the fan-out.
+// Their failures already appear in the telemetry list, so the cooldown loop
+// must skip them — otherwise the same backend is printed twice on one line.
+test("a fail-open backend is annotated once, not twice", async () => {
+  const { createUnifiedSearchProvider } = await import("../lib/provider.js");
+  const { createSearchCache } = await import("../lib/cache.js");
+  const os = await import("node:os");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-dup-"));
+  const flaky = { id: "flaky", available: () => true, async search() { throw new Error("boom"); } };
+  const good = { id: "good", available: () => true, async search() { return { sources: [{ url: "https://e.com/1", title: "t" }], content: "c", truncated: false }; } };
+  const mkOpts = () => ({
+    enabledBackends: ["good", "flaky"], numResults: 4, concurrency: 2, backendTimeoutMs: 5000,
+    deepCoverage: false, multiQueryEnabled: false, cacheEnabled: false, resultTelemetry: true,
+    breakerEnabled: true, breakerThreshold: 1, breakerCooldownMs: 60_000,
+    safeSearch: true, rerank: false, dedupStrategy: "url", historyEnabled: false, filters: {}, backends: {},
+  });
+  const opts = mkOpts();
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, resolveOptions: () => opts, backends: { good, flaky },
+    cache: createSearchCache({ dir, ttlMs: 900_000 }), history: undefined,
+  });
+  for (const i of [1, 2, 3]) {
+    const r = await provider.search({ query: `q${i}`, maxResults: 4 }, AbortSignal.timeout(6000));
+    const line = (String(r.content ?? "").split("\n").find((l) => l.startsWith("[websearch backends]")) ?? "");
+    assert.equal((line.match(/flaky/g) ?? []).length, 1, `run ${i}: flaky must appear exactly once`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
