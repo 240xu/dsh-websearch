@@ -2853,7 +2853,7 @@ index 4e54f1a..c1f7b9b 100644
 +  return typeof disposer === "function" ? [disposer] : [];
  }
 diff --git a/lib/history.js b/lib/history.js
-index dd15b37..b614d1a 100644
+index dd15b37..1387796 100644
 --- a/lib/history.js
 +++ b/lib/history.js
 @@ -6,9 +6,9 @@
@@ -2933,17 +2933,18 @@ index dd15b37..b614d1a 100644
  /**
   * Project the module-level backend health map into a small observability
   * payload (v2.8.0 P2): per-backend last real success/failure, latency and
-@@ -132,6 +114,9 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
+@@ -132,6 +114,10 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
          at: Number.isFinite(e?.at) ? e.at : null,
          failCount: Number.isFinite(e?.failCount) ? e.failCount : 0,
          cooled: Number.isFinite(e?.cooledUntil) && e.cooledUntil > nowMs,
 +        cooledUntilMs: Number.isFinite(e?.cooledUntil) && e.cooledUntil > nowMs ? e.cooledUntil : null,
 +        rateLimited: e?.rateLimited === true,
 +        keylessRejected: e?.keylessRejected === true,
++        credentialMissing: e?.credentialMissing === true,
        });
      }
    }
-@@ -148,7 +133,7 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
+@@ -148,7 +134,7 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
   * decision the kernel applies to its own /api routes).
   */
  export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConnection }) {
@@ -2952,7 +2953,7 @@ index dd15b37..b614d1a 100644
    const send = (res, code, body) => {
      res.writeHead(code, { "content-type": "application/json" });
      res.end(JSON.stringify(body));
-@@ -156,12 +141,12 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -156,12 +142,12 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
    const guarded = (handler) => (req, res) => {
      const rejection = rejectionFor(req, typeof getConnection === "function" ? getConnection() : undefined);
      if (rejection !== undefined) {
@@ -2967,7 +2968,7 @@ index dd15b37..b614d1a 100644
      kind: "exact",
      path: "/api/websearch/history",
      handler: guarded((req, res) => {
-@@ -177,7 +162,7 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -177,7 +163,7 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
        });
      }),
    });
@@ -2976,7 +2977,7 @@ index dd15b37..b614d1a 100644
      kind: "exact",
      path: "/api/websearch/history/clear",
      handler: guarded((req, res) => {
-@@ -186,8 +171,14 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -186,8 +172,14 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
          return;
        }
        const store = getStore();
@@ -3541,7 +3542,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..b394bde 100644
+index 744917e..6505d56 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -4362,7 +4363,7 @@ index 744917e..b394bde 100644
 -          backendsTotal: allTelemetry.length,
 -        });
 -        if (cacheKey && cache) cache.set(cacheKey, { sources: [], content: emptyContent, truncated: false });
-+        if (opts.resultTelemetry !== false && allFailures.length > 0) {
++        if (opts.resultTelemetry !== false && (allFailures.length > 0 || facetNote !== "")) {
 +          const parts = foldedTelemetry.slice(0, 12).map((t) => {
 +            if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
 +            const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");

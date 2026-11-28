@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.13.5 - 2026-11-28
+
+- Fix: an empty multi-query result stopped by the search budget still carries
+  `multiQuery: N/M facets not run (search budget)` (previously only emitted
+  when some backend had failed).
+- Fix: `/api/websearch/history` backend entries expose `credentialMissing`,
+  matching `/health`.
+- Tests: 237.
 ## 2.13.4 - 2026-11-28
 
 - Fix: a planned Parallel call parses up to `maxResults × facets` (cap 300)

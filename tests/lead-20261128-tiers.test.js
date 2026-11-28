@@ -518,3 +518,21 @@ test("a missing key is a health diagnosis, not a breaker failure", async () => {
   assert.equal(getBackendBreaker("brave").failCount, 0);
   assert.equal(getBackendBreaker("brave").cooledUntil, 0);
 });
+
+test("an empty starved multi-query result still reports the skipped facets", async () => {
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { empty: { id: "empty", available: () => true, async search() {
+      await new Promise((r) => setTimeout(r, 900));
+      return { sources: [] };
+    } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["empty"], backends: { empty: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.equal(out.sources.length, 0);
+  assert.match(String(out.content ?? ""), /multiQuery: 2\/3 facets not run/);
+});
