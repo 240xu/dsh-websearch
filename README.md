@@ -99,16 +99,16 @@ pnpm install
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `intervention` | balanced | 搜索介入程度：`official` / `balanced` / `thorough`（见下表） |
-| `numResults` | 10 | 每次搜索返回结果数（1-100；Exa 上限 100，official 档沿用宿主工具的条数上限） |
+| `numResults` | 10 | 每次搜索返回结果数（1-100；Exa 上限 100，Brave/Tavily/Serper/Mojeek 各上限 20，official 档沿用宿主工具的条数上限） |
 | `includeDomains` | 空 | 仅约束 OpenAI/Anthropic 原生后端（最多 20；其余后端不支持，合并结果仍可能来自其他域名） |
 | `excludeDomains` | 空 | 排除这些域名（最多 20；OpenAI/Anthropic 均只发一个列表，include 优先） |
 | `concurrency` | 6 | 并发后端数（1-10） |
-| `backendTimeoutMs` | 24000 | 单后端超时毫秒（为宿主 30s 工具超时预留余量） |
+| `backendTimeoutMs` | 24000 | 单后端超时毫秒，同时是整次搜索总预算（多查询变体共享；为宿主 30s 工具超时预留余量） |
 | `recency` | any | 时间范围过滤：day / week / month / year（映射到各后端原生参数） |
 | `language` | 空 | 搜索语言，如 en、zh-CN（SearXNG/Brave/Serper 支持） |
 | `safeSearch` | true | 安全搜索开关（SearXNG/Brave 支持） |
-| `dedupStrategy` | url | url 仅按链接去重；url+title 额外合并同标题的转载镜像 |
-| `rerank` | false | 按查询词相关性重排序（确定性；并列时保持后端优先级） |
+| `dedupStrategy` | url | url 仅按链接去重；url+title 额外合并标题词集 Jaccard ≥ 0.9 的转载镜像 |
+| `rerank` | false | 按查询词相关性重排序（确定性；并列时保持合并顺序；official 强制关、thorough 强制开） |
 
 **v2.1 结果策略**：设置面板新增「结果策略」分区。时间/语言过滤按各后端能力自动映射——Brave `freshness/country/search_lang`、Tavily `time_range`、Serper `tbs/hl/gl`（Google 日期语法）、SearXNG `time_range/language`、DDG `df`；不支持的后端自动忽略对应维度。内部超时以真实原因失败（backend "<id>" timed out after Nms），不再被静默降级为取消；Mojeek 的 API Key 改走 Authorization 头，不再出现在 URL 中。
 
@@ -117,8 +117,8 @@ pnpm install
 | 档位 | 查询 | 多查询 | 深覆盖 | 重排 | 结果头/遥测 | 条数 |
 |---|---|---|---|---|---|---|
 | `official` | 原样（不改写） | 关 | 关 | 关 | 关 | 沿用宿主 `maxResults` |
-| `balanced` | 只剥明确的口语前缀 | 独立开关，默认关 | 独立开关，默认关 | 独立开关，默认关 | 开 | `min(宿主, numResults)` |
-| `thorough` | 同 balanced | 独立开关，默认关 | **开** | **开** | 开 | `min(宿主, numResults)` |
+| `balanced` | 只剥明确的口语前缀 | 独立开关，默认关 | 独立开关，默认关 | 独立开关，默认关 | 独立开关，默认开 | `min(宿主, numResults)` |
+| `thorough` | 同 balanced | 独立开关，默认关 | **开** | **开** | 独立开关，默认开 | `min(宿主, numResults)` |
 
 依据：DSH 0.2.2-rc.5 的 `web_search` 由**模型**写 1–10 条 query，`dsh-tool-web` 负责并发/轮转合并/结果格式，`content` 是 provider 答案而非指令（`dsh-tool-web/src/search.ts:265-329`、`dsh-web/src/types.ts:26-63`）。官方 DeepSeek provider 原样转发 query、不写 `content`（`dsh-web-search-deepseek/src/provider.ts:243-252`）。因此 `official` 档只做 provider 该做的扇出/去重；内部多查询保持独立开关，避免在模型不知情时把一次调用放大成 3×N。
 
@@ -203,7 +203,7 @@ pnpm install
 
 ### 1. 搜索结果磁盘缓存（默认开）
 
-- 相同 **(整形后查询 + filters + 生效 maxResults + 有序后端集合 + 档位/域名过滤/宿主上限)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
+- 相同 **(整形后查询 + filters + 生效 maxResults + 有序后端集合 + 所有结果整形开关 + 档位/域名过滤/宿主上限 + 后端 baseURL/model/searchDepth)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
 - 命中时 `content` 追加一行 `[websearch cache] cache hit, age Ns`；`official` 档或关闭遥测时不追加（命中仍生效）。
 - 存储位置：`$DSH_HOME/cache/websearch/results/`，单条目一个 JSON 文件，tmp+rename 原子写，超出上限按最旧淘汰；任何 fs 错误都被吞掉，缓存坏了绝不影响搜索。
 - 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900；**0 = no-store**，不读也不写）。
@@ -270,7 +270,7 @@ tests/
 node --test tests/
 ```
 
-当前 256/256 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 267/267 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 

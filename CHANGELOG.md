@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.13.17 - 2026-11-28
+
+- Quality: clear stale validation/credential errors when the user reverts a
+  field or clears a rejected key, so Save is not silently dead.
+- Quality: a hung backend that starts late is classified as a real timeout and
+  reaches the breaker; queued backends are skipped after caller cancellation.
+- Quality: RRF uses canonical URLs and the configured dedupe runs after fusion,
+  so host-case/utm/title mirrors cannot occupy multiple slots.
+- UI: slider label clicks restore the committed stop; pending keyboard settles
+  are cancelled by pointer/label gestures; toggle and credential-read races
+  are fixed; history route registration rolls back on collision.
+- Docs: official override set, timeout-as-budget, dedup threshold, numResults
+  caps, result-header/telemetry and cache-key conditions now match code.
+- Tests: 267.
 ## 2.13.16 - 2026-11-28
 
 - UI: thorough forces rerank and deep coverage, so the Relevance rerank select

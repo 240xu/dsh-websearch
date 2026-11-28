@@ -217,12 +217,13 @@ test("a backend that ignores its abort signal still obeys the per-backend timeou
       cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
     }),
   });
-  const started = Date.now();
+  // The hung promise never settles, so a passing rejection already proves the
+  // race did not wait for it. A wall-clock assertion here is flaky under the
+  // full suite's parallel load (observed >5s on a loaded host).
   await assert.rejects(
     provider.search({ query: "hang", maxResults: 5 }, new AbortController().signal),
     /(?:timed out|search budget exhausted) after 1?\d{2,3}ms/,
   );
-  assert.ok(Date.now() - started < 1000, "the race must not wait for the hung promise");
 });
 
 test("URL dedupe preserves path case but ignores fragments and tracking params", () => {
@@ -648,4 +649,70 @@ test("a deadline spent between admission and first start is not a 0-of-N failure
   } finally {
     Date.now = realNow;
   }
+});
+
+test("a hung backend that starts late still reaches the breaker", async () => {
+  getLatestBackendHealth().clear();
+  const id = "late-hang-" + Date.now();
+  const slow = {
+    id: "slow-peer", available: () => true,
+    async search() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { sources: [{ url: "https://slow.example/1" }] };
+    },
+  };
+  const hang = { id, available: () => true, search: () => new Promise(() => {}) };
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { [slow.id]: slow, [id]: hang },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: [slow.id, id], backends: { [slow.id]: {}, [id]: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 200,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: true,
+      breakerThreshold: 3, breakerCooldownMs: 60_000, historyEnabled: false,
+    }),
+  });
+  for (let i = 0; i < 3; i += 1) {
+    await provider.search({ query: "late hang " + i, maxResults: 5 }, new AbortController().signal);
+  }
+  assert.equal(getBackendBreaker(id).failCount, 3, "a late start must not hide a real timeout");
+});
+
+test("multi-query fusion folds canonical URLs before the result cap", async () => {
+  let calls = 0;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: {
+      fake: {
+        id: "fake", available: () => true,
+        async search() {
+          calls += 1;
+          return { sources: calls === 1
+            ? [{ url: "https://EXAMPLE.com/story?utm_source=feed", title: "Same story" }]
+            : [{ url: "https://example.com/story", title: "Same story" }] };
+        },
+      },
+    },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["fake"], backends: { fake: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 5000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.equal(out.sources.length, 1, "the same page must not occupy two result slots");
+});
+
+test("official overrides the whole documented set, including multi-query and deep coverage", () => {
+  const o = resolveOptions(CTX, {
+    intervention: "official", multiQueryEnabled: true, deepCoverage: true,
+    rerank: true, numResults: 42, resultHeader: true, resultTelemetry: true,
+  });
+  assert.equal(o.queryShaping, false);
+  assert.equal(o.numResults, undefined);
+  assert.equal(o.rerank, false);
+  assert.equal(o.resultHeader, false);
+  assert.equal(o.resultTelemetry, false);
+  assert.equal(o.multiQueryEnabled, false, "official must not multiply provider calls");
+  assert.equal(o.deepCoverage, false);
 });

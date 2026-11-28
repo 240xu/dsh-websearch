@@ -48,7 +48,17 @@ const u = (url, title) => ({ url, title });
   assert.equal(rrfFuse([[], []]).fused.length, 0);
 }
 
-// 6. Gate: complex true cases.
+// 6. URL canonicalization: host case and tracking params collapse.
+{
+  const { fused } = rrfFuse([
+    [u("https://EXAMPLE.com/story?utm_source=feed")],
+    [u("https://example.com/story")],
+  ]);
+  assert.equal(fused.length, 1, "host case and utm params identify one page");
+  assert.equal(fused[0].url, "https://EXAMPLE.com/story?utm_source=feed", "first metadata wins");
+}
+
+// 7. Gate: complex true cases.
 {
   assert.equal(isComplexQuery("dsh websearch plugin"), false, "short, no separator");
   assert.equal(isComplexQuery(""), false);
@@ -60,7 +70,7 @@ const u = (url, title) => ({ url, title });
   assert.equal(isComplexQuery("x".repeat(61)), true, "length > 60");
 }
 
-// 7. Derivation: original always first, mechanical splits, cap 3, dedupe.
+// 8. Derivation: original always first, mechanical splits, cap 3, dedupe.
 {
   assert.deepEqual(deriveSubQueries("react vs vue"), ["react vs vue", "react", "vue"]);
   const d = deriveSubQueries("dsh-websearch 插件如何配置 sftp 和面板联动的细节说明文档很长很长很长很长很长很长很长很长很长很长很长很长");
@@ -73,4 +83,4 @@ const u = (url, title) => ({ url, title });
   assert.deepEqual(deriveSubQueries("a and b"), ["a and b"]);
 }
 
-console.log("rrf.test.js: all 7 test groups passed");
+console.log("rrf.test.js: all 8 test groups passed");

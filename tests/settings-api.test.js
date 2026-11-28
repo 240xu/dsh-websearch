@@ -281,3 +281,22 @@ test("partial route registration rolls back on a duplicate route", async () => {
   assert.equal(table.size, 1, "only the foreign pre-occupied route may remain");
   assert.ok(table.has("/api/unified-search/settings"));
 });
+
+test("history registration rolls back its first route when the second collides", async () => {
+  const { registerHistoryRoutes } = await import("../lib/history.js");
+  const table = new Map();
+  let calls = 0;
+  const ws = {
+    register(route) {
+      calls += 1;
+      if (calls === 2) throw new Error("duplicate route " + route.path);
+      table.set(route.path, route);
+      return () => table.delete(route.path);
+    },
+  };
+  assert.throws(
+    () => registerHistoryRoutes(ws, { getStore: () => null, getBackendHealth: () => new Map(), getConnection: () => undefined }),
+    /duplicate route/,
+  );
+  assert.equal(table.size, 0, "the first route must not leak");
+});

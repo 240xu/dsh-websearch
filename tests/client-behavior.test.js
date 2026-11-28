@@ -1156,3 +1156,136 @@ test("thorough forces and locks the rerank control", async () => {
   assert.equal(rerank.props["aria-describedby"], "wsc-intervention-hint");
   assert.match(String(nodes.find((n) => n.props.id === "wsc-intervention-hint").props.children), /thoroughHint/);
 });
+
+test("reverting an invalid field clears its error instead of leaving Save dead", async () => {
+  const { props, store } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  props.edit("numResults", "999");
+  await props.save();
+  assert.equal(store.getSnapshot().failed, true);
+  assert.deepEqual(store.getSnapshot().failedFields, ["numResults"]);
+  props.edit("numResults", "8");
+  const snap = store.getSnapshot();
+  assert.equal(snap.failed, false);
+  assert.deepEqual(snap.failedFields, []);
+  assert.equal(snap.stagedCount, 0);
+  assert.equal(snap.savedAt, 0);
+});
+
+test("clearing a rejected credential clears its error", async () => {
+  const remote = {
+    $on: () => () => {},
+    credentials: {
+      describe: async () => ({ ok: true, value: { credentials: { BRAVE_API_KEY: { configured: false, writable: true } } } }),
+      set: async () => ({ ok: false, error: { message: "rejected" } }),
+    },
+  };
+  const { props, store } = bootCard({ remote });
+  await new Promise((r) => setTimeout(r, 10));
+  props.editKey("BRAVE_API_KEY", "sk-test");
+  await props.save();
+  assert.equal(store.getSnapshot().failed, true);
+  assert.equal(store.getSnapshot().failedKeys.length, 1);
+  props.editKey("BRAVE_API_KEY", "");
+  const snap = store.getSnapshot();
+  assert.equal(snap.failed, false);
+  assert.deepEqual(snap.failedKeys, []);
+});
+
+test("clicking the selected label cancels a drag preview", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const nodes = flatten(component, props);
+  const input = nodes.find((n) => n.type === "input" && n.props.type === "range");
+  const labels = nodes.filter((n) => n.type === "button" && n.props.className === "wsc-sliderLabel");
+  const { parent, input: fake } = sliderHarness();
+  const dragged = fake(0);
+  input.props.ref.current = dragged;
+  props.edit("numResults", "40");
+  input.props.onChange({ currentTarget: dragged });
+  labels[1].props.onClick();
+  assert.equal(dragged.value, "1", "the range is restored to the committed stop");
+  assert.equal(parent.dataset.index, "1");
+  input.props.onBlur({ currentTarget: dragged });
+  assert.equal(store.getSnapshot().stagedText("intervention"), undefined);
+  assert.equal(store.getSnapshot().stagedText("numResults"), "40", "cancelled preview must not drop drafts");
+});
+
+test("a pending keyboard settle cannot commit through a later label click", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const nodes = flatten(component, props);
+  const input = nodes.find((n) => n.type === "input" && n.props.type === "range");
+  const labels = nodes.filter((n) => n.type === "button" && n.props.className === "wsc-sliderLabel");
+  const { input: fake } = sliderHarness();
+  const keyboard = fake(0);
+  input.props.ref.current = keyboard;
+  props.edit("numResults", "40");
+  input.props.onKeyUp({ currentTarget: keyboard, key: "ArrowRight" });
+  labels[1].props.onClick();
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(store.getSnapshot().stagedText("intervention"), undefined);
+  assert.equal(store.getSnapshot().stagedText("numResults"), "40", "the old settle must not drop drafts");
+});
+
+test("dragging after a keyboard settle wins over the old timer", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  const { input: fake } = sliderHarness();
+  const keyboard = fake(0);
+  input.props.ref.current = keyboard;
+  props.edit("numResults", "40");
+  input.props.onKeyUp({ currentTarget: keyboard, key: "ArrowRight" });
+  input.props.onChange({ currentTarget: fake(2) });
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(store.getSnapshot().stagedText("intervention"), undefined, "the old official settle is cancelled");
+  assert.equal(store.getSnapshot().stagedText("numResults"), "40");
+  input.props.onPointerUp({ currentTarget: fake(2) });
+  assert.equal(store.getSnapshot().stagedText("intervention"), "thorough");
+});
+
+test("a slow failed toggle cannot repaint after a newer success", async () => {
+  let writes = 0;
+  const { props, store } = bootCard({
+    settings: { ok: true, writable: true, value: { numResults: 8, enableBrave: false }, base: {}, user: {}, revision: 0 },
+    onWrite: async () => {
+      writes += 1;
+      if (writes === 1) {
+        await new Promise((r) => setTimeout(r, 20));
+        return { ok: false, code: "SETTINGS_CONFLICT", error: "changed" };
+      }
+      return { ok: true, writable: true, value: { numResults: 8, enableBrave: true }, base: {}, user: {}, revision: 2 };
+    },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  await Promise.all([props.setToggle("enableBrave", true), props.setToggle("enableBrave", true)]);
+  const snap = store.getSnapshot();
+  assert.equal(snap.value.enableBrave, true);
+  assert.equal(snap.toggleFailed, false, "the newer success wins");
+  assert.equal(snap.toggleConflict, false);
+});
+
+test("a failed credential read stays unknown and a later save clears it", async () => {
+  const remote = {
+    $on: () => () => {},
+    credentials: {
+      describe: async () => ({ ok: false, error: { message: "nope" } }),
+      set: async () => ({ ok: true }),
+    },
+  };
+  const { props, store, component } = bootCard({ remote });
+  await new Promise((r) => setTimeout(r, 20));
+  const failed = store.getSnapshot();
+  assert.equal(failed.keyState.BRAVE_API_KEY.configured, undefined, "a read failure is not 'not configured'");
+  assert.ok(failed.readErrors.some((f) => f.ref === "BRAVE_API_KEY"));
+  const badge = flatten(component, props).find((n) =>
+    n.type === "span" && n.props.className === "wsc-badge" && n.props.children === "keyReadFailedBadge"
+  );
+  assert.ok(badge, "the badge explains the read failure");
+  props.editKey("BRAVE_API_KEY", "sk-test");
+  await props.save();
+  const saved = store.getSnapshot();
+  assert.equal(saved.keyState.BRAVE_API_KEY.configured, true);
+  assert.equal(saved.readErrors.some((f) => f.ref === "BRAVE_API_KEY"), false);
+});
