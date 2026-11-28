@@ -1,52 +1,87 @@
 #!/usr/bin/env bash
-# Regenerate the authoritative patch from the publish repo and verify it
-# reconstructs src-work byte-for-byte on a clean npm 2.8.4 tree.
-# Run this AFTER every code commit, otherwise the patch becomes a stale
-# snapshot that reintroduces fixed bugs (A1 finding, 2026-11-15).
+# Regenerate both authoritative patches from the working tree and verify that
+# each one reconstructs `lib/` byte-for-byte from its published npm base.
+#
+#   g5/G5-authoritative.patch          npm 2.8.4  -> current tree (legacy line)
+#   g5/patch-288-from-clean-288.patch  npm 2.8.8  -> current tree (profile pin)
+#
+# Run this AFTER every code change: a stale patch silently rolls fixed bugs back
+# when `restore-plugin.sh` is used. The script never leaves a half-written patch
+# in place — it writes to a temp file, verifies the applied tree, then moves it.
+#
+# Base trees are read from (in order): $DSH_WEBSEARCH_BASE288 / _BASE284, local
+# artifact directories, or `npm pack <version>`.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Works both from the artifacts tree (g5/) and from the checked-out branch
-# (where publish-work/repo is the repository root itself).
-if [[ -d "$HERE/../publish-work/repo/.git" ]]; then
-  R="$(cd "$HERE/../publish-work/repo" && pwd)"
-  S="$(cd "$HERE/../src-work/plugin" && pwd)"
-  BASE="$HERE/../publish-work/base/package"
-elif [[ -d "$HERE/../.git" ]]; then
-  R="$(cd "$HERE/.." && pwd)"
-  S="/home/ova/dsh/.artifacts/websearch-research/src-work/plugin"
-  BASE="/home/ova/dsh/.artifacts/websearch-research/publish-work/base/package"
-else
-  echo "cannot locate the publish repo from $HERE" >&2; exit 1
+ROOT="$(cd "$HERE/.." && pwd)"
+OUT288="$HERE/patch-288-from-clean-288.patch"
+OUT_G5="$HERE/G5-authoritative.patch"
+BASELINE_COMMIT=d2602823
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+fetch_base() {
+  local version="$1" envvar="$2" out="$3"
+  local configured="${!envvar:-}"
+  for candidate in "$configured" "$HERE/base$version/package" "$ROOT/../../g5/base$version/package" \
+                   "$ROOT/../../publish-work/base/package"; do
+    if [[ -n "$candidate" && -d "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  echo "fetching @240xu/dsh-websearch@$version via npm pack" >&2
+  mkdir -p "$out"
+  (cd "$out" && npm pack "@240xu/dsh-websearch@$version" --silent >/dev/null)
+  local tgz
+  tgz="$(find "$out" -maxdepth 1 -name '*.tgz' | head -1)"
+  [[ -n "$tgz" ]] || { echo "cannot fetch base $version" >&2; return 1; }
+  tar -xzf "$tgz" -C "$out"
+  echo "$out/package"
+}
+
+verify_patch() {
+  local patch="$1" base="$2" label="$3" work
+  work="$(mktemp -d "${TMP}/verify.XXXXXX")"
+  cp -a "$base/." "$work/"
+  (cd "$work" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base \
+    && git apply --check "$patch" && git apply "$patch")
+  local total=0 matched=0 file
+  while IFS= read -r file; do
+    total=$((total + 1))
+    if cmp -s "$work/$file" "$ROOT/$file"; then
+      matched=$((matched + 1))
+    else
+      echo "DIFF $file" >&2
+    fi
+  done < <(grep '^diff --git' "$patch" | sed 's#^diff --git a/##; s# b/.*##')
+  echo "$label: $matched/$total files byte-identical ($(grep -c '^diff --git' "$patch") segments, $(wc -l < "$patch") lines)"
+  [[ "$matched" -eq "$total" && "$total" -gt 0 ]]
+}
+
+BASE288="$(fetch_base 2.8.8 DSH_WEBSEARCH_BASE288 "$TMP/base288")"
+BASE284="$(fetch_base 2.8.4 DSH_WEBSEARCH_BASE284 "$TMP/base284")"
+
+# 2.8.8 -> working tree: stage the current lib over a clean 2.8.8 checkout.
+WORK288="$(mktemp -d "${TMP}/gen288.XXXXXX")"
+cp -a "$BASE288/." "$WORK288/"
+(cd "$WORK288" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base)
+rm -rf "$WORK288/lib"
+cp -a "$ROOT/lib" "$WORK288/lib"
+(cd "$WORK288" && git add -A && git diff --cached -- lib > "$TMP/p288.patch")
+verify_patch "$TMP/p288.patch" "$BASE288" "2.8.8 patch"
+mv "$TMP/p288.patch" "$OUT288"
+
+# 2.8.4 -> working tree: a full diff from the import commit, lib only.
+git -C "$ROOT" diff "$BASELINE_COMMIT" -- lib > "$TMP/g5.patch"
+verify_patch "$TMP/g5.patch" "$BASE284" "G5 (2.8.4 baseline)"
+mv "$TMP/g5.patch" "$OUT_G5"
+
+# Keep the artifacts-tree copies identical when this checkout is the publish repo.
+ALT="$ROOT/../../g5"
+if [[ -d "$ALT" && "$ALT" != "$HERE" ]]; then
+  cp "$OUT288" "$ALT/patch-288-from-clean-288.patch"
+  cp "$OUT_G5" "$ALT/G5-authoritative.patch"
+  echo "artifacts copies synced: $ALT"
 fi
-G="$HERE"
-OUT="$G/G5-authoritative.patch"
-
-# `.gitignore` is publish-repo bookkeeping (it only ignores node_modules to
-# keep the branch clean); it is NOT part of the plugin patch and must not be
-# applied to the installed tree. Keep the range to the shipped surface.
-git -C "$R" diff d2602823 HEAD -- lib tests README.md package.json > "$OUT"
-[[ "$(grep -c '^diff --git' "$OUT")" -ge 35 ]] || { echo "patch has fewer than 35 segments" >&2; exit 1; }
-
-V="$(mktemp -d)"; trap 'rm -rf "$V"' EXIT
-cp -a "$BASE/." "$V/"
-(cd "$V" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm base \
-  && git apply --check "$OUT" 2>/dev/null && git apply "$OUT" 2>/dev/null)
-
-MOD="lib/util/egress-fetch.js lib/util/mcp-client.js lib/util/failure-label.js lib/index.js lib/client.js lib/cache.js lib/health.js lib/history.js lib/provider.js lib/settings-api.js lib/breaker.js lib/backends/exa.js lib/backends/parallel.js lib/backends/tavily.js lib/backends/serper.js lib/backends/brave.js lib/backends/mojeek.js lib/backends/ddg.js lib/backends/searxng.js lib/backends/openai.js lib/backends/anthropic-like.js README.md package.json lib/util/namespace.js lib/util/web-error.js lib/backends/firecrawl.js lib/backends/tinyfish.js lib/trust.js tests/lead-20261106.test.js tests/lead-20261107.test.js tests/lead-20261107-p0.test.js tests/lead-20261108-interaction.test.js tests/lead-20261108-quota.test.js tests/lead-20261108-sse.test.js tests/lead-20261109-3b-runtime.test.js tests/settings-api.test.js tests/relink-test-deps.sh tests/client-behavior.test.js"
-n=0; for f in $MOD; do cmp -s "$V/$f" "$S/$f" && n=$((n+1)) || echo "DIFF $f" >&2; done
-echo "G5-authoritative.patch: $(wc -l < "$OUT") lines, $(grep -c '^diff --git' "$OUT") segments, $n/38 byte-identical"
-[[ "$n" -eq 38 ]] || exit 1
-
-# Keep the artifacts-tree copy and the branch checkout byte-identical.
-# A1 (2026-11-15) found these two drifted when refresh ran from one side only.
-OTHER=""
-if [[ "$OUT" == "$R/g5/G5-authoritative.patch" ]]; then
-  OTHER="/home/ova/dsh/.artifacts/websearch-research/g5/G5-authoritative.patch"
-else
-  OTHER="$R/g5/G5-authoritative.patch"
-fi
-if [[ -f "$(dirname "$OTHER")/refresh.sh" || -d "$(dirname "$OTHER")" ]]; then
-  cp "$OUT" "$OTHER"
-  cmp -s "$OUT" "$OTHER" || { echo "two authoritative copies diverged" >&2; exit 1; }
-  echo "both copies identical: $(md5sum "$OUT" | cut -c1-12)"
-fi
+echo "patches refreshed: $OUT288 ; $OUT_G5"

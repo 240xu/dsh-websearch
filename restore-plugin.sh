@@ -8,23 +8,32 @@
 #
 # Run this when `grep -c 'req.resume()' .../lib/settings-api.js` returns 0.
 set -euo pipefail
-D=/home/ova/dsh/.artifacts/websearch-research
-PF=/home/dsh/.dsh/profiles/web
+# This script ships inside the publish repo; derive the artifacts root from it
+# unless the caller points at another layout.
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+D=${DSH_WEBSEARCH_ARTIFACTS:-$(cd "$ROOT/../.." && pwd)}
+PF=${DSH_PROFILE_DIR:-/home/dsh/.dsh/profiles/web}
+NODE=${NODE:-/opt/node24/bin/node}
+PNPM=${PNPM:-/opt/node22/lib/node_modules/pnpm/bin/pnpm.cjs}
 # The patch file, the dependency pin, and the patchedDependencies key must all
 # name the SAME version, or pnpm refuses every operation in this profile with
 # ERR_PNPM_UNUSED_PATCH. Nothing here is hardcoded to one release: pick the
 # patch that matches the pin instead of silently reverting to an older one.
 PF_PIN=$(python3 -c "import json,pathlib;print(json.loads(pathlib.Path('$PF/package.json').read_text())['dependencies']['@240xu/dsh-websearch'])")
 VER="${1:-$PF_PIN}"
-G5="$D/g5/G5-authoritative.patch"
-if [[ -f "$D/g5/patch-288-from-clean-288.patch" && "$VER" == "2.8.8" ]]; then
-  G5="$D/g5/patch-288-from-clean-288.patch"
+G5DIR="$D/g5"
+[[ -d "$G5DIR" ]] || G5DIR="$ROOT/g5"
+G5="$G5DIR/G5-authoritative.patch"
+if [[ -f "$G5DIR/patch-288-from-clean-288.patch" && "$VER" == "2.8.8" ]]; then
+  G5="$G5DIR/patch-288-from-clean-288.patch"
 fi
 PATCH="$PF/patches/@240xu__dsh-websearch@$VER.patch"
 
 echo "== 1/5 verify patch source"
 [[ -f "$G5" ]] || { echo "missing $G5" >&2; exit 1; }
-[[ "$(grep -c '^diff --git' "$G5")" -ge 35 ]] || { echo "G5 has too few segments" >&2; exit 1; }
+# The 2.8.8 runtime patch has ~30 segments, the 2.8.4 G5 ~28; a hard 35 gate
+# rejected every valid 2.8.8 restore.
+[[ "$(grep -c '^diff --git' "$G5")" -ge 20 ]] || { echo "patch has too few segments" >&2; exit 1; }
 mkdir -p "$PF/patches"; cp "$G5" "$PATCH"
 
 echo "== 2/5 pin $VER and enforce the patch"
@@ -53,8 +62,6 @@ PY
 
 echo "== 3/5 recompute the lockfile (does not touch node_modules)"
 cd "$PF"
-NODE=/opt/node24/bin/node
-PNPM=/opt/node22/lib/node_modules/pnpm/bin/pnpm.cjs
 HTTP_PROXY=http://172.30.66.1:1091 HTTPS_PROXY=http://172.30.66.1:1091 \
   "$NODE" "$PNPM" install --lockfile-only --no-frozen-lockfile
 
@@ -74,9 +81,16 @@ for probe in 'req.resume()' 'sessionCacheKey' 'webCtx.effect'; do
   c=$(grep -rc "$probe" "$I/lib" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
   [[ "$c" -gt 0 ]] || { echo "patch marker missing: $probe" >&2; exit 1; }
 done
-n=0
+# Compare against the canonical source tree, not the retired src-work copy:
+# src-work stopped tracking HEAD on 2026-11-23, so a correct restore looked
+# like a partial one and a wrong restore could still print a number.
+SOURCE="$D/publish-work/repo"
+[[ -d "$SOURCE/lib" ]] || SOURCE="$D/src-work/plugin"
+total=0; n=0
 for f in $(grep '^diff --git' "$PATCH" | sed 's#diff --git a/##; s# b/.*##'); do
-  cmp -s "$I/$f" "$D/src-work/plugin/$f" 2>/dev/null && n=$((n+1))
+  total=$((total+1))
+  cmp -s "$I/$f" "$SOURCE/$f" 2>/dev/null && n=$((n+1))
 done
-echo "patched tree restored: $n segments byte-identical"
+echo "patched tree restored: $n/$total files byte-identical to $SOURCE"
+[[ "$n" -eq "$total" ]] || { echo "restored tree differs from the canonical source" >&2; exit 1; }
 echo "now restart the service:  sudo systemctl restart dsh-web.service"

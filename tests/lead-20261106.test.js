@@ -207,7 +207,7 @@ test("client.js issue #8: credential save path is actually usable on DSH 0.2.x",
   assert.match(src, /let readFailed = false;/);
   assert.match(src, /if \(res !== null && typeof res === "object" && res\.ok === false\) \{\s*readFailed = true;/);
   assert.match(src, /if \(!readFailed && view === undefined && this\.connection/);
-  assert.match(src, /if \(!readFailed && view !== undefined\)/);
+  assert.match(src, /if \(!readFailed && view !== undefined && seq === this\.credSeq\.get\(ref\)\)/);
 });
 
 // The real writeCredential lives inside the bundled client module. Pin the

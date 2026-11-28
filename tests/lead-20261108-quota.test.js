@@ -21,8 +21,10 @@ test("rateLimited() routes on structured fields, with a narrow legacy fallback",
   assert.equal(rateLimited(new Error("fetch failed")), false);
 });
 
-test("retryAfterMsFrom() falls back to 60s when no header reaches WebError", () => {
-  assert.equal(retryAfterMsFrom(new Error("HTTP 429")), 60_000);
+test("retryAfterMsFrom() reports no explicit window when the header is absent", () => {
+  // The breaker owns the fallback: it uses the configured cooldown, so
+  // `breakerCooldownMs: 0` can mean "count only" even for a bare 429.
+  assert.equal(retryAfterMsFrom(new Error("HTTP 429")), undefined);
   assert.equal(retryAfterMsFrom({ retryAfter: 12 }), 12_000);
   assert.equal(retryAfterMsFrom({ cause: { response: { headers: { get: () => "5" } } } }), 5_000);
 });
@@ -109,7 +111,7 @@ test("numResults: host cap and user setting are both honoured by min()", async (
 test("retryAfterMsFrom: an http-date in the past falls back, not to a zero window", () => {
   // R1 复核 B-1: Date.parse succeeds on a past date but Math.max(0, ...) used
   // to produce a 0ms cooldown, effectively disabling the breaker.
-  assert.equal(retryAfterMsFrom({ retryAfter: "Wed, 21 Oct 2015 07:28:00 GMT" }), 60_000);
+  assert.equal(retryAfterMsFrom({ retryAfter: "Wed, 21 Oct 2015 07:28:00 GMT" }), undefined);
   // A genuinely future http-date still yields a positive window.
   assert.ok(retryAfterMsFrom({ retryAfter: new Date(Date.now() + 30_000).toUTCString() }) > 0);
 });
@@ -117,7 +119,7 @@ test("retryAfterMsFrom: an http-date in the past falls back, not to a zero windo
 // R1: guard against a hostile/bogus Retry-After disabling a backend for years,
 // and ensure 403 (often an invalid key) is not classified as quota.
 test("retryAfterMsFrom caps oversized cooldowns; 403 is not quota", () => {
-  assert.equal(retryAfterMsFrom({ retryAfter: "999999999" }), 60_000);
+  assert.equal(retryAfterMsFrom({ retryAfter: "999999999" }), undefined);
   assert.equal(retryAfterMsFrom({ retryAfter: "86400" }), 86_400_000); // exactly 1 day is allowed
   const err403 = webErrorFromResponse(new Response("forbidden", { status: 403 }), "forbidden", "Brave");
   assert.equal(err403.code, "WEB_PROVIDER_ERROR");

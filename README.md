@@ -28,6 +28,8 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 | `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/anthropic/v1/messages` | Anthropic Messages API + native `web_search_20250305` server tool, model `deepseek-v4-flash` | 与 dav web-search-deepseek 同机制 |
 | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/messages` | Anthropic Messages + `web_search_20250305`, model `claude-sonnet-4-6` | Claude Code 同机制 |
 | `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` | Responses API native `web_search` tool, parse `url_citation` annotations | Codex 同机制 |
+| `firecrawl` | none/optional | `https://mcp.firecrawl.dev/v2/mcp` | streamable-http MCP, hosted keyless tier (metered), optional key raises limits | 默认关,计量型 |
+| `tinyfish` | none/optional | `https://agent.tinyfish.ai/mcp` | streamable-http MCP, keyless 30/min · 50/day, optional key raises limits | 默认关,计量型 |
 
 > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
 
@@ -43,7 +45,7 @@ attached here. Downstream routing (`failure-label.js`,
 the breaker, 3b) reads those fields, never the message text. Do not hand-write
 `new WebError(..., "WEB_PROVIDER_ERROR")` for an HTTP failure — that drops the
 status and makes a 429 look like an ordinary outage. A source-level test pins
-all 11 call sites.
+every `webErrorFromResponse` call site.
 
 ### SearXNG 实例 | Public instances
 
@@ -215,7 +217,7 @@ pnpm install
 - **Deterministic rerank (optional)**: query-term overlap scoring (title x3 / snippet x2 / URL x1); stable ties preserve fan-out priority — same input always yields the same order.
 - **Honest timeouts**: each backend runs under an internal abort controller merged into the caller signal; when only the internal timer fires, the failure is reclassified as WEB_PROVIDER_ERROR ("backend <id> timed out") instead of being masked as a user cancellation.
 - **Concurrency & Timeout Control**: `concurrency` (default 6) limits simultaneous calls; `backendTimeoutMs` (default 30s) caps each backend.
-- **Streamable-http MCP, custom handshake**: `lib/util/mcp-client.js` implements `initialize → notifications/initialized → tools/call` with `Mcp-Session-Id` header caching against Exa and Parallel — no dependency on the full MCP SDK.
+- **Streamable-http MCP, custom handshake**: `lib/util/mcp-client.js` implements `initialize → notifications/initialized → tools/call` with `Mcp-Session-Id` header caching and `MCP-Protocol-Version` after initialization, against Exa, Parallel, Firecrawl and TinyFish — no dependency on the full MCP SDK.
 - **Host-logger diagnostics**: each backend routes request/outcome through lib/util/log.js to the host logger (ctx.logger), best-effort and never thrown - deliberately NOT session events: the session event vocabulary is a closed set third-party plugins must not extend (an unknown envelope type makes the whole session log unreadable).
 
 ## Architecture | 架构
@@ -227,7 +229,7 @@ lib/
   util/
     abort.js               # isAbortError / searchAborted / throwIfSearchAborted / maybeAbortError
     mcp-client.js          # streamable-http MCP client (initialize + tools/call + session cache)
-    log.js                 # recordBackendRequest / recordBackendOutcome → session event log
+    log.js                 # recordBackendRequest / recordBackendOutcome → host logger (never session events)
   backends/
     exa.js                 # Exa (web_search_exa) via mcp-client
     parallel.js            # Parallel (web_search) via mcp-client
@@ -251,7 +253,7 @@ tests/
 node --test tests/
 ```
 
-当前 81/81 pass（`node --test tests/*.test.js`）。
+当前 199/199 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 
@@ -264,7 +266,7 @@ live service before running the suite:
 ```bash
 bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 find node_modules/@deepseek-ai -xtype l   # expect no output
-node --test tests/*.test.js                 # 81/81
+node --test tests/*.test.js                 # 199/199
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。

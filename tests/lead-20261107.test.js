@@ -67,19 +67,16 @@ test("apply() resolves live settings-service values, not stale initial config", 
   }
 });
 
-// The regex lives inline in provider.js; extract it from the source instead
-// of re-typing it here (a hard-coded copy would make this test tautological).
-test("RFC1918 plain-http baseURL trust gate: regex extracted from provider.js", () => {
-  const src = readFileSync(new URL("../lib/provider.js", HERE), "utf8");
-  const m = src.match(/const privHost = bu \? (\/.*?\/)\.test\(bu\.hostname\)/);
-  assert.ok(m, "privHost regex must be present in provider.js");
-  const re = new RegExp(m[1].slice(1, -1));
+test("RFC1918 plain-http baseURL trust gate is behavioural", async () => {
+  const { invalidBaseURL } = await import("../lib/util/base-url.js");
   for (const host of ["localhost", "127.0.0.1", "10.1.2.3", "192.168.1.100", "192.168.0.105", "172.16.5.4", "172.31.255.254"]) {
-    assert.equal(re.test(host), true, `${host} must be recognised as private`);
+    assert.equal(invalidBaseURL("http://" + host + ":8080"), undefined, `${host} must be recognised as private`);
   }
   for (const host of ["8.8.8.8", "192.169.1.1", "172.32.0.1", "example.com", "searx.be", "192.168.1.1.evil.com"]) {
-    assert.equal(re.test(host), false, `${host} must NOT be treated as private`);
+    assert.match(String(invalidBaseURL("http://" + host)), /https required/, `${host} must NOT be treated as private`);
   }
+  assert.match(String(invalidBaseURL("http://169.254.169.254")), /link-local|https required/);
+  assert.match(String(invalidBaseURL("https://user:pass@example.com")), /credentials/);
 });
 
 test("current() and the HTTP bridge share findPluginRow; no cross-namespace hijack", async () => {

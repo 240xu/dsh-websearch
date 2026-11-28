@@ -301,8 +301,8 @@ test("a failed toggle resyncs from the host and logs only the classification", a
   assert.equal(posts, 1, "the toggle is written once");
   assert.ok(gets >= 2, "a failed toggle reloads from the host instead of trusting the stale value");
   const snap = store.getSnapshot();
-  assert.equal(snap.failed, true);
-  assert.equal(snap.conflict, true, "SETTINGS_CONFLICT is classified");
+  assert.equal(snap.toggleFailed, true);
+  assert.equal(snap.toggleConflict, true, "SETTINGS_CONFLICT is classified");
   assert.ok(warnings.length > 0, "the failure is logged");
   const logged = JSON.stringify(warnings);
   assert.ok(logged.includes("conflict"), "the log records the classification only");
@@ -676,4 +676,182 @@ test("R3-3 every key the card renders through t() exists in the dictionaries", a
   const known = new Set([...Object.keys(zh), ...Object.keys(en)]);
   const missing = [...new Set(used)].filter((k) => !known.has(k));
   assert.deepEqual(missing, [], "the card must not render a literal key name");
+});
+
+/** Boot the module against a caller-supplied fetch, exposing the render entry. */
+function bootWithFetch(fetchImpl) {
+  const module = loadModule();
+  const registrations = [];
+  globalThis.fetch = fetchImpl;
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_n, fn) => { fn(); }, register: (desc, component) => { registrations.push({ desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  const { desc, component } = registrations.find((r) => r && r.component) ?? {};
+  const props = desc.inject();
+  return { module, props, component, store: props.hooks.unifiedSearchCard };
+}
+
+/** Render the captured component with the slot props and flatten the tree. */
+function flatten(component, props) {
+  const hostProps = { ...props, t: (key) => key };
+  hostProps.useUnifiedSearchCard = () => props.hooks.unifiedSearchCard.getSnapshot();
+  const nodes = [];
+  const walk = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node.type === "function") { walk(node.type(node.props ?? {})); return; }
+    nodes.push(node);
+    walk(node.props?.children ?? []);
+  };
+  walk(component(hostProps));
+  return nodes;
+}
+
+test("a 404/503 snapshot renders an explicit unavailable state, not a fabricated 0/13 with live controls", async () => {
+  const { props, component } = bootWithFetch(async () => ({
+    ok: true,
+    status: 503,
+    json: async () => ({ ok: false, writable: false, reason: "settings-unavailable" }),
+  }));
+  await new Promise((r) => setTimeout(r, 20));
+  const snapshot = props.hooks.unifiedSearchCard.getSnapshot();
+  assert.equal(snapshot.unavailable, true);
+  const nodes = flatten(component, props);
+  assert.equal(nodes.some((n) => n.type === "input"), false, "no live inputs when there is no snapshot");
+  assert.ok(nodes.some((n) => n.type === "button" && n.props.children === "retry"), "the card offers a retry");
+});
+
+test("a read-only snapshot disables every control through the form fieldset", async () => {
+  const { props, component } = bootWithFetch(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, writable: false, value: { numResults: 8, enableBrave: false }, base: {}, user: {}, revision: 1 }),
+  }));
+  await new Promise((r) => setTimeout(r, 20));
+  const nodes = flatten(component, props);
+  const fieldsets = nodes.filter((n) => n.type === "fieldset");
+  assert.equal(fieldsets.length, 1);
+  assert.equal(fieldsets[0].props.disabled, true, "a read-only host must not leave live toggles");
+});
+
+test("a stale settings load cannot roll back a newer write", async () => {
+  let releaseGet;
+  const pendingGet = new Promise((resolve) => { releaseGet = resolve; });
+  let firstGet = true;
+  const { props, store } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST" && firstGet) {
+      firstGet = false;
+      const payload = await pendingGet;
+      return { ok: true, status: 200, json: async () => payload };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 8, enableBrave: true }, base: {}, user: {}, revision: 1 }) };
+  });
+  await props.setToggle("enableBrave", true);
+  releaseGet({ ok: true, writable: true, value: { numResults: 8, enableBrave: false }, base: {}, user: {}, revision: 0 });
+  await new Promise((r) => setTimeout(r, 20));
+  const snapshot = store.getSnapshot();
+  assert.equal(snapshot.value.enableBrave, true, "the stale load must not flip the toggle back");
+  assert.equal(snapshot.revision, 1, "the stale revision must not be restored");
+});
+
+test("a save conflict refreshes the revision so the retry can succeed", async () => {
+  let posts = 0;
+  let gets = 0;
+  const bodies = [];
+  const { props, store } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") {
+      gets += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, writable: true, value: { numResults: gets === 1 ? 8 : 5 }, base: {}, user: {}, revision: gets === 1 ? 0 : 1 }),
+      };
+    }
+    posts += 1;
+    bodies.push(JSON.parse(init.body));
+    if (posts === 1) {
+      return { ok: false, status: 409, json: async () => ({ ok: false, code: "SETTINGS_CONFLICT" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 3 }, base: {}, user: {}, revision: 2 }) };
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("numResults", "3");
+  await props.save();
+  assert.equal(store.getSnapshot().conflict, true, "the conflict is reported");
+  assert.equal(store.getSnapshot().revision, 1, "the conflict triggers a reload with the host revision");
+  await props.save();
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].expectedRevision, 1, "the retry must use the refreshed revision");
+});
+
+test("the card CSS uses only theme tokens the DSH design system defines", async () => {
+  // Token names verified against dsh-client-ui-theme's design-platform.css
+  // (132 aliases). An undefined custom property makes the whole declaration
+  // invalid at computed-value time: the Save button lost its background and
+  // every input/badge lost its border.
+  const DEFINED = new Set([
+    "brand-primary",
+    "bg-layer-1",
+    "bg-module-platform",
+    "border-l2",
+    "label-primary",
+    "label-primary-foreground",
+    "button-primary-fill",
+    "button-primary-hover",
+    "link",
+    "state-success-primary",
+  ]);
+  const styles = [];
+  globalThis.document = {
+    querySelector: () => null,
+    createElement: () => ({ dataset: {}, textContent: "" }),
+    head: { appendChild: (tag) => styles.push(tag) },
+  };
+  try {
+    loadModule();
+  } finally {
+    delete globalThis.document;
+  }
+  const css = styles[0]?.textContent ?? "";
+  const tokens = [...new Set(css.match(/--dsw-alias-[a-z0-9-]+/g) ?? [])]
+    .map((t) => t.replace("--dsw-alias-", ""));
+  assert.ok(tokens.length >= 8, "the stylesheet renders and carries the theme tokens");
+  assert.deepEqual(tokens.filter((t) => !DEFINED.has(t)), [], "every token must exist in the DSH theme");
+  for (const retired of ["accent-primary", "bg-subtle", "border-subtle"]) {
+    assert.equal(tokens.includes(retired), false, `${retired} is not defined by the theme`);
+  }
+});
+
+test("a credential read that started before a successful key save cannot unpaint it", async () => {
+  let releaseRead;
+  const gated = new Promise((resolve) => { releaseRead = resolve; });
+  let describeCalls = 0;
+  const { props, store } = bootCard({
+    settings: { ok: true, writable: true, value: { numResults: 8, enableBrave: true }, base: {}, user: {}, revision: 0 },
+    remote: {
+      credentials: {
+        describe: async ([ref]) => {
+          describeCalls += 1;
+          if (ref === "BRAVE_API_KEY" && describeCalls > 0) {
+            const configured = await gated;
+            return { ok: true, value: { credentials: { [ref]: { configured, writable: true } } } };
+          }
+          return { ok: true, value: { credentials: { [ref]: { configured: false, writable: true } } } };
+        },
+        set: async () => ({ ok: true }),
+      },
+    },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  props.editKey("BRAVE_API_KEY", "sk-live-test-key");
+  await props.save();
+  assert.equal(store.getSnapshot().keyState.BRAVE_API_KEY.configured, true, "the save repaints the badge");
+  releaseRead(false);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(store.getSnapshot().keyState.BRAVE_API_KEY.configured, true, "the stale read must not unpaint it");
 });

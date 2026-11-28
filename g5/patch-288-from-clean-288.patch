@@ -1,29 +1,67 @@
 diff --git a/lib/backends/anthropic-like.js b/lib/backends/anthropic-like.js
-index 1bde4ff..59ebf93 100644
+index 1bde4ff..c749e79 100644
 --- a/lib/backends/anthropic-like.js
 +++ b/lib/backends/anthropic-like.js
-@@ -17,6 +17,7 @@
+@@ -17,7 +17,9 @@
  
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { WebError } from "@deepseek-ai/dsh-web";
 +import { webErrorFromResponse } from "../util/web-error.js";
  import { egressFetch } from "../util/egress-fetch.js";
++import { describeError } from "../util/describe-error.js";
  
  /** Attribution header; bumped with the package version. */
-@@ -149,7 +150,7 @@ export function createAnthropicLikeBackend(spec) {
+ const UA = "dsh-websearch/2.3";
+@@ -128,16 +130,18 @@ export function createAnthropicLikeBackend(spec) {
+         });
+       } catch (err) {
+         if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
+-        hooks.recordOutcome?.({ status: "error", message: String(err?.message ?? err) });
++        hooks.recordOutcome?.({ status: "error", message: describeError(err) });
+         throw new WebError(
+-          `${id} search request failed: ${String(err?.message ?? err)}`,
++          `${id} search request failed: ${describeError(err)}`,
+           "WEB_PROVIDER_ERROR",
+           { cause: err },
+         );
+       }
+ 
+       if (!response.ok) {
+-        let message = `${id} API error (HTTP ${response.status})`;
++        // Same as openai: the label and status live in webErrorFromResponse,
++        // so this carries the upstream detail only.
++        let message = "";
+         try {
+           const parsed = await response.json();
+           const detail =
+@@ -148,8 +152,8 @@ export function createAnthropicLikeBackend(spec) {
+         } catch (err) {
            if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
          }
-         hooks.recordOutcome?.({ status: "error", message });
+-        hooks.recordOutcome?.({ status: "error", message });
 -        throw new WebError(message, "WEB_PROVIDER_ERROR");
++        hooks.recordOutcome?.({ status: "error", message: message === "" ? `HTTP ${response.status}` : message });
 +        throw webErrorFromResponse(response, message, id);
        }
  
        try {
+@@ -162,9 +166,9 @@ export function createAnthropicLikeBackend(spec) {
+           hooks.recordOutcome?.({ status: "error", message: err.message });
+           throw err;
+         }
+-        hooks.recordOutcome?.({ status: "error", message: String(err?.message ?? err) });
++        hooks.recordOutcome?.({ status: "error", message: describeError(err) });
+         throw new WebError(
+-          `${id} returned an unprocessable response body: ${String(err?.message ?? err)}`,
++          `${id} returned an unprocessable response body: ${describeError(err)}`,
+           "WEB_PROVIDER_ERROR",
+           { cause: err },
+         );
 diff --git a/lib/backends/brave.js b/lib/backends/brave.js
-index d5aff09..3ac71d6 100644
+index d5aff09..7585ac2 100644
 --- a/lib/backends/brave.js
 +++ b/lib/backends/brave.js
-@@ -6,6 +6,7 @@
+@@ -6,9 +6,11 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
@@ -31,7 +69,18 @@ index d5aff09..3ac71d6 100644
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { applyBraveFilters, normalizeFilters, safeSearchParams } from "../util/filters.js";
  import { egressFetch } from "../util/egress-fetch.js";
-@@ -66,7 +67,7 @@ export const braveBackend = {
++import { describeError } from "../util/describe-error.js";
+ 
+ const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+ 
+@@ -60,13 +62,13 @@ export const braveBackend = {
+       });
+     } catch (error) {
+       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
+-      throw new WebError(`Brave Search request failed: ${error}`, "WEB_PROVIDER_ERROR", { cause: error });
++      throw new WebError(`Brave Search request failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+     }
+ 
      if (!response.ok) {
        const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
        hooks?.recordOutcome?.({ status: "error", message: `HTTP ${response.status}: ${text}` });
@@ -41,18 +90,45 @@ index d5aff09..3ac71d6 100644
  
      let data;
 diff --git a/lib/backends/ddg.js b/lib/backends/ddg.js
-index 3d122f8..f3a464f 100644
+index 8a0213a..8950c96 100644
 --- a/lib/backends/ddg.js
 +++ b/lib/backends/ddg.js
-@@ -8,6 +8,7 @@
+@@ -8,7 +8,9 @@
  import { searchAborted, isAbortError, throwIfSearchAborted } from "../util/abort.js";
  import { applyDdgFilters, normalizeFilters } from "../util/filters.js";
  import { WebError } from "@deepseek-ai/dsh-web";
 +import { webErrorFromResponse } from "../util/web-error.js";
  import { egressFetch } from "../util/egress-fetch.js";
- import { describeError } from "../util/describe-error.js";
++import { describeError } from "../util/describe-error.js";
  
-@@ -51,12 +52,16 @@ export const ddgBackend = {
+ export const DDG_ENDPOINT = "https://html.duckduckgo.com/html/";
+ 
+@@ -30,33 +32,38 @@ export const ddgBackend = {
+     throwIfSearchAborted(signal);
+     const params = new URLSearchParams({ q: request.query, b: Math.random().toString().slice(2) });
+     applyDdgFilters(params, normalizeFilters(request.filters));
+-    const body = params.toString();
++    const target = `${DDG_ENDPOINT}?${params.toString()}`;
+     hooks.recordRequest?.({ endpoint: DDG_ENDPOINT, toolName: "html", body: { q: request.query }, headers: {} });
+ 
+     let text;
+     try {
+-      const res = await egressFetch(DDG_ENDPOINT, {
+-        method: "POST",
++      // GET form: DDG's html endpoint still serves the same results page, and
++      // unlike the POST form it is not rejected by the endpoint's bot wall
++      // for non-browser clients (POST is JA3 + method double-gated).
++      const res = await egressFetch(target, {
++        method: "GET",
+         redirect: "error",
+         headers: {
+-          "Content-Type": "application/x-www-form-urlencoded",
+           "Accept": "text/html",
+           "User-Agent": "dsh-websearch/2.3",
+         },
+-        body,
+         ...(signal !== undefined ? { signal } : {}),
+       });
        if (!res.ok) {
          let detail = "";
          try { detail = (await res.text()).slice(0, 200); } catch {}
@@ -62,19 +138,75 @@ index 3d122f8..f3a464f 100644
        text = await res.text();
      } catch (err) {
        if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
-       hooks.recordOutcome?.({ status: "error", message: describeError(err) });
+-      hooks.recordOutcome?.({ status: "error", message: String(err?.message ?? err) });
++      hooks.recordOutcome?.({ status: "error", message: describeError(err) });
 +      // webErrorFromResponse() already produced a structured WebError with
 +      // status/code/rateLimited; re-wrapping it would drop those fields and
 +      // force the breaker back onto message-text classification.
 +      if (err instanceof WebError) throw err;
        throw new WebError(
-         `ddg search failed: ${describeError(err)}`,
+-        `ddg search failed: ${String(err?.message ?? err)}`,
++        `ddg search failed: ${describeError(err)}`,
          "WEB_PROVIDER_ERROR",
+         { cause: err },
+       );
+@@ -83,22 +90,33 @@ export const ddgBackend = {
+  */
+ export function parseDdgHtml(html, maxResults) {
+   if (!html) return [];
+-  // Result anchors: <a ... class="result__a" ... href="<url>">Title</a>
+-  const anchorRe = /<a\b[^>]*\bclass="[^"]*result__a[^"]*"[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+-  const sources = [];
++  // Collect every result anchor first. The attributes are matched
++  // independently of order: DDG has emitted href before class, and the old
++  // combined regex then returned zero results.
++  const anchors = [];
++  const anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+   let m;
+   while ((m = anchorRe.exec(html)) !== null) {
+-    const rawHref = m[1];
+-    const url = decodeDdgUddg(rawHref);
++    const attrs = m[1];
++    if (!/\bclass="[^"]*result__a[^"]*"/i.test(attrs)) continue;
++    const href = /\bhref="([^"]*)"/i.exec(attrs);
++    if (href === null) continue;
++    anchors.push({ href: href[1], title: m[2], start: m.index, end: m.index + m[0].length });
++  }
++  const sources = [];
++  for (const [index, anchor] of anchors.entries()) {
++    const url = decodeDdgUddg(anchor.href);
+     if (!url) continue;
+ 
+     // Title text: strip nested tags inside the anchor.
+-    const title = stripTags(m[2]).trim();
++    const title = stripTags(anchor.title).trim();
+ 
+-    // Snippet: search forward from this anchor for the nearest result__snippet.
+-    const after = html.slice(m.index + m[0].length);
+-    const snipRe = /<a\b[^>]*\bclass="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i;
+-    const snipM = snipRe.exec(after);
++    // Snippet: search only inside this result block, ending at the next
++    // result anchor. Scanning to the end of the document let a result with no
++    // snippet inherit the next result's snippet.
++    const blockEnd = index + 1 < anchors.length ? anchors[index + 1].start : html.length;
++    const block = html.slice(anchor.end, blockEnd);
++    const snipM = /<a\b[^>]*\bclass="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+     const snippet = snipM ? stripTags(snipM[1]).trim() : undefined;
+ 
+     const source = { url };
 diff --git a/lib/backends/exa.js b/lib/backends/exa.js
-index 3b80319..1d154f5 100644
+index 3c94ace..1d154f5 100644
 --- a/lib/backends/exa.js
 +++ b/lib/backends/exa.js
-@@ -60,7 +60,9 @@ export const exaBackend = {
+@@ -9,6 +9,7 @@
+ 
+ import { mcpCall } from "../util/mcp-client.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { describeError } from "../util/describe-error.js";
+ 
+ const EXA_ENDPOINT = "https://mcp.exa.ai/mcp";
+ const EXA_TOOL = "web_search_exa";
+@@ -59,11 +60,13 @@ export const exaBackend = {
  
      let result;
      try {
@@ -85,6 +217,11 @@ index 3b80319..1d154f5 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
+-        `exa search failed: ${String(err?.message ?? err)}`,
++        `exa search failed: ${describeError(err)}`,
+         "WEB_PROVIDER_ERROR",
+         { cause: err },
+       );
 diff --git a/lib/backends/firecrawl.js b/lib/backends/firecrawl.js
 new file mode 100644
 index 0000000..8132f47
@@ -219,18 +356,28 @@ index 0000000..8132f47
 +
 +export default firecrawlBackend;
 diff --git a/lib/backends/mojeek.js b/lib/backends/mojeek.js
-index 9699f72..8b94818 100644
+index 9699f72..59c7544 100644
 --- a/lib/backends/mojeek.js
 +++ b/lib/backends/mojeek.js
-@@ -6,6 +6,7 @@
+@@ -6,8 +6,10 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
 +import { webErrorFromResponse } from "../util/web-error.js";
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { egressFetch } from "../util/egress-fetch.js";
++import { describeError } from "../util/describe-error.js";
  
-@@ -68,7 +69,7 @@ export const mojeekBackend = {
+ const MOJEEK_ENDPOINT = "https://api.mojeek.com/v1/search";
+ 
+@@ -62,13 +64,13 @@ export const mojeekBackend = {
+       });
+     } catch (error) {
+       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
+-      throw new WebError("Mojeek request failed: " + error, "WEB_PROVIDER_ERROR", { cause: error });
++      throw new WebError("Mojeek request failed: " + describeError(error), "WEB_PROVIDER_ERROR", { cause: error });
+     }
+ 
      if (!response.ok) {
        const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
        hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
@@ -240,31 +387,78 @@ index 9699f72..8b94818 100644
  
      let data;
 diff --git a/lib/backends/openai.js b/lib/backends/openai.js
-index 037ea85..e2120d8 100644
+index 037ea85..8c5d070 100644
 --- a/lib/backends/openai.js
 +++ b/lib/backends/openai.js
-@@ -12,6 +12,7 @@
+@@ -12,7 +12,9 @@
  
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { WebError } from "@deepseek-ai/dsh-web";
 +import { webErrorFromResponse } from "../util/web-error.js";
  import { egressFetch } from "../util/egress-fetch.js";
++import { describeError } from "../util/describe-error.js";
  
  const UA = "dsh-websearch/2.3";
-@@ -103,7 +104,7 @@ export const openaiBackend = {
+ 
+@@ -82,16 +84,19 @@ export const openaiBackend = {
+       });
+     } catch (err) {
+       if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
+-      hooks.recordOutcome?.({ status: "error", message: String(err?.message ?? err) });
++      hooks.recordOutcome?.({ status: "error", message: describeError(err) });
+       throw new WebError(
+-        `openai search request failed: ${String(err?.message ?? err)}`,
++        `openai search request failed: ${describeError(err)}`,
+         "WEB_PROVIDER_ERROR",
+         { cause: err },
+       );
+     }
+ 
+     if (!response.ok) {
+-      let message = `openai API error (HTTP ${response.status})`;
++      // webErrorFromResponse already prefixes "<Label> API error (HTTP <n>):",
++      // so this is only the upstream detail. Defaulting it to the same sentence
++      // would print the status line twice.
++      let message = "";
+       try {
+         const parsed = await response.json();
+         const detail =
+@@ -102,8 +107,8 @@ export const openaiBackend = {
+       } catch (err) {
          if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
        }
-       hooks.recordOutcome?.({ status: "error", message });
+-      hooks.recordOutcome?.({ status: "error", message });
 -      throw new WebError(message, "WEB_PROVIDER_ERROR");
++      hooks.recordOutcome?.({ status: "error", message: message === "" ? `HTTP ${response.status}` : message });
 +      throw webErrorFromResponse(response, message, "OpenAI");
      }
  
      try {
+@@ -117,9 +122,9 @@ export const openaiBackend = {
+         hooks.recordOutcome?.({ status: "error", message: err.message });
+         throw err;
+       }
+-      hooks.recordOutcome?.({ status: "error", message: String(err?.message ?? err) });
++      hooks.recordOutcome?.({ status: "error", message: describeError(err) });
+       throw new WebError(
+-        `openai returned an unprocessable response body: ${String(err?.message ?? err)}`,
++        `openai returned an unprocessable response body: ${describeError(err)}`,
+         "WEB_PROVIDER_ERROR",
+         { cause: err },
+       );
 diff --git a/lib/backends/parallel.js b/lib/backends/parallel.js
-index 37a439d..125c10d 100644
+index 5dde6a0..125c10d 100644
 --- a/lib/backends/parallel.js
 +++ b/lib/backends/parallel.js
-@@ -48,7 +48,8 @@ export const parallelBackend = {
+@@ -16,6 +16,7 @@
+ import { randomUUID } from "node:crypto";
+ import { mcpCall } from "../util/mcp-client.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
++import { describeError } from "../util/describe-error.js";
+ 
+ const PARALLEL_ENDPOINT = "https://search.parallel.ai/mcp";
+ const PARALLEL_TOOL = "web_search";
+@@ -47,11 +48,12 @@ export const parallelBackend = {
  
      let result;
      try {
@@ -274,11 +468,25 @@ index 37a439d..125c10d 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
+-        `parallel search failed: ${String(err?.message ?? err)}`,
++        `parallel search failed: ${describeError(err)}`,
+         "WEB_PROVIDER_ERROR",
+         { cause: err },
+       );
 diff --git a/lib/backends/searxng.js b/lib/backends/searxng.js
-index 499763f..e8639e3 100644
+index 97faf2e..b235157 100644
 --- a/lib/backends/searxng.js
 +++ b/lib/backends/searxng.js
-@@ -13,6 +13,7 @@
+@@ -4,15 +4,45 @@
+  * Auth: None (public instances) or API key for private instances
+  * Free tier: Unlimited (public instances)
+  * Default instance: https://searx.be
++ *
++ * Health is SEMANTIC (route3/route6): HTTP 200 alone means nothing — public
++ * instances answer non-browser clients with anti-bot interstitials (searx.be
++ * served an 11 KB "Verifying your browser…" page with status 200). A response
++ * only counts as healthy when it parses as JSON AND carries a results[]
++ * array (validation); an empty results[] is a legitimate empty search.
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
@@ -286,31 +494,278 @@ index 499763f..e8639e3 100644
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { applySearxngFilters, normalizeFilters, safeSearchParams } from "../util/filters.js";
  import { egressFetch } from "../util/egress-fetch.js";
-@@ -105,6 +106,7 @@ export const searxngBackend = {
-       } finally {
-         clearTimeout(timer);
-       }
-+
-     }
-     throw lastErr ?? new WebError("SearXNG: no instance available (all cooling down)", "WEB_PROVIDER_ERROR");
-   },
-@@ -163,9 +165,9 @@ async function queryInstance(baseURL, request, signal, backendOpts, apiKey, hook
-     const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
-     hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
-     if (response.status === 429 || response.status >= 500) {
--      throw new WebError("SearXNG API error (HTTP " + response.status + "): " + text + " (instance struggling? point searxngBaseURL at another public instance)", "WEB_PROVIDER_ERROR");
-+      throw webErrorFromResponse(response, text + " (instance struggling? point searxngBaseURL at another public instance)", "SearXNG");
-     }
--    throw new WebError("SearXNG API error (HTTP " + response.status + "): " + text, "WEB_PROVIDER_ERROR");
-+    throw webErrorFromResponse(response, text, "SearXNG");
-   }
++import { describeError } from "../util/describe-error.js";
++import { invalidBaseURL } from "../util/base-url.js";
  
-   // 200 does not mean JSON (route3: searx.be 200 + HTML anti-bot page). Read
+ const DEFAULT_SEARXNG_URL = "https://searx.be";
+ 
++// Markers of anti-bot / interstitial pages seen across public instances
++// (route3 matrix: Anubis "Making sure you're not a bot!", Substation
++// "Security check", cookie challenges, searx.be's own "Verifying your
++// browser…"). Used only to CLASSIFY a non-JSON 200 for telemetry/health —
++// there is deliberately no evasion logic here (no JS, no cookie forging).
++const ANTI_BOT_RE = /(verifying your browser|making sure you.?re not a bot|checking you are not a bot|anubis|antibot|security check|just a moment|enable javascript|captcha|browser verification)/i;
++
++// Multi-instance failover (opt-in via searxngBaseURLs; route3 §5.4 draft).
++// Public-instance 429/anti-bot windows run 5-8+ minutes, so a failed instance
++// is rotated out (not retried every search); a success clears its cooldown.
++// Fail-open: when every candidate is cooling down we still try them all —
++// rotation must never make search worse than the single-instance status quo.
++const INSTANCE_COOLDOWN_MS = 10 * 60_000;
++const INSTANCE_ATTEMPT_TIMEOUT_MS = 4500;
++const instanceCooldowns = new Map(); // baseURL -> cooledUntil (epoch ms)
++
++/** Test hook: clear per-instance cooldowns between cases. */
++export function resetInstanceCooldowns() {
++  instanceCooldowns.clear();
++}
++
+ /** @type {import("../provider.js").Backend} */
+ export const searxngBackend = {
+   id: "searxng",
+@@ -26,77 +56,178 @@ export const searxngBackend = {
+   async search(request, signal, options, hooks) {
+     throwIfSearchAborted(signal);
+     const backendOpts = options ?? {};
+-
+     const baseURL = backendOpts.baseURL ?? DEFAULT_SEARXNG_URL;
+     const apiKey = await backendOpts.resolveApiKey?.(); // Optional for private instances
+-    
+-    const url = new URL(baseURL);
+-    url.pathname = url.pathname.replace(/\/+$/,"") + "/search";
+-    url.searchParams.set("q", request.query);
+-    url.searchParams.set("format", "json");
+-    // deepCoverage widens the category sweep (docs.searxng.org Search API:
+-    // categories is a comma-separated list) — breadth over one category.
+-    url.searchParams.set("categories", request.deepCoverage === true ? "general,news,it" : "general");
+-    // Language: settings/request filter wins, else historical "en" default.
+-    const filters = normalizeFilters(request.filters);
+-    url.searchParams.set("language", filters.lang ?? "en");
+-    applySearxngFilters(url, filters); // time_range (+ language override)
+-    // Safe-search defaults ON (preserves the previous hardcoded behavior).
+-    url.searchParams.set("safesearch", safeSearchParams("searxng", backendOpts.safeSearch ?? true) ?? "1");
+-    url.searchParams.set("pageno", "1");
+-
+-    const headers = {
+-      "Accept": "application/json",
+-      "User-Agent": "dsh-websearch/2.3",
+-    };
+-    
+-    if (apiKey) {
+-      headers["Authorization"] = "Bearer " + apiKey;
+-    }
+ 
+-    hooks?.recordRequest?.({
+-      endpoint: baseURL,
+-      toolName: "searxng_search",
+-      body: { q: request.query },
+-    });
++    const candidates = [];
++    for (const candidate of [baseURL, ...(Array.isArray(backendOpts.baseURLs) ? backendOpts.baseURLs : [])]) {
++      const trimmed = typeof candidate === "string" ? candidate.trim() : "";
++      if (trimmed !== "" && !candidates.includes(trimmed)) candidates.push(trimmed);
++    }
++    // Every candidate receives the configured API key, so every candidate
++    // passes the same trust gate as baseURL. This is checked here (not only in
++    // the provider) because searxngBaseURLs was the unvalidated path and the
++    // backend is also usable directly by embedders.
++    const invalid = candidates.map((c) => invalidBaseURL(c)).find((reason) => reason !== undefined);
++    if (invalid !== undefined) {
++      throw new WebError("SearXNG: invalid instance URL (" + invalid + ")", "WEB_PROVIDER_ERROR");
++    }
+ 
+-    let response;
+-    try {
+-      response = await egressFetch(url, {
+-        method: "GET",
+-        headers,
+-        redirect: "error",
+-
+-        signal,
+-      });
+-    } catch (error) {
+-      if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
+-      throw new WebError("SearXNG request failed: " + error +
+-        " (instance unreachable? point searxngBaseURL at another public instance)", "WEB_PROVIDER_ERROR", { cause: error });
++    // Single instance (the default): legacy path, unchanged semantics.
++    if (candidates.length === 1) {
++      const sources = await queryInstance(candidates[0], request, signal, backendOpts, apiKey, hooks);
++      return { sources };
+     }
+ 
+-    if (!response.ok) {
+-      const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
+-      hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
+-      if (response.status === 429 || response.status >= 500) {
+-        throw new WebError("SearXNG API error (HTTP " + response.status + "): " + text + " (instance struggling? point searxngBaseURL at another public instance)", "WEB_PROVIDER_ERROR");
++    // Multi-instance: sequential attempts (etiquette: never fan out against
++    // volunteer instances), per-instance soft timeout, cooldown on failure.
++    const now = Date.now();
++    const fresh = candidates.filter((u) => (instanceCooldowns.get(u) ?? 0) <= now);
++    const order = fresh.length > 0 ? fresh : candidates; // all cooled -> fail-open
++    let lastErr = null;
++    // A quota/rate-limit answer is the most actionable failure: it carries
++    // Retry-After and drives the breaker's quota cooldown. Taking whichever
++    // instance failed LAST would discard it whenever a later instance failed
++    // on plain network grounds.
++    const severity = (err) => (err?.code === "RATE_LIMIT" || err?.code === "QUOTA_EXCEEDED" || err?.rateLimited === true ? 2 : 1);
++    // Each instance attempt must fit inside what is left of the backend budget:
++    // three public instances at 4.5s each would otherwise need 13.5s while the
++    // provider abandons the backend at 8s, and the per-instance detail is lost
++    // to a generic "timed out after 8000ms".
++    const budgetMs = Number(backendOpts?.backendTimeoutMs);
++    const deadline = Number.isFinite(budgetMs) && budgetMs > 0 ? Date.now() + budgetMs : Infinity;
++    for (const [index, candidate] of order.entries()) {
++      throwIfSearchAborted(signal);
++      const remaining = deadline - Date.now();
++      if (remaining <= 0) break;
++      const share = remaining / Math.max(1, order.length - index);
++      const attemptMs = Math.max(1000, Math.min(INSTANCE_ATTEMPT_TIMEOUT_MS, share));
++      const attemptController = new AbortController();
++      const attemptSignal = signal ? AbortSignal.any([signal, attemptController.signal]) : attemptController.signal;
++      const timer = setTimeout(() => attemptController.abort(), attemptMs);
++      try {
++        const sources = await queryInstance(candidate, request, attemptSignal, backendOpts, apiKey, hooks);
++        instanceCooldowns.delete(candidate);
++        return { sources };
++      } catch (error) {
++        if (signal?.aborted === true) throw searchAborted(signal, error);
++        instanceCooldowns.set(candidate, Date.now() + INSTANCE_COOLDOWN_MS);
++        if (attemptController.signal.aborted && !(signal && signal.aborted)) {
++          const timedOutErr = new WebError(
++            `SearXNG instance attempt timed out after ${attemptMs}ms (${candidate})`,
++            "WEB_PROVIDER_ERROR",
++            { cause: error instanceof Error ? error : undefined },
++          );
++          if (lastErr === null || severity(timedOutErr) > severity(lastErr)) lastErr = timedOutErr;
++        } else if (error instanceof WebError && error.code !== "WEB_ABORTED") {
++          if (lastErr === null || severity(error) > severity(lastErr)) lastErr = error;
++        } else {
++          const netErr = new WebError(
++            "SearXNG instance failed (" + candidate + "): " + describeError(error),
++            "WEB_PROVIDER_ERROR",
++            { cause: error instanceof Error ? error : undefined },
++          );
++          if (lastErr === null || severity(netErr) > severity(lastErr)) lastErr = netErr;
++        }
++      } finally {
++        clearTimeout(timer);
+       }
+-      throw new WebError("SearXNG API error (HTTP " + response.status + "): " + text, "WEB_PROVIDER_ERROR");
+-    }
+ 
+-    let data;
+-    try {
+-      data = await response.json();
+-    } catch (error) {
+-      throw new WebError("SearXNG: invalid JSON response", "WEB_PROVIDER_ERROR", { cause: error });
+     }
+-
+-    const sources = parseSearxngResult(data, request.maxResults ?? 8);
+-    hooks?.recordOutcome?.({ status: "success", count: sources.length });
+-    return { sources };
++    throw lastErr ?? new WebError("SearXNG: no instance available (all cooling down)", "WEB_PROVIDER_ERROR");
+   },
+ };
+ 
++/**
++ * One request against one instance. Throws WebError on any failure; abort
++ * semantics are the caller's contract (signal passed through verbatim).
++ * @returns {Promise<Array>} sources
++ */
++async function queryInstance(baseURL, request, signal, backendOpts, apiKey, hooks) {
++  const url = new URL(baseURL);
++  url.pathname = url.pathname.replace(/\/+$/,"") + "/search";
++  url.searchParams.set("q", request.query);
++  url.searchParams.set("format", "json");
++  // deepCoverage widens the category sweep (docs.searxng.org Search API:
++  // categories is a comma-separated list) — breadth over one category.
++  url.searchParams.set("categories", request.deepCoverage === true ? "general,news,it" : "general");
++  // Language: settings/request filter wins, else historical "en" default.
++  const filters = normalizeFilters(request.filters);
++  url.searchParams.set("language", filters.lang ?? "en");
++  applySearxngFilters(url, filters); // time_range (+ language override)
++  // Safe-search defaults ON (preserves the previous hardcoded behavior).
++  url.searchParams.set("safesearch", safeSearchParams("searxng", backendOpts.safeSearch ?? true) ?? "1");
++  url.searchParams.set("pageno", "1");
++
++  const headers = {
++    "Accept": "application/json",
++    "User-Agent": "dsh-websearch/2.3",
++  };
++  if (apiKey) {
++    headers["Authorization"] = "Bearer " + apiKey;
++  }
++
++  hooks?.recordRequest?.({
++    endpoint: baseURL,
++    toolName: "searxng_search",
++    body: { q: request.query },
++  });
++
++  let response;
++  try {
++    response = await egressFetch(url, {
++      method: "GET",
++      headers,
++      redirect: "error",
++      signal,
++    });
++  } catch (error) {
++    if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
++    throw new WebError("SearXNG request failed: " + describeError(error) +
++      " (instance unreachable? point searxngBaseURL at another public instance)", "WEB_PROVIDER_ERROR", { cause: error });
++  }
++
++  if (!response.ok) {
++    const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
++    hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
++    if (response.status === 429 || response.status >= 500) {
++      throw webErrorFromResponse(response, text + " (instance struggling? point searxngBaseURL at another public instance)", "SearXNG");
++    }
++    throw webErrorFromResponse(response, text, "SearXNG");
++  }
++
++  // 200 does not mean JSON (route3: searx.be 200 + HTML anti-bot page). Read
++  // the body once and classify the parse failure so the failure reads as
++  // "instance degraded", not like a plugin bug.
++  const bodyText = await response.text();
++  // Optional chain: fetch shims/mocks may omit headers; a real Response never does.
++  const contentType = String(response.headers?.get?.("content-type") ?? "");
++  let data;
++  try {
++    data = JSON.parse(bodyText);
++  } catch (error) {
++    const antiBot = /text\/html/i.test(contentType) || ANTI_BOT_RE.test(bodyText.slice(0, 4096));
++    const message = antiBot
++      ? "SearXNG instance degraded: returned an anti-bot challenge page (HTTP 200, non-JSON)"
++      : "SearXNG: invalid JSON response (content-type: " + (contentType || "unknown") + ")";
++    hooks?.recordOutcome?.({ status: "error", message });
++    throw new WebError(message, "WEB_PROVIDER_ERROR", { cause: error });
++  }
++
++  // Semantic health gate: a SearXNG API response always carries a results[]
++  // array; JSON without one (walls/proxies wrapping errors in 200s) is a
++  // protocol violation, not an empty search.
++  if (!Array.isArray(data?.results)) {
++    const message = "SearXNG: JSON response lacks a results[] array (not a SearXNG API response?)";
++    hooks?.recordOutcome?.({ status: "error", message });
++    throw new WebError(message, "WEB_PROVIDER_ERROR");
++  }
++
++  const sources = parseSearxngResult(data, request.maxResults ?? 8);
++  hooks?.recordOutcome?.({ status: "success", count: sources.length });
++  return sources;
++}
++
+ /**
+  * Parse SearXNG API response.
+  * @param {object} data
 diff --git a/lib/backends/serper.js b/lib/backends/serper.js
-index 5913502..b6a736d 100644
+index 5913502..cfc8753 100644
 --- a/lib/backends/serper.js
 +++ b/lib/backends/serper.js
-@@ -6,6 +6,7 @@
+@@ -6,9 +6,11 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
@@ -318,7 +773,18 @@ index 5913502..b6a736d 100644
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { applySerperFilters, normalizeFilters } from "../util/filters.js";
  import { egressFetch } from "../util/egress-fetch.js";
-@@ -68,7 +69,7 @@ export const serperBackend = {
++import { describeError } from "../util/describe-error.js";
+ 
+ const SERPER_ENDPOINT = "https://google.serper.dev/search";
+ 
+@@ -62,13 +64,13 @@ export const serperBackend = {
+       });
+     } catch (error) {
+       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
+-      throw new WebError("Serper request failed: " + error, "WEB_PROVIDER_ERROR", { cause: error });
++      throw new WebError("Serper request failed: " + describeError(error), "WEB_PROVIDER_ERROR", { cause: error });
+     }
+ 
      if (!response.ok) {
        const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
        hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
@@ -328,10 +794,10 @@ index 5913502..b6a736d 100644
  
      let data;
 diff --git a/lib/backends/tavily.js b/lib/backends/tavily.js
-index 23f0219..b874108 100644
+index 23f0219..23b2238 100644
 --- a/lib/backends/tavily.js
 +++ b/lib/backends/tavily.js
-@@ -6,6 +6,7 @@
+@@ -6,9 +6,11 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
@@ -339,7 +805,18 @@ index 23f0219..b874108 100644
  import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
  import { applyTavilyFilters, normalizeFilters } from "../util/filters.js";
  import { egressFetch } from "../util/egress-fetch.js";
-@@ -77,7 +78,7 @@ export const tavilyBackend = {
++import { describeError } from "../util/describe-error.js";
+ 
+ const TAVILY_ENDPOINT = "https://api.tavily.com/search";
+ 
+@@ -71,13 +73,13 @@ export const tavilyBackend = {
+       });
+     } catch (error) {
+       if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
+-      throw new WebError(`Tavily request failed: ${error}`, "WEB_PROVIDER_ERROR", { cause: error });
++      throw new WebError(`Tavily request failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+     }
+ 
      if (!response.ok) {
        const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
        hooks?.recordOutcome?.({ status: "error", message: `HTTP ${response.status}: ${text}` });
@@ -478,7 +955,7 @@ index 0000000..30b688c
 +
 +export default tinyfishBackend;
 diff --git a/lib/breaker.js b/lib/breaker.js
-index 7218312..154ae0b 100644
+index 7218312..8c9caa1 100644
 --- a/lib/breaker.js
 +++ b/lib/breaker.js
 @@ -24,9 +24,11 @@ export const BREAKER_DEFAULTS = {
@@ -494,7 +971,7 @@ index 7218312..154ae0b 100644
    const threshold = Math.max(1, Math.floor(Number(cfg.threshold) || BREAKER_DEFAULTS.threshold));
    // cooldownMs === 0 explicitly disables the cooldown window (cooledUntil = now
    // expires instantly). Only null/undefined falls back to the default — an
-@@ -35,13 +37,26 @@ export function foldBreaker(prev, ok, nowMs, cfg = {}) {
+@@ -35,13 +37,32 @@ export function foldBreaker(prev, ok, nowMs, cfg = {}) {
      ? Math.max(0, Math.floor(Number(cfg.cooldownMs) || 0))
      : BREAKER_DEFAULTS.cooldownMs;
    if (ok) return { failCount: 0, cooledUntil: 0 };
@@ -510,11 +987,18 @@ index 7218312..154ae0b 100644
 +  // A rate-limit/quota response should not be retried twice more just to
 +  // reach the failure threshold; cool immediately for the retry window.
 +  if (opts.rateLimited === true) {
++    // A quota answer carries its own Retry-After; without one, fall back to
++    // the configured cooldown. A zero here means "count only", matching the
++    // threshold path above.
 +    const retryAfterMs = Number.isFinite(opts.retryAfterMs) ? opts.retryAfterMs : cooldownMs;
-+    return { failCount, cooledUntil: nowMs + Math.max(0, retryAfterMs) };
++    return { failCount, cooledUntil: retryAfterMs > 0 ? nowMs + retryAfterMs : 0 };
 +  }
    if (failCount >= threshold) {
-     return { failCount, cooledUntil: nowMs + cooldownMs };
+-    return { failCount, cooledUntil: nowMs + cooldownMs };
++    // cooldownMs === 0 means "count only, never cool": writing a window of
++    // zero length would immediately look expired and reset the streak, so the
++    // threshold could never be reached again.
++    return { failCount, cooledUntil: cooldownMs > 0 ? nowMs + cooldownMs : 0 };
    }
    // Keep an existing open window if the backend was already open (failure
    // while open extends nothing, but must not silently close it).
@@ -524,7 +1008,7 @@ index 7218312..154ae0b 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..ec1e4ed 100644
+index 88dc8c3..7e7e35b 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
 @@ -31,16 +31,26 @@ export const CACHE_DEFAULTS = {
@@ -556,24 +1040,25 @@ index 88dc8c3..ec1e4ed 100644
    });
    return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
  }
-@@ -97,7 +107,15 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -97,8 +107,16 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
      return out.sort((a, b) => a.mtime - b.mtime);
    }
  
 +  // Amortized eviction: an exact entry count cannot be kept cheaply (overwrites
 +  // must not increment it, get() drops expired files), and a drifted count
 +  // would pin the slow path forever. Sweep every SWEEP_EVERY writes instead.
-+  let sinceSweep = 16;
-+
++  // maxEntries is a hard directory bound, not a hint. The listing is already
++  // needed to decide whether we are over the cap, so evicting from it costs
++  // nothing extra; deferring the sweep to every Nth write let the directory
++  // grow unbounded between sweeps.
    function evict() {
-+    sinceSweep += 1;
-+    if (sinceSweep < 16) return;
-+    sinceSweep = 0;
      const entries = listEntries();
++    if (entries.length <= cap) return;
      for (let i = 0; i < entries.length - cap; i++) {
        try { unlinkSync(entries[i].file); } catch { /* raced */ }
+     }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..f9de42d 100644
+index 783cbe6..6c2ea9c 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,6 +23,13 @@ window.__ModuleLoader__.load({
@@ -624,7 +1109,7 @@ index 783cbe6..f9de42d 100644
  			save: "保存",
  			discard: "放弃修改",
  			dirty: "有未保存修改",
-@@ -67,12 +85,12 @@ window.__ModuleLoader__.load({
+@@ -67,12 +85,17 @@ window.__ModuleLoader__.load({
  			overridden: "已自定义",
  			keyLabel: "{id} API Key",
  			getKey: "获取 Key ↗",
@@ -636,10 +1121,15 @@ index 783cbe6..f9de42d 100644
  			togglesTitle: "启用后端",
  			globalsTitle: "全局参数",
 -			keysTitle: "API 密钥（保存后写入凭证库，立即生效）",
++			numResultsLabel: "结果条数",
++			concurrencyLabel: "并发数",
++			timeoutLabel: "后端超时 (ms)",
++			saveFailed: "保存失败",
++			conflictHint: "其他端已修改，请先刷新",
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +108,29 @@ window.__ModuleLoader__.load({
+@@ -90,22 +113,32 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -650,6 +1140,9 @@ index 783cbe6..f9de42d 100644
  			invalidFields: "以下字段未通过校验：",
  			readOnlyScope: "当前配置只读（可能由宿主锁定）",
 -			optionalTitle: "私有实例可选 Key",
++			unavailable: "设置暂不可用：宿主没有返回配置快照（服务未就绪或路由未挂载）。",
++			retry: "重试",
++			toggleFailed: "开关未生效",
 +			optionalTitle: "可选 Key（私有实例 / 提升计量型额度）",
  		};
  		const en = {
@@ -672,7 +1165,7 @@ index 783cbe6..f9de42d 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +141,12 @@ window.__ModuleLoader__.load({
+@@ -116,12 +149,17 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -684,10 +1177,15 @@ index 783cbe6..f9de42d 100644
  			togglesTitle: "Enabled backends",
  			globalsTitle: "Global parameters",
 -			keysTitle: "API keys (saved to the credential store, effective immediately)",
++			numResultsLabel: "Results",
++			concurrencyLabel: "Concurrency",
++			timeoutLabel: "Backend timeout (ms)",
++			saveFailed: "Save failed",
++			conflictHint: "Changed elsewhere — refresh first",
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,11 +167,12 @@ window.__ModuleLoader__.load({
+@@ -142,15 +180,19 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -698,22 +1196,99 @@ index 783cbe6..f9de42d 100644
  			invalidFields: "Fields failed validation:",
  			readOnlyScope: "Configuration is read-only (locked by host?)",
 -			optionalTitle: "Private instance optional keys",
++			unavailable: "Settings are unavailable: the host returned no configuration snapshot (service not ready or route not mounted).",
++			retry: "Retry",
++			toggleFailed: "Toggle failed",
 +			optionalTitle: "Optional keys (private instance / higher metered limits)",
  		};
  
  		//#region styles
-@@ -189,6 +215,10 @@ window.__ModuleLoader__.load({
+-		const css = ".wsc-card{display:flex;flex-direction:column;gap:14px}.wsc-sectionTitle{font-size:13px;font-weight:600;opacity:.75;margin:4px 0 0}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-subtle);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0}.wsc-toggle input{accent-color:var(--dsw-alias-accent-primary)}.wsc-input,.wsc-keyInput{box-sizing:border-box;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-subtle);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;font-family:inherit}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:12px;opacity:.8}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-subtle)}.wsc-badgeOn{color:var(--dsw-alias-accent-primary);border-color:var(--dsw-alias-accent-primary)}.wsc-hint{font-size:11px;opacity:.55;margin:3px 0 0}.wsc-actions{display:flex;gap:8px;align-items:center}.wsc-btn{cursor:pointer;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-family:inherit;background:var(--dsw-alias-accent-primary);color:#fff}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-subtle)}.wsc-btn:disabled{opacity:.5;cursor:default}.wsc-status{font-size:12px;opacity:.7}";
++		const css = ".wsc-card{display:flex;flex-direction:column;gap:14px}.wsc-sectionTitle{font-size:13px;font-weight:600;opacity:.75;margin:4px 0 0}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-input,.wsc-keyInput{box-sizing:border-box;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;font-family:inherit}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:12px;opacity:.8}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2)}.wsc-badgeOn{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:11px;opacity:.55;margin:3px 0 0}.wsc-actions{display:flex;gap:8px;align-items:center}.wsc-btn{cursor:pointer;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2)}.wsc-btn:disabled{opacity:.5;cursor:default}.wsc-status{font-size:12px;opacity:.7}";
+ 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
+ 			const tag = document.createElement("style");
+ 			tag.dataset.plugin = "@240xu/dsh-websearch";
+@@ -188,17 +230,54 @@ window.__ModuleLoader__.load({
+ 					user: undefined,
  					revision: undefined,
  					mode: "routes",
++					unavailable: false,
++					reason: undefined,
  				});
 +				// Serialise writes: a queued write must read the revision only
 +				// when its turn comes, otherwise two concurrent toggles both
 +				// send revision=0 and the second is rejected as a conflict.
 +				this.writeQueue = Promise.resolve();
++				// A load starts before a write but can land after it; applying
++				// that snapshot would roll the UI back and restore a stale
++				// revision (the next write is then rejected as a conflict).
++				this.loadSeq = 0;
  			}
  
  			getSnapshot() { return this.store.getSnapshot(); }
-@@ -222,7 +252,14 @@ window.__ModuleLoader__.load({
+ 			subscribe(listener) { return this.store.subscribe(listener); }
+ 
+ 			accept(payload) {
+-				if (payload === null || typeof payload !== "object" || payload.ok !== true || payload.writable === false) {
+-					// Keep the card rendered (status ready) but read-only, so the section
+-					// explains itself instead of showing an endless loading ellipsis.
+-					this.store.set({ status: "ready", writable: false, value: {}, base: undefined, user: undefined, revision: undefined, mode: "routes" });
++				if (payload === null || typeof payload !== "object" || payload.ok !== true) {
++					// Keep the card rendered (status ready) but explain the actual state:
++					// a 404/503 is "settings unavailable", not "you configured nothing".
++					this.store.set({
++						status: "ready",
++						writable: false,
++						value: {},
++						base: undefined,
++						user: undefined,
++						revision: undefined,
++						mode: "routes",
++						unavailable: true,
++						reason: payload !== null && typeof payload === "object" && typeof payload.reason === "string"
++							? payload.reason
++							: "settings-unavailable",
++					});
++					return;
++				}
++				if (payload.writable === false) {
++					// The host answered with a real snapshot but marked it read-only.
++					this.store.set({
++						status: "ready",
++						writable: false,
++						value: payload.value ?? {},
++						base: payload.base,
++						user: payload.user,
++						revision: payload.revision,
++						mode: "routes",
++						unavailable: false,
++						reason: payload.reason,
++					});
+ 					return;
+ 				}
+ 				this.store.set({
+@@ -209,20 +288,31 @@ window.__ModuleLoader__.load({
+ 					user: payload.user,
+ 					revision: payload.revision,
+ 					mode: "routes",
++					unavailable: false,
++					reason: undefined,
+ 				});
+ 			}
+ 
+ 			async load() {
++				const seq = ++this.loadSeq;
+ 				try {
+-				const response = await fetch("/api/unified-search/settings", { credentials: "same-origin", headers: { accept: "application/json" } });
+-				const payload = await response.json().catch(() => undefined);
+-				this.accept(response.status === 404 ? undefined : payload);
++					const response = await fetch("/api/unified-search/settings", { credentials: "same-origin", headers: { accept: "application/json" } });
++					const payload = await response.json().catch(() => undefined);
++					if (seq !== this.loadSeq) return;
++					this.accept(response.status === 404 ? undefined : payload);
+ 				} catch (_noRoutes) {
+-				this.accept(undefined);
++					if (seq === this.loadSeq) this.accept(undefined);
  				}
  			}
  
@@ -729,7 +1304,15 @@ index 783cbe6..f9de42d 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -247,6 +284,13 @@ window.__ModuleLoader__.load({
+@@ -236,6 +326,7 @@ window.__ModuleLoader__.load({
+ 				if (!response.ok || payload === undefined || payload.ok !== true) {
+ 					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
+ 				}
++				this.loadSeq += 1;
+ 				this.accept(payload);
+ 			}
+ 
+@@ -247,6 +338,13 @@ window.__ModuleLoader__.load({
  		 * Card state machine: reads the bound settings scope snapshot, stages edits,
  		 * writes section fields through scope.set/unset and secrets via credentials.
  		 */
@@ -743,17 +1326,31 @@ index 783cbe6..f9de42d 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -259,6 +303,9 @@ window.__ModuleLoader__.load({
+@@ -258,11 +356,22 @@ window.__ModuleLoader__.load({
+ 				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
++				// A toggle write is independent of Save; its failure must not be
++				// cleared only by a later Save, nor persist after a retry succeeds.
++				this.toggleFailed = false;
++				this.toggleConflict = false;
  				this.failedKeys = new Map(); // envRef -> failure reason
 +				// Credential READ failures, distinct from SAVE failures above.
 +				// Only a fixed code is stored; raw host errors are never kept.
 +				this.readErrors = new Map();
  				this.failedFields = new Set();
  				this.savedAt = 0;
++				// Per-ref read sequence: a describe() started before a successful
++				// write must not repaint that key as "not configured".
++				this.credSeq = new Map();
++				this.disposed = false;
  				this.store = createStore(this.projection());
-@@ -276,6 +323,11 @@ window.__ModuleLoader__.load({
+-				this.scope.subscribe(() => this.republish());
++				this.unsubscribe = this.scope.subscribe(() => this.republish());
+ 			}
+ 
+ 			sectionValue(field) {
+@@ -276,11 +385,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -765,7 +1362,15 @@ index 783cbe6..f9de42d 100644
  			projection() {
  				const snap = this.scope.getSnapshot();
  				return {
-@@ -292,6 +344,7 @@ window.__ModuleLoader__.load({
+ 					ready: snap.status === "ready",
+ 					writable: snap.writable,
++					unavailable: snap.unavailable === true,
++					reason: snap.reason,
++					revision: snap.revision,
+ 					value: snap.value ?? {},
+ 					keyState: Object.fromEntries(this.keyState),
+ 					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
+@@ -292,59 +409,142 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -773,12 +1378,29 @@ index 783cbe6..f9de42d 100644
  					failedFields: [...this.failedFields],
  					saving: this.saving,
  					failed: this.failed,
-@@ -299,11 +352,22 @@ window.__ModuleLoader__.load({
++					toggleFailed: this.toggleFailed,
++					toggleConflict: this.toggleConflict,
+ 					version: (this.staged.size + ":" + [...this.staged.keys()].join(",")),
  				};
  			}
  
+-			republish() { this.store.set(this.projection()); }
 +			/** Push the current projection to the store and notify subscribers. */
- 			republish() { this.store.set(this.projection()); }
++			republish() {
++				if (this.disposed) return;
++				this.store.set(this.projection());
++			}
++
++			/** Detach from the host scope; late responses must not publish. */
++			dispose() {
++				this.disposed = true;
++				if (typeof this.unsubscribe === "function") this.unsubscribe();
++			}
++
++			/** Re-read the settings snapshot (used by the unavailable-state retry). */
++			reload() {
++				return typeof this.scope.load === "function" ? this.scope.load() : undefined;
++			}
  
 +			/** Stage a field edit (clears the saved marker so the card shows "unsaved"). */
  			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
@@ -797,10 +1419,19 @@ index 783cbe6..f9de42d 100644
  
  			/** Toggles write immediately (no staging); globals/keys stage + save. */
  			async setToggle(id, checked) {
-@@ -312,39 +376,82 @@ window.__ModuleLoader__.load({
++				// A retry supersedes the previous toggle error. Keep the message
++				// while the new write is in flight so the card does not flicker.
++				this.toggleFailed = false;
++				this.toggleConflict = false;
+ 				try {
+ 					await this.scope.set("enable" + id.charAt(0).toUpperCase() + id.slice(1), checked);
  				} catch (err) {
- 					this.failed = true;
- 					this.conflict = String(err).includes("SETTINGS_CONFLICT");
+-					this.failed = true;
+-					this.conflict = String(err).includes("SETTINGS_CONFLICT");
++					this.toggleFailed = true;
++					this.toggleConflict = String(err).includes("SETTINGS_CONFLICT");
++					this.failed = false;
++					this.conflict = false;
 +					// The host may have committed the write even when the
 +					// response failed. Resync instead of leaving the stale
 +					// pre-write value on screen. Report only the conflict
@@ -817,6 +1448,8 @@ index 783cbe6..f9de42d 100644
  			}
  
  			async readCredential(ref) {
++				const seq = (this.credSeq.get(ref) ?? 0) + 1;
++				this.credSeq.set(ref, seq);
 +				let readFailed = false;
 +				let reason;
  				try {
@@ -857,7 +1490,7 @@ index 783cbe6..f9de42d 100644
 -					this.keyState.set(ref, { configured: view.configured === true, writable: view.writable !== false });
 -				} catch { /* ignore */ }
 -				this.republish();
-+					if (!readFailed && view !== undefined) {
++					if (!readFailed && view !== undefined && seq === this.credSeq.get(ref)) {
 +						this.keyState.set(ref, { configured: view.configured === true, writable: view.writable !== false });
 +						this.readErrors.delete(ref);
 +					}
@@ -866,7 +1499,9 @@ index 783cbe6..f9de42d 100644
 +				} finally {
 +					// Only a fixed code is stored; host error text may contain
 +					// internal paths or credential reference names.
-+					if (reason !== undefined) this.readErrors.set(ref, safeFailureReason({ code: reason }));
++					if (reason !== undefined && seq === this.credSeq.get(ref)) {
++						this.readErrors.set(ref, safeFailureReason({ code: reason }));
++					}
 +					this.republish();
 +				}
  			}
@@ -885,6 +1520,7 @@ index 783cbe6..f9de42d 100644
 +					const res = await api.set(ref, value);
 +					const rejected = res !== null && typeof res === "object" && res.ok === false;
 +					if (rejected) throw new Error(res.error?.message ?? "credential write rejected");
++					this.credSeq.set(ref, (this.credSeq.get(ref) ?? 0) + 1);
  					return;
  				}
  				if (this.connection !== undefined && this.connection.api !== undefined && this.connection.api.credentials !== undefined && typeof this.connection.api.credentials.set === "function") {
@@ -892,10 +1528,11 @@ index 783cbe6..f9de42d 100644
 +					const res = await this.connection.api.credentials.set({ ref, value });
 +					const rejected = res !== null && typeof res === "object" && (res.ok === false || res.result?.ok === false);
 +					if (rejected) throw new Error(res.error?.message ?? res.result?.error?.message ?? "credential write rejected");
++					this.credSeq.set(ref, (this.credSeq.get(ref) ?? 0) + 1);
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,14 +461,33 @@ window.__ModuleLoader__.load({
+@@ -354,14 +554,33 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -929,7 +1566,7 @@ index 783cbe6..f9de42d 100644
  						// Empty draft clears the override so the schema default applies again.
  						if (staged.clear || staged.text === "") { await this.scope.unset(field); doneFields.push(field); continue; }
  						if (SELECT_FIELDS[field]) {
-@@ -395,6 +521,8 @@ window.__ModuleLoader__.load({
+@@ -395,6 +614,8 @@ window.__ModuleLoader__.load({
  						}
  					}
  					for (const [ref, staged] of this.stagedKeys) {
@@ -938,7 +1575,7 @@ index 783cbe6..f9de42d 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,14 +533,24 @@ window.__ModuleLoader__.load({
+@@ -405,22 +626,42 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -967,7 +1604,14 @@ index 783cbe6..f9de42d 100644
  				} catch (err) {
  					this.failed = true;
  					this.conflict = String(err).includes("SETTINGS_CONFLICT");
-@@ -421,6 +559,10 @@ window.__ModuleLoader__.load({
++					// Without a reload the stale expectedRevision makes every
++					// subsequent Save fail the same way. Staged edits survive, so
++					// the user can inspect and retry after the refresh.
++					if (this.conflict) {
++						try { await this.reload(); } catch { /* keep the conflict notice */ }
++					}
+ 				}
+ 				this.saving = false;
  				this.republish();
  			}
  
@@ -978,7 +1622,14 @@ index 783cbe6..f9de42d 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -436,7 +578,7 @@ window.__ModuleLoader__.load({
+@@ -431,12 +672,13 @@ window.__ModuleLoader__.load({
+ 					reset: (f) => this.reset(f),
+ 					editKey: (r, t) => this.editKey(r, t),
+ 					save: () => this.save(),
+-					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedKeys.clear(); this.republish(); },
++					retry: () => this.reload(),
++					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedFields.clear(); this.failedKeys.clear(); this.republish(); },
+ 				};
  			}
  		}
  
@@ -987,7 +1638,7 @@ index 783cbe6..f9de42d 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -457,6 +599,55 @@ window.__ModuleLoader__.load({
+@@ -457,6 +699,55 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -1011,7 +1662,7 @@ index 783cbe6..f9de42d 100644
 +			const readFailure = (state.readErrors ?? []).find((f) => f && f.ref === b.keyEnv);
 +			const needsKey = !configured;
 +			const dotColor = needsKey ? (checked ? "#e6a700" : "#888") : "#2ea043";
-+			return react_jsx_runtime.jsxs("div", { className: "wsc-keyCard", style: { display: "flex", flexDirection: "column", gap: 6, padding: "9px 10px", borderRadius: 10, border: "1px solid var(--dsw-alias-border-subtle)" }, children: [
++			return react_jsx_runtime.jsxs("div", { className: "wsc-keyCard", style: { display: "flex", flexDirection: "column", gap: 6, padding: "9px 10px", borderRadius: 10, border: "1px solid var(--dsw-alias-border-l2)" }, children: [
 +				react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: 0, border: "none", borderRadius: 0 }, children: [
 +					react_jsx_runtime.jsx("input", { type: "checkbox", checked, onChange: (e) => props.onToggle(e.target.checked) }),
 +					react_jsx_runtime.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, display: "inline-block" } }),
@@ -1023,7 +1674,7 @@ index 783cbe6..f9de42d 100644
 +					readOnly && react_jsx_runtime.jsx("span", { className: "wsc-badge", style: { opacity: .75 }, children: props.t("envProvided") }),
 +					KEY_URLS[b.id] && react_jsx_runtime.jsx("a", {
 +						href: KEY_URLS[b.id], target: "_blank", rel: "noreferrer",
-+						style: { fontSize: 11, color: "var(--dsw-alias-accent-primary)", textDecoration: "none" },
++						style: { fontSize: 11, color: "var(--dsw-alias-link)", textDecoration: "none" },
 +						children: props.t("getKey"),
 +					}),
 +				] }),
@@ -1043,7 +1694,7 @@ index 783cbe6..f9de42d 100644
  		/** Labeled <select> for enum / boolean settings. */
  		function SelectField(props) {
  			return react_jsx_runtime.jsxs("div", { children: [
-@@ -473,180 +664,217 @@ window.__ModuleLoader__.load({
+@@ -473,169 +764,225 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -1091,7 +1742,7 @@ index 783cbe6..f9de42d 100644
 +		function StatusSummary(props) {
 +			const { state, enabledCount, keysReady, t } = props;
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
-+				react_jsx_runtime.jsx("div", { style: { display: "flex", gap: 14, alignItems: "center", padding: "10px 12px", marginBottom: 10, borderRadius: 8, background: "var(--dsw-alias-bg-subtle)" }, children: [
++				react_jsx_runtime.jsx("div", { style: { display: "flex", gap: 14, alignItems: "center", padding: "10px 12px", marginBottom: 10, borderRadius: 8, background: "var(--dsw-alias-bg-module-platform)" }, children: [
 +					react_jsx_runtime.jsxs("span", { children: [t("statusEnabled"), ": ", react_jsx_runtime.jsx("b", { children: enabledCount + "/" + BACKENDS.length })] }),
 +					react_jsx_runtime.jsxs("span", { children: [t("statusKeys"), ": ", react_jsx_runtime.jsx("b", { children: keysReady + "/" + KEYED.length })] }),
 +					METERED.length > 0 && react_jsx_runtime.jsxs("span", { style: { opacity: .65 }, children: [
@@ -1216,15 +1867,20 @@ index 783cbe6..f9de42d 100644
 -						options: recencyOptions,
 -						onChange: (v) => card.edit("recency", v),
 -					}),
--					react_jsx_runtime.jsxs("div", { children: [
++					// A language tag is free text ("en", "zh-CN", …), not an enum: keeping
++					// it as a select with no options threw on render.
+ 					react_jsx_runtime.jsxs("div", { children: [
 -						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.t("langLabel") }) }),
--						react_jsx_runtime.jsx("input", {
--							className: "wsc-input",
++						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("langLabel") }) }),
+ 						react_jsx_runtime.jsx("input", {
+ 							className: "wsc-input",
 -							placeholder: props.t("langPlaceholder"),
--							value: state.stagedText("language") ?? String(state.value.language ?? ""),
++							placeholder: t("langPlaceholder"),
+ 							value: state.stagedText("language") ?? String(state.value.language ?? ""),
 -							onChange: e => card.edit("language", e.target.value),
--						}),
--					] }),
++							onChange: (e) => card.edit("language", e.target.value),
+ 						}),
+ 					] }),
 -					react_jsx_runtime.jsx(SelectField, {
 -						label: props.t("dedupLabel"),
 -						value: selVal("dedupStrategy", "url"),
@@ -1249,7 +1905,6 @@ index 783cbe6..f9de42d 100644
 -						options: boolOptions,
 -						onChange: (v) => card.edit("resultTelemetry", v),
 -					}),
-+					react_jsx_runtime.jsx(SelectField, { label: t("languageLabel"), placeholder: t("langPlaceholder"), value: state.stagedText("language") ?? String(state.value.language ?? ""), onChange: (v) => card.edit("language", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("recencyLabel"), value: selVal("recency", "any"), options: recencyOptions, onChange: (v) => card.edit("recency", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("dedupLabel"), value: selVal("dedupStrategy", "url"), options: dedupOptions, onChange: (v) => card.edit("dedupStrategy", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("rerankLabel"), value: selVal("rerank", "false"), options: boolOptions, onChange: (v) => card.edit("rerank", v) }),
@@ -1327,22 +1982,31 @@ index 783cbe6..f9de42d 100644
 -					(state.failedFields.length > 0) && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e5534b", fontSize: 11 }, children: props.t("invalidFields") + ": " + state.failedFields.join(", ") }),
 -				state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e6a700" }, children: props.t("conflict") }),
 -					!state.failed && !state.saving && state.savedAt > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#2ea043" }, children: props.t("savedOk") }),
-+					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.stagedCount === 0, onClick: () => card.save(), children: state.saving ? t("saving") : t("save") }),
-+					(state.stagedCount > 0) && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", onClick: () => card.discard(), children: t("discard") }),
++					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.stagedCount === 0 || state.writable === false, onClick: () => card.save(), children: state.saving ? t("saving") : t("save") }),
++					(state.stagedCount > 0) && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", disabled: state.saving, onClick: () => card.discard(), children: t("discard") }),
 +					state.failed && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e5534b" }, children: state.conflict ? t("conflict") : t("saveFailed") }),
++					state.toggleFailed && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e5534b" }, children: t("toggleFailed") + (state.toggleConflict ? " — " + t("conflict") : "") }),
 +					(state.failedFields.length > 0) && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e6a700" }, children: t("invalidFields") + " " + state.failedFields.join(", ") }),
 +					state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e6a700" }, children: t("conflictHint") }),
 +					!state.failed && !state.saving && state.savedAt > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#2ea043" }, children: t("savedOk") }),
- 				] }),
- 			] });
- 		}
- 
++				] }),
++			] });
++		}
++
 +		function UnifiedSearchSection(props) {
 +			const state = props.useUnifiedSearchCard((snapshot) => snapshot);
 +			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard };
 +			// Occupants of settings.plugin.item render inside the tab's <ul>; use <li>.
 +			if (!state.ready) {
 +				return react_jsx_runtime.jsx("div", { className: "wsc-card", style: { fontSize: 12, opacity: .6 }, children: "…" });
++			}
++			// No snapshot at all (404/503): showing "0/13 enabled" plus live
++			// controls would be a fabricated state. Explain it and offer a retry.
++			if (state.unavailable) {
++				return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
++					react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .75 }, children: props.t("unavailable") }),
++					react_jsx_runtime.jsx("div", { className: "wsc-actions", children: react_jsx_runtime.jsx("button", { className: "wsc-btn", onClick: () => props.retry(), children: props.t("retry") }) }),
++				] });
 +			}
 +
 +			const toggleField = (id) => "enable" + id.charAt(0).toUpperCase() + id.slice(1);
@@ -1370,15 +2034,17 @@ index 783cbe6..f9de42d 100644
 +
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
 +				react_jsx_runtime.jsx(StatusSummary, { state, enabledCount, keysReady, t: props.t }),
-+				react_jsx_runtime.jsx(BackendToggles, { state, card, toggleField, t: props.t }),
-+				react_jsx_runtime.jsx(SettingsFields, { state, card, t: props.t }),
-+				react_jsx_runtime.jsx(OptionalKeysAndActions, { state, card, t: props.t }),
-+			] });
-+		}
-+
- 		/**
- 		 * Plugin entry: register the card into the settings plugins page.
- 		 * Compatibility: the legacy `settingsScope` client service was removed on
++				// A read-only snapshot (scope locked by the host) must not render
++				// live toggles: fieldset disabled disables every descendant input,
++				// select and button without relying on each call site.
++				react_jsx_runtime.jsxs("fieldset", { disabled: state.writable === false, style: { border: 0, margin: 0, padding: 0, minWidth: 0 }, children: [
++					react_jsx_runtime.jsx(BackendToggles, { state, card, toggleField, t: props.t }),
++					react_jsx_runtime.jsx(SettingsFields, { state, card, t: props.t }),
++					react_jsx_runtime.jsx(OptionalKeysAndActions, { state, card, t: props.t }),
+ 				] }),
+ 			] });
+ 		}
+@@ -646,7 +993,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -1392,20 +2058,90 @@ index 783cbe6..f9de42d 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
+@@ -672,6 +1024,9 @@ window.__ModuleLoader__.load({
+ 				ctx.get("connection"),
+ 				ctx.get("remote"),
+ 			);
++			// The store subscription and late fetch responses outlive the section
++			// unless the controller is detached with the plugin.
++			ctx.effect(() => () => controller.dispose(), "websearch: card controller");
+ 			// Credential invalidations: 0.2.x forwards `credentials/reference-updated`;
+ 			// older lines forwarded `credentials/updated`. Subscribe to whichever
+ 			// event face this build exposes; a missing face must not abort apply().
+@@ -705,22 +1060,25 @@ window.__ModuleLoader__.load({
+ 				try {
+ 					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
+ 						window.__dshDevkit.toast(hint, { kind: "info" });
+-						return;
++					} else {
++						console.info("[dsh-websearch] " + hint);
+ 					}
+-				} catch (e) { /* fall through */ }
+-				console.info("[dsh-websearch] " + hint);
++				} catch (e) { /* best-effort notification */ }
++				try {
++					window.dispatchEvent(new CustomEvent("dsh-websearch:open-settings:ack"));
++				} catch (e) { /* CustomEvent unavailable */ }
+ 			};
+ 			// Probe contract (devkit 0.1.1): ready flag + ack event, so the
+ 			// palette can tell "listener present" from "gracefully absent".
+ 			try {
+ 				window.__dshWebsearchSettingsReady = true;
+-				window.addEventListener("dsh-websearch:open-settings", (ev) => {
+-					onOpenSettings(ev);
+-					try {
+-						window.dispatchEvent(new CustomEvent("dsh-websearch:open-settings:ack"));
+-					} catch (e) { /* CustomEvent unavailable */ }
+-				});
+-				ctx.effect(() => () => window.removeEventListener("dsh-websearch:open-settings", onOpenSettings), "websearch: open-settings listener");
++				// Remove the exact function that was added: an anonymous listener
++				// cannot be removed, so every reload used to stack another one.
++				window.addEventListener("dsh-websearch:open-settings", onOpenSettings);
++				ctx.effect(() => () => {
++					window.removeEventListener("dsh-websearch:open-settings", onOpenSettings);
++					window.__dshWebsearchSettingsReady = false;
++				}, "websearch: open-settings listener");
+ 			} catch (e) { /* non-window env */ }
+ 		}
+ 
 diff --git a/lib/health.js b/lib/health.js
-index 4e54f1a..0a9669c 100644
+index 4e54f1a..9144394 100644
 --- a/lib/health.js
 +++ b/lib/health.js
-@@ -7,7 +7,7 @@
+@@ -7,28 +7,18 @@
  // provider's own telemetry truncation) and run through a defensive redaction
  // pass for token-like fragments.
  
 -import { rejectionFor } from "./trust.js";
 +import { rejectionFor, rejectionBody } from "./trust.js";
  
- const MAX_ERROR_CHARS = 120;
+-const MAX_ERROR_CHARS = 120;
++import { sanitizeError as redactError } from "./util/redact.js";
  
-@@ -60,6 +60,14 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+-/** Token-like fragments that must never appear in a health payload. */
+-const SECRET_PATTERNS = [
+-  /sk-[A-Za-z0-9_-]{8,}/g,
+-  /Bearer\s+[A-Za-z0-9._-]{8,}/gi,
+-  /(api[_-]?key|token|secret|password)\s*[=:]\s*\S{6,}/gi,
+-];
++const MAX_ERROR_CHARS = 120;
+ 
+ /**
+  * Truncate + redact an error string for safe display.
+  * Returns "" for falsy input; length bounded to 40-120 chars.
+  */
+ export function sanitizeError(err) {
+-  if (err === null || err === undefined) return "";
+-  let s = String(err instanceof Error ? err.message : err);
+-  for (const re of SECRET_PATTERNS) s = s.replace(re, "[redacted]");
+-  s = s.replace(/\s+/g, " ").trim();
+-  if (s.length > MAX_ERROR_CHARS) s = s.slice(0, MAX_ERROR_CHARS);
+-  return s;
++  return redactError(err, MAX_ERROR_CHARS);
+ }
+ 
+ /**
+@@ -60,6 +50,14 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
        id,
        enabled,
        keyless,
@@ -1420,7 +2156,7 @@ index 4e54f1a..0a9669c 100644
        // reachable: true/false from the latest search telemetry; null = never probed.
        reachable: t ? t.ok === true : null,
        lastOk: t && typeof t.lastOkAt === "number" ? t.lastOkAt : null,
-@@ -72,6 +80,10 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+@@ -72,6 +70,10 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
      ok: true,
      enabled: enabledList.length,
      keyless: enabledList.filter((b) => b.keyless).length,
@@ -1431,7 +2167,7 @@ index 4e54f1a..0a9669c 100644
      backends: list,
      updatedAt: Date.now(),
    };
-@@ -82,8 +94,8 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+@@ -82,8 +84,8 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
   * GET only; never probes backends; response is JSON with no credentials.
   */
  export function registerHealthRoute(ws, deps) {
@@ -1442,7 +2178,7 @@ index 4e54f1a..0a9669c 100644
      kind: "exact",
      path: "/api/unified-search/health",
      handler: (req, res) => {
-@@ -93,7 +105,7 @@ export function registerHealthRoute(ws, deps) {
+@@ -93,7 +95,7 @@ export function registerHealthRoute(ws, deps) {
        };
        const rejection = rejectionFor(req, typeof deps.getConnection === "function" ? deps.getConnection() : undefined);
        if (rejection !== undefined) {
@@ -1451,14 +2187,14 @@ index 4e54f1a..0a9669c 100644
          return;
        }
        if (req.method !== "GET" && req.method !== "HEAD") {
-@@ -107,4 +119,5 @@ export function registerHealthRoute(ws, deps) {
+@@ -107,4 +109,5 @@ export function registerHealthRoute(ws, deps) {
        }
      },
    });
 +  return typeof disposer === "function" ? [disposer] : [];
  }
 diff --git a/lib/history.js b/lib/history.js
-index dd15b37..59b8ebb 100644
+index dd15b37..7122300 100644
 --- a/lib/history.js
 +++ b/lib/history.js
 @@ -8,7 +8,7 @@
@@ -1564,14 +2300,25 @@ index dd15b37..59b8ebb 100644
      kind: "exact",
      path: "/api/websearch/history/clear",
      handler: guarded((req, res) => {
-@@ -190,4 +174,5 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
-       send(res, 200, { ok: true, cleared: true });
+@@ -186,8 +170,14 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+         return;
+       }
+       const store = getStore();
+-      store?.clear();
+-      send(res, 200, { ok: true, cleared: true });
++      // clear() is serialised behind the write chain, so the 200 must wait for
++      // it: otherwise the client's next GET can still see the old entries.
++      const cleared = store?.clear();
++      Promise.resolve(cleared).then(
++        () => send(res, 200, { ok: true, cleared: true }),
++        () => send(res, 500, { ok: false, error: "clear failed" }),
++      );
      }),
    });
 +  return [disposerA, disposerB].filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 99230ce..dd94538 100644
+index 549b13b..22aafd2 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,7 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -1693,7 +2440,15 @@ index 99230ce..dd94538 100644
  
    // Base URLs (defaults from built-in registry)
    braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
-@@ -226,6 +262,12 @@ export const Config = z.object({
+@@ -218,12 +254,20 @@ export const Config = z.object({
+     .description("Mojeek API 端点（默认官方；自托管/代理实例改此项）"),
+   searxngBaseURL: z.string().default(DEFAULT_BASE_URLS.searxng)
+     .description("SearXNG API 端点（默认官方；自托管/代理实例改此项）"),
++  searxngBaseURLs: z.array(z.string()).default([])
++    .description("SearXNG 备用实例列表（可选；主实例失败时按序尝试，失败实例冷却 10 分钟）"),
+   deepseekBaseURL: z.string().default(DEFAULT_BASE_URLS.deepseek)
+     .description("DeepSeek API 端点（默认官方；自托管/代理实例改此项）"),
+   anthropicBaseURL: z.string().default(DEFAULT_BASE_URLS.anthropic)
      .description("Anthropic API 端点（默认官方；自托管/代理实例改此项）"),
    openaiBaseURL: z.string().default(DEFAULT_BASE_URLS.openai)
      .description("OpenAI API 端点（默认官方；自托管/代理实例改此项）"),
@@ -1706,7 +2461,7 @@ index 99230ce..dd94538 100644
  
    // Models
    deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
-@@ -281,7 +323,9 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+@@ -279,7 +323,9 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
   * service -> env.
   */
  export function resolveOptions(ctx, config) {
@@ -1717,7 +2472,7 @@ index 99230ce..dd94538 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -289,20 +333,9 @@ export function resolveOptions(ctx, config) {
+@@ -287,20 +333,9 @@ export function resolveOptions(ctx, config) {
    }
  
    if (enabledBackends.length === 0) {
@@ -1741,8 +2496,15 @@ index 99230ce..dd94538 100644
    }
  
    if (enabledBackends.length === 0) {
-@@ -337,7 +370,9 @@ export function resolveOptions(ctx, config) {
-       } : {}),
+@@ -328,9 +363,16 @@ export function resolveOptions(ctx, config) {
+       baseURL: config?.[`${id}BaseURL`] ?? DEFAULT_BASE_URLS[id],
+       model: config?.[`${id}Model`] ?? DEFAULT_MODELS[id],
+       ...(id === "tavily" ? { searchDepth: config?.tavilySearchDepth ?? "basic" } : {}),
++      ...(id === "searxng" ? {
++        baseURLs: Array.isArray(config?.searxngBaseURLs)
++          ? config.searxngBaseURLs.filter((u) => typeof u === "string" && u.trim() !== "")
++          : [],
++      } : {}),
        safeSearch: config?.safeSearch !== false,
        label: DEFAULT_LABELS[id] ?? id,
 -      requiresKey: DEFAULT_KEY_ENV[id] !== undefined,
@@ -1752,7 +2514,16 @@ index 99230ce..dd94538 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -414,11 +449,28 @@ export function apply(ctx, config) {
+@@ -352,7 +394,7 @@ export function resolveOptions(ctx, config) {
+     rerank: config?.rerank === true,
+     resultTelemetry: config?.resultTelemetry !== false,
+     // v2.7.0 cache / breaker / history
+-    cacheEnabled: config?.cacheEnabled === true,
++    cacheEnabled: config?.cacheEnabled !== false,
+     cacheTtlS: Math.max(30, Math.floor(Number(config?.cacheTtl) || CACHE_DEFAULTS.ttlMs / 1000)),
+     breakerEnabled: config?.breakerEnabled !== false,
+     breakerThreshold: Math.max(1, Math.floor(Number(config?.breakerThreshold) || BREAKER_DEFAULTS.threshold)),
+@@ -407,11 +449,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -1786,7 +2557,7 @@ index 99230ce..dd94538 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -440,10 +492,9 @@ export function apply(ctx, config) {
+@@ -433,10 +492,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -1800,7 +2571,7 @@ index 99230ce..dd94538 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -467,26 +518,48 @@ export function apply(ctx, config) {
+@@ -460,26 +518,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
@@ -1871,38 +2642,51 @@ index 99230ce..dd94538 100644
    });
  }
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..cf0c740 100644
+index 744917e..077c3e5 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
-@@ -25,6 +25,7 @@ import { normalizeFilters } from "./util/filters.js";
+@@ -25,8 +25,12 @@ import { normalizeFilters } from "./util/filters.js";
  import { shapeQuery, resultHeader, TELEMETRY_TAG } from "./prompting.js";
  import { cacheKeyFor } from "./cache.js";
  import { foldBreaker, isCooled, cooledAnnotation } from "./breaker.js";
 +import { rateLimited, retryAfterMsFrom, keylessRejected } from "./util/failure-label.js";
  import { rrfFuse } from "./rrf.js";
  import { isComplexQuery, deriveSubQueries } from "./multiquery.js";
- import { failureLabel } from "./util/failure-label.js";
-@@ -36,14 +37,13 @@ const PROVIDER_ID = "unified";
++import { failureLabel } from "./util/failure-label.js";
++import { invalidBaseURL } from "./util/base-url.js";
++import { sanitizeError } from "./util/redact.js";
+ 
+ const PROVIDER_ID = "unified";
+ 
+@@ -35,9 +39,13 @@ const PROVIDER_ID = "unified";
  // default lets one dead backend stall the whole fan-out tail. The effective
  // timeout is min(override, backendTimeoutMs), so an operator's shorter global
  // timeout always wins.
--// ddg raised 5s -> 8s in v2.8.6 (route6): a live getting-through DDG fetch
--// through the TLS forwarder measured 7.7s, so the 5s ceiling killed slow-but-
--// working scrapes ("ddg: timed out after 5000ms" while the page was one
--// second away). searxng stays at 5s — searx.be answers in ~1.3s when up, and
--// failover cooldowns make a fast fail cheaper than a long wait.
 +// ddg raised 5s -> 8s in v2.8.6 (route6): a live DDG fetch through the TLS
 +// forwarder measured 7.7s, so a 5s ceiling killed slow-but-working scrapes.
 +// searxng also gets 8s here: the public instances we use are slower than
 +// searx.be, and a hard 5s cap killed them mid-fetch in our probes.
  const BACKEND_TIMEOUT_OVERRIDES_MS = {
-   ddg: 8000,
+-  ddg: 5000,
 -  searxng: 5000,
++  ddg: 8000,
 +  searxng: 8000,
  };
  
  /** Effective per-backend timeout = min(override ?? ∞, global). Exported for tests. */
-@@ -70,14 +70,26 @@ export function getLatestBackendHealth() {
+@@ -46,6 +54,11 @@ export function effectiveBackendTimeoutMs(id, backendTimeoutMs) {
+   return Number.isFinite(override) ? Math.min(override, backendTimeoutMs) : backendTimeoutMs;
+ }
+ 
++// All-fail error composition: how many per-backend reasons to inline before
++// collapsing the rest into a "+N more" marker (route6: the old code silently
++// dropped reasons 5+ and never mentioned cooled-skipped backends).
++const MAX_FAILURE_DETAILS = 4;
++
+ // Module-level per-backend health telemetry (id -> entry), updated on every
+ // backend completion during a real search. Purely passive: nothing writes here
+ // outside search(), so the read-only /api/unified-search/health route can
+@@ -59,14 +72,32 @@ export function getLatestBackendHealth() {
    return latestBackendHealth;
  }
  
@@ -1917,7 +2701,13 @@ index 7242a56..cf0c740 100644
 +function recordBackendHealth(id, entry, breakerCfg, opts = {}) {
    const prev = latestBackendHealth.get(id);
 -  const breaker = foldBreaker(prev, entry.ok === true, entry.at, breakerCfg ?? undefined);
-+  const breaker = foldBreaker(prev, entry.ok === true, entry.at, breakerCfg ?? undefined, opts);
++  // `null` means the operator disabled the breaker. Still count consecutive
++  // failures for diagnostics, but never publish a cooldown the provider does
++  // not honour (health/history used to show `cooled: true` while the backend
++  // kept being called).
++  const breaker = breakerCfg === null
++    ? { failCount: entry.ok === true ? 0 : (Number(prev?.failCount) || 0) + 1, cooledUntil: 0 }
++    : foldBreaker(prev, entry.ok === true, entry.at, breakerCfg, opts);
    latestBackendHealth.set(id, {
      ...entry,
      lastOkAt: entry.ok === true ? entry.at : (prev && prev.lastOkAt) || null,
@@ -1931,7 +2721,7 @@ index 7242a56..cf0c740 100644
    });
  }
  
-@@ -95,6 +107,10 @@ export function getBackendBreaker(id) {
+@@ -84,6 +115,10 @@ export function getBackendBreaker(id) {
   */
  // 2.8.2: exported for P1 regression tests (limiter sync-throw deadlock)
  export function createLimiter(concurrency) {
@@ -1942,7 +2732,7 @@ index 7242a56..cf0c740 100644
    const queue = [];
    let running = 0;
    
-@@ -104,7 +120,7 @@ export function createLimiter(concurrency) {
+@@ -93,7 +128,7 @@ export function createLimiter(concurrency) {
        process();
        
        function process() {
@@ -1951,7 +2741,7 @@ index 7242a56..cf0c740 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -202,7 +218,13 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -191,7 +226,13 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        ...(opts.filters ?? {}),
        ...(request?.filters ?? {}),
        });
@@ -1966,7 +2756,7 @@ index 7242a56..cf0c740 100644
        // 系统性查询整形（Tavily/Exa best practices）：扇出前对口语化查询做
        // 确定性归一 —— 剥离寒暄前缀、压缩空白、截断到 1500 字符；
        // 专名/版本号/日期原样保留，不改写语义。
-@@ -239,7 +261,26 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -228,7 +269,29 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const cacheEnabled = opts.cacheEnabled === true && cache;
        let cacheKey = null;
        if (cacheEnabled) {
@@ -1986,7 +2776,10 @@ index 7242a56..cf0c740 100644
 +        for (const id of opts.enabledBackends ?? []) {
 +          const be = opts.backends?.[id];
 +          if (!be || typeof be !== "object") continue;
-+          for (const k of ["baseURL", "model", "searchDepth", "safeSearch", "apiKeyEnv"]) {
++          // Every per-backend option that changes results must appear here, or
++          // a cache hit inside the TTL masks the edit. baseURLs (plural) is the
++          // SearXNG failover list; leaving it out made instance changes inert.
++          for (const k of ["baseURL", "baseURLs", "model", "searchDepth", "safeSearch", "apiKeyEnv"]) {
 +            if (be[k] !== undefined) resultOptions[`${id}.${k}`] = be[k];
 +          }
 +        }
@@ -1994,7 +2787,7 @@ index 7242a56..cf0c740 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -254,13 +295,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -243,13 +306,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
            const cacheNote = `[websearch cache] cache hit, age ${hit.age}s`;
            hitContent = hitContent === undefined ? cacheNote : hitContent + "\n\n" + cacheNote;
@@ -2012,7 +2805,7 @@ index 7242a56..cf0c740 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -290,17 +328,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -279,17 +339,56 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -2036,10 +2829,16 @@ index 7242a56..cf0c740 100644
 +        // is open, even in a mixed outage. Only the non-quota cooled backends
 +        // keep the historical fail-open behaviour; when nothing usable remains
 +        // and at least one cooldown is quota-driven, fail fast with a retry hint.
-+        const failOpen = active.concat([...cooled.entries()]
++        // A backend in a non-quota cooldown stays out of the fan-out while any
++        // healthy backend remains: retrying it every search made the breaker
++        // inert (three failures in a row never actually stopped the calls).
++        // Only when EVERYTHING is cooling do we fail open — refusing to search
++        // at all is worse than re-hitting a backend that might have recovered.
++        const cooledReusable = [...cooled.entries()]
 +          .filter(([, e]) => e?.rateLimited !== true)
 +          .map(([id]) => candidates.find((c) => c.id === id))
-+          .filter(Boolean));
++          .filter(Boolean);
++        const failOpen = active.length > 0 ? active : cooledReusable;
 +        if (failOpen.length > 0) eligible = failOpen;
 +        else if (rateLimitedCooled.size > 0) {
 +          const until = Math.max(...[...rateLimitedCooled.values()].map((e) => e?.cooledUntil ?? 0));
@@ -2067,29 +2866,68 @@ index 7242a56..cf0c740 100644
        }
  
        if (eligible.length === 0) {
-@@ -324,7 +395,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -311,12 +410,9 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
+           // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
-             let bu = null;
-             try { bu = new URL(beOpts.baseURL); } catch { bu = null; }
+-            let bu = null;
+-            try { bu = new URL(beOpts.baseURL); } catch { bu = null; }
 -            const privHost = bu ? /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){3}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){3})$/.test(bu.hostname) : false;
-+            // The first two octets of 192.168/16 and 172.16/12 are already matched,
-+            // so exactly two further octets may follow. Plain-http is allowed
-+            // only for RFC1918 hosts that pass this gate.
-+            const privHost = bu ? /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})$/.test(bu.hostname) : false;
-             const schemeOk = bu && (bu.protocol === "https:" || (bu.protocol === "http:" && privHost));
-             if (!schemeOk || bu.username || bu.password) {
-               throw new WebError(`backend "${id}" has an invalid baseURL: https required (plain http only for private hosts), credentials-in-URL rejected`, "WEB_PROVIDER_ERROR");
-@@ -358,7 +432,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
-                   : String(err instanceof Error ? err.message : err);
-                 const msg = reason.slice(0, 80);
+-            const schemeOk = bu && (bu.protocol === "https:" || (bu.protocol === "http:" && privHost));
+-            if (!schemeOk || bu.username || bu.password) {
+-              throw new WebError(`backend "${id}" has an invalid baseURL: https required (plain http only for private hosts), credentials-in-URL rejected`, "WEB_PROVIDER_ERROR");
++            const invalid = invalidBaseURL(beOpts.baseURL);
++            if (invalid !== undefined) {
++              throw new WebError(`backend "${id}" has an invalid baseURL: ${invalid}`, "WEB_PROVIDER_ERROR");
+             }
+           }
+           const controller = new AbortController();
+@@ -334,22 +430,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+                 return value;
+               },
+               (err) => {
+-                const msg = String(err instanceof Error ? err.message : err).slice(0, 80);
++                // A caller cancellation is not a backend outage: recording it
++                // as a failure would let the stop button trip the breaker and
++                // paint /health red. The outer throwIfSearchAborted(signal)
++                // still propagates the cancellation to the caller.
++                if (signal?.aborted === true) throw err;
++                // Timeout classification happens BEFORE telemetry/health are
++                // recorded (route6 P6): backends surface an internal timeout
++                // as their own abort-flavored error ("unified search aborted",
++                // raw AbortError, …), so the old code recorded that text in
++                // the telemetry line and health payload even though the final
++                // thrown error said "timed out after Nms" — the two disagreed
++                // and "(unified search aborted)" read as if the USER cancelled.
++                const timedOut = controller.signal.aborted && !(signal && signal.aborted);
++                const reason = timedOut
++                  ? `backend "${id}" timed out after ${effectiveTimeoutMs}ms`
++                  : String(err instanceof Error ? err.message : err);
++                const msg = sanitizeError(reason, 80);
                  telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: msg });
 -                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg);
+-                throw err;
 +                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg,
 +                  { rateLimited: rateLimited(err), keylessRejected: keylessRejected(err), retryAfterMs: retryAfterMsFrom(err) });
-                 throw timedOut
-                   ? new WebError(reason, "WEB_PROVIDER_ERROR", { cause: err instanceof Error ? err : undefined })
-                   : err;
-@@ -409,6 +484,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
++                throw timedOut
++                  ? new WebError(reason, "WEB_PROVIDER_ERROR", { cause: err instanceof Error ? err : undefined })
++                  : err;
+               },
+             )
+-            .catch((err) => {
+-              if (controller.signal.aborted && !(signal && signal.aborted)) {
+-                throw new WebError(
+-                  `backend "${id}" timed out after ${effectiveTimeoutMs}ms`,
+-                  "WEB_PROVIDER_ERROR",
+-                  { cause: err instanceof Error ? err : undefined },
+-                );
+-              }
+-              throw err;
+-            })
+             .finally(() => clearTimeout(timeoutId));
+         };
+ 
+@@ -395,6 +500,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -2100,7 +2938,7 @@ index 7242a56..cf0c740 100644
        // PHASE 4 fuse: multi-query mode fuses the per-variant ranked lists with
        // RRF (k=60); single-query mode keeps the historical behavior (the one
        // list, unchanged ordering).
-@@ -422,8 +501,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -408,8 +517,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          const sources = ordered.slice(0, maxResults);
          // 结果呈现头（Anthropic web-search / OpenAI grounding 官方指引）：
          // 置于结果块最前，要求逐条引用来源 URL、优先官方/一手与较新来源；
@@ -2111,7 +2949,7 @@ index 7242a56..cf0c740 100644
          let outContent = perVariant.find((v) => v.mergedContent !== undefined)?.mergedContent;
          if (opts.resultHeader !== false && (sources.length > 0 || outContent !== undefined)) {
            const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
-@@ -434,18 +513,22 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -420,24 +529,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          if (cacheKey && cache) {
            cache.set(cacheKey, { sources, content: outContent, truncated: ordered.length > maxResults });
          }
@@ -2143,7 +2981,35 @@ index 7242a56..cf0c740 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -483,13 +566,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
++          // Failure notes translate known classes into short user-facing
++          // labels (route6 P2); the raw text remains the fallback, and a
++          // backend that just crossed the breaker threshold is annotated as
++          // cooled on this same line.
+           const parts = allTelemetry
+             .slice(0, 12)
+-            .map((t) => t.id + (t.ok ? " ✓" : " ✗") + t.ms + "ms" + (t.ok ? "/" + t.count : (t.error ? " (" + String(t.error).slice(0, 40) + ")" : "")))
++            .map((t) => {
++              if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
++              const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
++              const cooledNow = cooledAnnotation(latestBackendHealth.get(t.id), Date.now());
++              return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "") + (cooledNow ? " " + cooledNow : "");
++            })
+             .concat(cooledParts);
+           if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
+           const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
+@@ -454,20 +576,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+       // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
+       // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
+       // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
+-      if (allFailures.length === 0) {
++      // `allFailures.length === 0` is not the only success shape: with three
++      // enabled backends, one may fail while two succeed and return zero hits
++      // (filtered-out/obscure query). The old guard then threw "all enabled
++      // backends failed (1)" although two thirds of the fan-out succeeded.
++      // A success is a success even when the merged list is empty.
++      if (allFailures.length === 0 || okCount > 0) {
+         let emptyContent = perVariant.find((v) => v.mergedContent !== undefined)?.mergedContent;
+         if (opts.resultHeader !== false && emptyContent !== undefined) {
            const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
            emptyContent = header + "\n\n" + emptyContent;
          }
@@ -2154,25 +3020,46 @@ index 7242a56..cf0c740 100644
 -          backendsOk: allTelemetry.filter((t) => t.ok).length,
 -          backendsTotal: allTelemetry.length,
 -        });
+-        if (cacheKey && cache) cache.set(cacheKey, { sources: [], content: emptyContent, truncated: false });
++        if (opts.resultTelemetry !== false && allFailures.length > 0) {
++          const parts = allTelemetry.slice(0, 12).map((t) => {
++            if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
++            const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
++            return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "");
++          });
++          if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
++          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
++          emptyContent = emptyContent === undefined ? line : emptyContent + "\n\n" + line;
++        }
 +        recordHistory(history, request?.query, 0, okCount, allTelemetry.length);
-         if (cacheKey && cache) cache.set(cacheKey, { sources: [], content: emptyContent, truncated: false });
++        // An empty result is never served from the cache (the read path
++        // requires a non-empty sources array), so writing it only pays for a
++        // full eviction scan and can push real entries out.
          return {
            sources: [],
-@@ -500,9 +577,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           ...(emptyContent !== undefined ? { content: emptyContent } : {}),
+@@ -475,19 +608,38 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+         };
+       }
  
-       // All attempted backends failed - synthesize one meaningful error that
+-      // All enabled backends failed - synthesize one meaningful error that
++      // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.
+-      const detail = allFailures.slice(0, 4)
+-        .map((f) => f.id + ": " + String(f.err instanceof Error ? f.err.message : f.err).slice(0, 120))
+-        .join("; ");
 +      // A total outage must be visible in history: otherwise the newest entry
 +      // still shows the last success while health already records failures,
 +      // making failure-rate/availability statistics silently omit outages.
-       // Reasons beyond MAX_FAILURE_DETAILS collapse into "+N more"; backends
-       // that never ran (breaker cooldown) are named explicitly — without the
--      // note "(N)" reads as "N enabled" when it means "N attempted" (route6).
++      // Reasons beyond MAX_FAILURE_DETAILS collapse into "+N more"; backends
++      // that never ran (breaker cooldown) are named explicitly — without the
 +      // note "(N)" reads as "N enabled" when it means "N attempted".
-       const detail = allFailures.slice(0, MAX_FAILURE_DETAILS)
-         .map((f) => f.id + ": " + String(f.err instanceof Error ? f.err.message : f.err).slice(0, 120))
-         .join("; ") + (allFailures.length > MAX_FAILURE_DETAILS ? `; +${allFailures.length - MAX_FAILURE_DETAILS} more` : "");
-@@ -512,8 +592,14 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
++      const detail = allFailures.slice(0, MAX_FAILURE_DETAILS)
++        .map((f) => f.id + ": " + sanitizeError(f.err instanceof Error ? f.err.message : f.err, 120))
++        .join("; ") + (allFailures.length > MAX_FAILURE_DETAILS ? `; +${allFailures.length - MAX_FAILURE_DETAILS} more` : "");
+       const allKeyMissing =
+         allFailures.length > 0 &&
+         allFailures.every((f) => f.err instanceof WebError && (f.err.code === "WEB_PROVIDER_UNAVAILABLE" || f.err.code === "WEB_PROVIDER_CREDENTIAL_MISSING"));
        const hint = allKeyMissing
          ? " (every enabled backend is missing its API key - add keys in Settings > Web Search, or enable a keyless backend)"
          : "";
@@ -2182,12 +3069,19 @@ index 7242a56..cf0c740 100644
 +      recordHistory(history, request?.query, 0, okCount, allTelemetry.length);
 +      // Anchor the note to the fan-out instant: recomputing at render time would
 +      // claim "expired" for a backend that was genuinely cooling when skipped.
-       const cooledNote = cooled.size > 0
--        ? " (cooled-skipped: " + [...cooled].map(([cid, centry]) => cid + " " + (cooledAnnotation(centry, Date.now()) || "⏸cooled")).join(", ") + ")"
-+        ? " (cooled-skipped: " + [...cooled].map(([cid, centry]) => cid + " " + (cooledAnnotation(centry, nowMs) || "⏸cooled")).join(", ") + ")"
-         : "";
++      // fail-open re-runs non-quota cooled backends, so only those that were
++      // genuinely skipped belong in this note; naming a backend that just ran
++      // reads as "skipped" and "failed" in the same sentence.
++      const skippedOnly = [...cooled].filter(([cid]) => !allTelemetry.some((t) => t.id === cid));
++      const cooledNote = skippedOnly.length > 0
++        ? " (cooled-skipped: " + skippedOnly.map(([cid, centry]) => cid + " " + (cooledAnnotation(centry, nowMs) || "⏸cooled")).join(", ") + ")"
++        : "";
        throw new WebError(
-         `unified search: all enabled backends failed (${allFailures.length}) - ${detail}` + cooledNote + hint,
+-        `unified search: all enabled backends failed (${allFailures.length}) - ${detail}` + hint,
++        `unified search: all enabled backends failed (${allFailures.length}) - ${detail}` + cooledNote + hint,
+         "WEB_PROVIDER_ERROR",
+         { cause: hardError ?? undefined },
+       );
 diff --git a/lib/settings-api.js b/lib/settings-api.js
 index 7765df5..4336663 100644
 --- a/lib/settings-api.js
@@ -2368,11 +3262,148 @@ index 7a75fc2..0d7d952 100644
  /** Return a fixed reason without exposing caller-supplied strings. */
  function structuralReason(req) {
    const host = authorityOf(req.headers.host, 'http')
+diff --git a/lib/util/base-url.js b/lib/util/base-url.js
+new file mode 100644
+index 0000000..5a04c48
+--- /dev/null
++++ b/lib/util/base-url.js
+@@ -0,0 +1,56 @@
++/**
++ * Validation for operator-supplied backend base URLs.
++ *
++ * A base URL decides where the backend connects AND where its API key is
++ * sent, so it is a trust boundary, not a formatting preference: only HTTPS,
++ * plus plain HTTP for loopback/RFC1918 self-hosted instances. Embedded
++ * credentials are rejected because the caller supplies the key separately.
++ * Link-local ranges are rejected regardless of scheme — they host instance
++ * metadata, not a search service, and an attacker-controlled settings write
++ * must not turn the plugin into a metadata client.
++ *
++ * @module lib/util/base-url
++ */
++
++/** Hosts that may be reached over plain HTTP (self-hosted SearXNG etc.). */
++const PRIVATE_HOST_RE = /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})$/;
++
++/** Always-off-limits hosts: cloud instance metadata and the unspecified address. */
++const BLOCKED_HOST_RE = /^(0\.0\.0\.0|169\.254\.\d{1,3}\.\d{1,3}|metadata(\.google\.internal)?|instance-data)$/;
++
++/**
++ * Why a candidate base URL is unusable, or `undefined` when it is allowed.
++ *
++ * @param {unknown} raw - candidate URL string.
++ * @returns {string|undefined} short reason suitable for an error message.
++ */
++export function invalidBaseURL(raw) {
++  if (typeof raw !== "string" || raw.trim() === "") return "empty URL";
++  let url;
++  try {
++    url = new URL(raw);
++  } catch {
++    return "not a URL";
++  }
++  if (url.username !== "" || url.password !== "") return "credentials in URL rejected";
++  // URL.hostname keeps brackets on IPv6 literals.
++  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
++  if (BLOCKED_HOST_RE.test(host)
++      || /^fe[89ab][0-9a-f]:/.test(host)
++      || host === "fd00:ec2::254"
++      || /^::ffff:(a9fe|fe[89ab])/i.test(host)) return "link-local host rejected";
++  if (url.protocol === "https:") return undefined;
++  if (url.protocol === "http:" && (PRIVATE_HOST_RE.test(host) || host === "::1")) return undefined;
++  return "https required (plain http only for private hosts)";
++}
++
++/**
++ * True when every candidate is allowed. Convenience wrapper for callers that
++ * only need a boolean.
++ *
++ * @param {unknown} raw - candidate URL string.
++ * @returns {boolean} whether the URL passed validation.
++ */
++export function isAllowedBaseURL(raw) {
++  return invalidBaseURL(raw) === undefined;
++}
+diff --git a/lib/util/describe-error.js b/lib/util/describe-error.js
+new file mode 100644
+index 0000000..a7f7391
+--- /dev/null
++++ b/lib/util/describe-error.js
+@@ -0,0 +1,58 @@
++// util/describe-error.js — cause-chain-aware one-line error description.
++//
++// Native fetch (undici, including the EnvHttpProxyAgent / ProxyAgent paths a
++// harness may install as its global dispatcher) reports the actionable
++// failure — getaddrinfo ENOTFOUND, ECONNREFUSED, proxy CONNECT failure, TLS
++// error, timeout — on `error.cause`, while String(error) yields a bare
++// "TypeError: fetch failed". Failure wrappers that interpolate the bare form
++// leave the model/user unable to tell "DNS dead" from "proxy rejected" from
++// "sidecar stalled". This helper walks the cause chain (bounded depth and
++// length) and joins it into one line so the detail survives into mcp-client
++// wraps, backend wraps, the provider's all-fail enumeration, the telemetry
++// line and the health payload.
++
++const DEFAULT_MAX_DEPTH = 3;
++const DEFAULT_MAX_LEN = 220;
++
++/** One-line description of `error`, following up to maxDepth causes. */
++export function describeError(error, options = {}) {
++  const maxDepth = Number.isFinite(options.maxDepth) ? Math.max(0, options.maxDepth) : DEFAULT_MAX_DEPTH;
++  const maxLen = Number.isFinite(options.maxLen) ? Math.max(40, options.maxLen) : DEFAULT_MAX_LEN;
++  const parts = [];
++  let current = error;
++  for (let depth = 0; current !== undefined && current !== null && depth <= maxDepth; depth++) {
++    const text = oneLiner(current);
++    if (text !== "" && parts[parts.length - 1] !== text) parts.push(text);
++    // undici sometimes aggregates several socket errors under one cause;
++    // surface up to two of them instead of a useless "AggregateError: []".
++    if (current instanceof AggregateError && Array.isArray(current.errors) && current.errors.length > 0) {
++      for (const sub of current.errors.slice(0, 2)) {
++        const subText = oneLiner(sub);
++        if (subText !== "" && !parts.includes(subText)) parts.push(subText);
++      }
++      break;
++    }
++    current = current?.cause;
++  }
++  if (parts.length === 0) return "";
++  let out = parts[0];
++  if (parts.length > 1) out += " (cause: " + parts.slice(1).join(" <- ") + ")";
++  return out.length > maxLen ? out.slice(0, maxLen - 1) + "…" : out;
++}
++
++function oneLiner(value) {
++  let text;
++  if (value instanceof Error) {
++    const name = value.name && value.name !== "Error" ? value.name + ": " : "";
++    const message = String(value.message ?? "");
++    // Keep the errno-style code when the message does not already carry it
++    // (e.g. code ENOTFOUND with message "fetch failed"). Only E*/UND_ERR_*
++    // codes qualify — host error codes like "WEB_PROVIDER_ERROR" are
++    // transport metadata, not message text.
++    const codeOk = typeof value.code === "string" && /^(E[A-Z_]+|UND_ERR_[A-Z_]+)$/.test(value.code) && !message.includes(value.code);
++    text = name + (codeOk ? value.code + " " : "") + message;
++  } else {
++    text = String(value);
++  }
++  return text.replace(/\s+/g, " ").trim();
++}
 diff --git a/lib/util/egress-fetch.js b/lib/util/egress-fetch.js
-index 1afbbdc..846be72 100644
+index 867902a..9572518 100644
 --- a/lib/util/egress-fetch.js
 +++ b/lib/util/egress-fetch.js
-@@ -21,6 +21,7 @@
+@@ -10,20 +10,151 @@
+ //
+ // When no matching proxy env is set, or the target host sits in NO_PROXY, it
+ // defers to the native fetch, so behavior everywhere else is unchanged.
++//
++// Optional TLS-egress forwarder: when DSH_EGRESS_FORWARDER is set (a local
++// sidecar exposing a POST /fwd API backed by a Chromium TLS stack), requests
++// are relayed through it with the upstream proxy carried in the sidecar spec
++// (DSH_EGRESS_FORWARDER_PROXY, defaulting to HTTPS_PROXY). This exists because
++// some upstreams (Exa, DuckDuckGo) gate on the client TLS fingerprint (JA3)
++// rather than on the exit IP; the Node TLS fingerprint is rejected where a
++// real browser's is accepted. Unset the env and behavior is byte-identical.
  
  import http from "node:http";
  import https from "node:https";
@@ -2380,10 +3411,57 @@ index 1afbbdc..846be72 100644
  
  const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
  const MAX_REDIRECTS = 5;
-@@ -34,6 +35,55 @@ export function egressFetch(url, init = {}) {
-   return tunneledFetch(String(url), init, proxy, 0);
- }
++// Backend responses are search results/HTML, not downloads. Buffer at most
++// 10 MiB so a hostile or broken endpoint cannot exhaust the plugin process.
++const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
  
+-/** fetch-compatible entry: tunnels via HTTPS_PROXY/HTTP_PROXY when configured. */
+-export function egressFetch(url, init = {}) {
++/** fetch-compatible entry: forwarder first, then HTTPS_PROXY/HTTP_PROXY tunnel. */
++export function egressFetch(url, init = {}, depth = 0) {
++  const forwarder = forwarderFor(url);
++  if (forwarder !== undefined) {
++    return forwarderFetch(String(url), init, forwarder).catch((error) => {
++      // The sidecar is an OPTIONAL accelerator. A transport-level rejection
++      // means the hop itself is unusable (not that the upstream refused us),
++      // so retry once over the proxy path before surfacing the failure.
++      if (init.signal?.aborted === true || !isForwarderTransportError(error)) throw error;
++      forwarderProbes.set(forwarder.endpoint, { ok: false, at: Date.now() });
++      const proxy = proxyFor(url);
++      if (proxy === undefined) return fetch(url, init);
++      return tunneledFetch(String(url), init, proxy, depth);
++    });
++  }
+   const proxy = proxyFor(url);
+   if (proxy === undefined) return fetch(url, init);
+-  return tunneledFetch(String(url), init, proxy, 0);
++  return tunneledFetch(String(url), init, proxy, depth);
++}
++
++/**
++ * Distinguish "the sidecar hop failed" from "the upstream answered with an
++ * error". Only the former may be retried over the proxy: retrying a 4xx/5xx
++ * would double-count rate limits.
++ * @param {unknown} error rejection from forwarderFetch
++ * @returns {boolean} true when the hop should be treated as unusable
++ */
++function isForwarderTransportError(error) {
++  const code = error !== null && typeof error === "object" ? error.code : undefined;
++  if (typeof code === "string") {
++    // ECONNREFUSED / EHOSTUNREACH / ENETUNREACH mean "nothing is there" — the
++    // sidecar is absent and the proxy path is strictly better. Timeouts and
++    // resets mean the sidecar IS there but unhealthy, which the caller should
++    // see (retrying over the proxy would hide a broken sidecar).
++    return ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(code);
++  }
++  // Without a machine-readable code, only an explicit "unreachable" verdict
++  // counts. "did not respond within Nms" means the sidecar accepted and then
++  // stalled — the caller must see that, not have it papered over by a proxy
++  // retry.
++  const text = String(error instanceof Error ? error.message : error);
++  return /forwarder unreachable|ECONNREFUSED/i.test(text);
++}
++
 +
 +/**
 + * Probe cache for the optional TLS-egress forwarder. `forwarderFor()` must stay
@@ -2403,13 +3481,21 @@ index 1afbbdc..846be72 100644
 +function forwarderUsable(endpoint) {
 +  const probe = forwarderProbes.get(endpoint);
 +  if (probe !== undefined) {
-+    if (probe.ok) return true;
-+    if (Date.now() - probe.at < FORWARDER_REPROBE_MS) return false;
++    // A confirmed-dead endpoint stays retired until the re-probe window
++    // expires; a confirmed-live one is used directly.
++    if (probe.ok) {
++      if (Date.now() - probe.at < FORWARDER_REPROBE_MS) return true;
++    } else if (Date.now() - probe.at < FORWARDER_REPROBE_MS) {
++      return false;
++    }
 +  }
-+  // Unknown or stale: kick off a probe and stay on the proxy for this request.
-+  forwarderProbes.set(endpoint, { ok: false, at: Date.now() });
++  // Unknown, or the verdict is stale: probe again, but do NOT block this
++  // request on the result. Optimistically take the forwarder path (upstream
++  // behaviour) and let a transport failure fall back to the proxy; a first
++  // request must never be denied the JA3 fix merely because the probe has
++  // not finished yet.
 +  probeForwarder(endpoint);
-+  return false;
++  return true;
 +}
 +
 +/** @param {string} endpoint forwarder base URL */
@@ -2433,29 +3519,163 @@ index 1afbbdc..846be72 100644
 +  socket.once("error", () => settle(false));
 +}
 +
- /** Resolve the TLS-egress forwarder for a request target (NO_PROXY aware). */
- function forwarderFor(url) {
-   let target;
-@@ -47,11 +97,18 @@ function forwarderFor(url) {
-   const endpoint = env.DSH_EGRESS_FORWARDER;
-   if (endpoint === undefined || endpoint === "") return undefined;
-   if (inNoProxy(target, env.NO_PROXY || env.no_proxy)) return undefined;
++/** Resolve the TLS-egress forwarder for a request target (NO_PROXY aware). */
++function forwarderFor(url) {
++  let target;
++  try {
++    target = new URL(String(url));
++  } catch {
++    return undefined;
++  }
++  if (target.protocol !== "https:" && target.protocol !== "http:") return undefined;
++  const env = process.env;
++  const endpoint = env.DSH_EGRESS_FORWARDER;
++  if (endpoint === undefined || endpoint === "") return undefined;
++  if (inNoProxy(target, env.NO_PROXY || env.no_proxy)) return undefined;
 +  // The sidecar is an OPTIONAL accelerator. A configured-yet-dead endpoint
 +  // would otherwise make every request wait ~20s before failing, which is
 +  // strictly worse than the proxy path. Only take the forwarder when a
 +  // background probe has actually seen the port accept a connection; an
 +  // unknown or failed probe keeps us on the proxy (fail-open).
 +  if (!forwarderUsable(endpoint)) return undefined;
-   const proxy = env.DSH_EGRESS_FORWARDER_PROXY
-     || env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy || "";
-   return { endpoint, proxy: proxy === "" ? undefined : proxy };
++  const proxy = env.DSH_EGRESS_FORWARDER_PROXY
++    || env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy || "";
++  return { endpoint, proxy: proxy === "" ? undefined : proxy };
  }
  
 +
  /** Resolve the proxy URL for a request target (NO_PROXY aware). */
  function proxyFor(url) {
    let target;
-@@ -295,13 +352,24 @@ function httpsViaConnect(target, proxyUrl, method, headers, body, signal) {
+@@ -95,6 +226,12 @@ async function tunneledFetch(url, init, proxy, depth) {
+         await drain(response);
+         throw new TypeError(`fetch failed: redirect mode is set to error (${response.status})`);
+       }
++      if (init.redirect !== "manual" && depth >= MAX_REDIRECTS) {
++        // Returning the final 3xx made a redirect loop look like a normal
++        // (ok:false) response; callers only saw an opaque empty body.
++        await drain(response);
++        throw new TypeError(`fetch failed: too many redirects (max ${MAX_REDIRECTS})`);
++      }
+       if (init.redirect !== "manual" && depth < MAX_REDIRECTS) {
+         const next = new URL(location, target);
+         const dropBody = response.status === 303
+@@ -103,13 +240,113 @@ async function tunneledFetch(url, init, proxy, depth) {
+           ? { ...init, method: "GET", body: undefined, headers: withoutBodyHeaders(init.headers) }
+           : { ...init };
+         await drain(response);
+-        return egressFetch(next.href, nextInit);
++        return egressFetch(next.href, nextInit, depth + 1);
+       }
+     }
+   }
+   return response;
+ }
+ 
++/**
++ * Relay through the TLS-egress sidecar: POST /fwd with an
++ * x-sidecar-spec base64 JSON header; the sidecar performs the upstream
++ * request with its own (Chromium) TLS stack and returns the upstream
++ * status/headers/body verbatim. Upstream dial failures surface as
++ * 502 + x-sidecar-error, which we rethrow as fetch-style TypeError.
++ *
++ * proxy-exempt: this hop must own its transport (node:http(s)) by design —
++ * hosts install a global dispatcher (e.g. an HTTP_PROXY-wired
++ * EnvHttpProxyAgent); routing this hop through it would send the sidecar
++ * request into the very proxy chain the sidecar fronts, and with the
++ * sidecar host missing from NO_PROXY it dies there (observed as
++ * "dial HK -> sidecar ... EOF" in the proxy log). The proxy decision for
++ * the *upstream* request rides in the sidecar spec
++ * (DSH_EGRESS_FORWARDER_PROXY), not in this hop.
++ *
++ * A forwarder-level ceiling bounds the hop even when the sidecar accepts
++ * connections but stops responding (half-dead process): the effective
++ * limit is min(caller signal, DSH_EGRESS_FORWARDER_TIMEOUT_MS ?? 20s).
++ */
++async function forwarderFetch(url, init, forwarder) {
++  const method = String(init.method ?? "GET").toUpperCase();
++  const headers = normalizeHeaders(init.headers);
++  const body = normalizeBody(init.body);
++  const timeoutMs = forwarderTimeoutMs();
++  const callerSignal = init.signal;
++  const timeoutSignal = AbortSignal.timeout(timeoutMs);
++  const signal = callerSignal !== undefined ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
++  const spec = { url, method, headers, timeout_ms: timeoutMs };
++  if (forwarder.proxy !== undefined) spec.proxy = forwarder.proxy;
++  if (init.redirect !== undefined) spec.redirect = init.redirect;
++  throwIfAborted(signal);
++  const response = await forwarderExchange(forwarder.endpoint, spec, body, signal, callerSignal, timeoutSignal, timeoutMs);
++  const marker = response.headers.get("x-sidecar-error");
++  if (response.status === 502 && marker !== null) {
++    let detail = "";
++    try { detail = (await response.text()).slice(0, 200); } catch {}
++    throw new TypeError(`fetch failed: forwarder ${marker}${detail !== "" ? ` (${detail})` : ""}`);
++  }
++  return response;
++}
++
++const DEFAULT_FORWARDER_TIMEOUT_MS = 20_000;
++
++/** Forwarder-hop ceiling; DSH_EGRESS_FORWARDER_TIMEOUT_MS overrides (tests/rescue). */
++export function forwarderTimeoutMs() {
++  const n = Number(process.env.DSH_EGRESS_FORWARDER_TIMEOUT_MS);
++  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FORWARDER_TIMEOUT_MS;
++}
++
++/**
++ * The sidecar exchange over node:http(s). Failure mapping priority:
++ *   1. caller signal aborted  -> the caller's own abort reason;
++ *   2. forwarder timeout fired -> "did not respond ... (sidecar stalled?)";
++ *   3. otherwise              -> "unreachable (<cause chain>)".
++ */
++function forwarderExchange(endpoint, spec, body, signal, callerSignal, timeoutSignal, timeoutMs) {
++  const target = new URL(endpoint);
++  const secure = target.protocol === "https:";
++  const transport = secure ? https : http;
++  const headers = {
++    "content-type": "application/octet-stream",
++    "x-sidecar-spec": Buffer.from(JSON.stringify(spec)).toString("base64"),
++  };
++  if (body !== undefined) headers["content-length"] = String(body.length);
++  return new Promise((resolve, reject) => {
++    let settled = false;
++    const fail = (error) => {
++      if (settled) return;
++      settled = true;
++      if (callerSignal?.aborted === true) {
++        reject(abortReason(callerSignal));
++        return;
++      }
++      if (timeoutSignal.aborted === true) {
++        reject(new TypeError(`fetch failed: forwarder did not respond within ${timeoutMs}ms (sidecar stalled?)`, { cause: error }));
++        return;
++      }
++      reject(new TypeError(`fetch failed: forwarder unreachable (${sanitize(error)})`, { cause: error }));
++    };
++    const request = transport.request({
++      host: target.hostname,
++      port: target.port !== "" ? Number(target.port) : secure ? 443 : 80,
++      method: "POST",
++      path: target.pathname + target.search,
++      headers,
++      signal,
++    });
++    request.on("error", fail);
++    request.on("response", (res) => {
++      collect(res).then((response) => {
++        if (settled) return;
++        settled = true;
++        resolve(response);
++      }, fail);
++    });
++    request.end(body);
++  });
++}
++
+ /* ------------------------------------------------------------------ */
+ /* transports                                                          */
+ /* ------------------------------------------------------------------ */
+@@ -167,13 +404,24 @@ function httpsViaConnect(target, proxyUrl, method, headers, body, signal) {
          fail(new TypeError(`fetch failed: proxy CONNECT rejected with ${connectRes.statusCode}`));
          return;
        }
@@ -2481,8 +3701,27 @@ index 1afbbdc..846be72 100644
        });
        open.push(request);
        request.on("error", (error) => fail(new TypeError(`fetch failed: ${sanitize(error)}`, { cause: error })));
-@@ -366,11 +434,18 @@ function collect(res) {
+@@ -234,17 +482,42 @@ function httpViaProxy(target, proxyUrl, method, headers, body, signal) {
+ function collect(res) {
+   return new Promise((resolve, reject) => {
+     const chunks = [];
+-    res.on("data", (chunk) => chunks.push(chunk));
++    let bytes = 0;
++    let settled = false;
++    res.on("data", (chunk) => {
++      if (settled) return;
++      bytes += chunk.length;
++      if (bytes > MAX_RESPONSE_BYTES) {
++        settled = true;
++        res.destroy();
++        reject(new TypeError(`fetch failed: response body exceeds ${MAX_RESPONSE_BYTES} bytes`));
++        return;
++      }
++      chunks.push(chunk);
++    });
      res.on("end", () => {
++      if (settled) return;
++      settled = true;
        // Null-body statuses (204/304) and empty streams must construct a
        // bodiless Response; an empty Buffer is not null and would throw.
 -      const payload = chunks.length === 0 ? null : Buffer.concat(chunks);
@@ -2502,10 +3741,17 @@ index 1afbbdc..846be72 100644
 +      } catch (err) {
 +        reject(err);
 +      }
++    });
++    res.on("error", (err) => {
++      if (settled) return;
++      settled = true;
++      reject(err);
      });
-     res.on("error", reject);
+-    res.on("error", reject);
    });
-@@ -401,6 +476,12 @@ function normalizeHeaders(raw) {
+ }
+ 
+@@ -273,6 +546,12 @@ function normalizeHeaders(raw) {
        if (value !== undefined) headers[String(key).toLowerCase()] = String(value);
      }
    }
@@ -2518,20 +3764,35 @@ index 1afbbdc..846be72 100644
    delete headers["host"];
    return headers;
  }
+@@ -324,9 +603,20 @@ function abortReason(signal) {
+   return signal?.reason !== undefined ? signal.reason : new DOMException("This operation was aborted", "AbortError");
+ }
+ 
++// One-line description including the cause chain: undici hides the real
++// failure (proxy CONNECT rejection / ECONNREFUSED / ENOTFOUND / TLS / proxy
++// 502) behind a bare "fetch failed"; message-only sanitizing would drop it.
+ function sanitize(error) {
+-  const raw = error && error.message ? String(error.message) : String(error);
+-  return raw.replace(/\s+/g, " ").slice(0, 140);
++  const parts = [];
++  let current = error;
++  for (let depth = 0; current !== undefined && current !== null && depth < 3; depth++) {
++    const raw = current instanceof Error && current.message ? String(current.message) : String(current);
++    const text = raw.replace(/\s+/g, " ").trim();
++    if (text !== "" && parts[parts.length - 1] !== text) parts.push(text);
++    current = current?.cause;
++  }
++  const out = parts.length === 0 ? String(error) : parts.join(" <- ");
++  return out.slice(0, 200);
+ }
+ 
+ async function drain(response) {
 diff --git a/lib/util/failure-label.js b/lib/util/failure-label.js
-index 6b6184d..e97056b 100644
---- a/lib/util/failure-label.js
+new file mode 100644
+index 0000000..3009809
+--- /dev/null
 +++ b/lib/util/failure-label.js
-@@ -1,12 +1,63 @@
--// util/failure-label.js — short user-facing classification of a backend
--// failure for the telemetry line ("[websearch backends] ... searxng ✗...").
--//
--// The raw reason stays the machine-facing truth (all-fail error, health
--// payload); the telemetry line is what the model/user reads next to results,
--// where "SearXNG: invalid JSON response" reads like a plugin bug while it
--// actually means "the instance served an anti-bot page" (route3/route6).
--// Pure and zero-dep: returns undefined when no confident class matches, so
--// the caller keeps the raw text as fallback.
+@@ -0,0 +1,101 @@
 +// failure-label.js — classify quota/rate-limit failures. Route on the stable
 +// `code` / `status` / `rateLimited` fields first (HarnessError JSDoc:
 +// "route on this, never by parsing message"). The message regex is a legacy
@@ -2565,49 +3826,119 @@ index 6b6184d..e97056b 100644
 +}
 +
 +// Cap a server-supplied cooldown so a bogus or hostile Retry-After cannot
-+// disable a backend for years. Anything beyond a day falls back to the default.
++// disable a backend for years. Anything beyond a day is treated as unknown.
 +const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
-+const DEFAULT_RETRY_AFTER_MS = 60_000;
 +
 +/**
 + * Best-effort Retry-After extraction, in milliseconds. webErrorFromResponse()
-+ * stores the raw header on err.retryAfter; older errors fall back to 60s.
-+ * @returns {number} cooldown in milliseconds
++ * stores the raw header on err.retryAfter.
++ *
++ * Returns `undefined` when the response carried no usable header — including
++ * an unparsable value, a past http-date, or a value beyond the one-day cap.
++ * The breaker then falls back to the configured `breakerCooldownMs`, so
++ * `0 = count only` keeps working for header-less 429s instead of silently
++ * becoming 60 seconds.
++ *
++ * @returns {number|undefined} explicit cooldown in milliseconds, if any
 + */
 +export function retryAfterMsFrom(err) {
 +  const v = err?.retryAfter
 +    ?? err?.cause?.response?.headers?.get?.("retry-after")
 +    ?? err?.cause?.retryAfter;
-+  if (v == null || String(v).trim() === "") return DEFAULT_RETRY_AFTER_MS;
++  if (v == null || String(v).trim() === "") return undefined;
 +  const secs = Number(v);
 +  if (Number.isFinite(secs)) {
-+    if (secs < 0) return DEFAULT_RETRY_AFTER_MS;
++    if (secs < 0) return undefined;
 +    const ms = secs * 1000;
-+    return ms <= MAX_RETRY_AFTER_MS ? ms : DEFAULT_RETRY_AFTER_MS;
++    return ms <= MAX_RETRY_AFTER_MS ? ms : undefined;
 +  }
 +  const date = Date.parse(v);
-+  if (!Number.isFinite(date)) return DEFAULT_RETRY_AFTER_MS;
++  if (!Number.isFinite(date)) return undefined;
 +  // An http-date in the past (clock skew, already-expired window) must not
-+  // become a zero-length cooldown; treat it as unknown and use the default.
++  // become a zero-length cooldown; treat it as unknown.
 +  const ms = date - Date.now();
-+  return ms > 0 && ms <= MAX_RETRY_AFTER_MS ? ms : DEFAULT_RETRY_AFTER_MS;
++  return ms > 0 && ms <= MAX_RETRY_AFTER_MS ? ms : undefined;
 +}
++
++/**
++ * @param {string} id backend id (searxng gets a dedicated phrasing)
++ * @param {string} raw failure message (already truncated by the caller)
++ * @returns {string|undefined} short label, or undefined to keep the raw text
++ */
++export function failureLabel(id, raw) {
++  const m = String(raw ?? "");
++  if (m === "") return undefined;
++  if (/(invalid JSON|anti-bot|not a bot|antibot|captcha|challenge page|verifying your browser)/i.test(m)) {
++    return id === "searxng"
++      ? "instance degraded (anti-bot/non-JSON page)"
++      : "non-JSON response (bot wall?)";
++  }
++  if (/timed out after \d+ms/.test(m)) return "timeout (network slow/blocked)";
++  // Proxy/forwarder-path failures get their own class: the route5 incident
++  // (harness EnvHttpProxyAgent hijacking the sidecar request) surfaced as a
++  // generic "fetch failed", pointing the reader at DNS/TLS when the actual
++  // fault was the proxy/egress hop. Match explicit proxy markers first: a bare
++  // /CONNECT/i also matched "connect ECONNREFUSED", mislabelling ordinary
++  // network failures as proxy failures.
++  if (/proxy\s+(response|connect|tunnel)|HTTP Tunneling|CONNECT tunnel|forwarder|sidecar/i.test(m)) {
++    return "proxy/forwarder path failed";
++  }
++  if (/(fetch failed|connection refused|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ECONNRESET|EPIPE|socket hang up|certificate|TLS)/i.test(m)) {
++    return "network unreachable (DNS/TCP/TLS)";
++  }
++  if (/HTTP 429|Too Many Requests|rate.?limit/i.test(m)) return "rate-limited (HTTP 429)";
++  const s5 = /HTTP (5\d\d)/.exec(m);
++  if (s5) return "server error (HTTP " + s5[1] + ")";
++  const s4 = /HTTP (40[13]|\b403\b)/.exec(m);
++  if (s4) return "blocked (HTTP " + s4[1] + ")";
++  if (/lacks a results\[\] array|not a SearXNG API/.test(m)) return "unexpected API shape";
++  return undefined;
++}
+diff --git a/lib/util/log.js b/lib/util/log.js
+index ee2a966..3f3d94f 100644
+--- a/lib/util/log.js
++++ b/lib/util/log.js
+@@ -18,14 +18,16 @@
+  * search.
+  */
  
- /**
-  * @param {string} id backend id (searxng gets a dedicated phrasing)
++import { redact } from "./redact.js";
++
+ /** One-line summary safe for the host log. */
+ function summarize(request) {
+   try {
+     const body = request && request.body ? JSON.stringify(request.body) : "";
+     const trimmed = body.length > 200 ? body.slice(0, 200) + "..." : body;
+-    return String((request && request.endpoint) || "") +
++    return redact(String((request && request.endpoint) || "") +
+       (request && request.toolName ? " tool=" + request.toolName : "") +
+-      (trimmed ? " body=" + trimmed : "");
++      (trimmed ? " body=" + trimmed : ""));
+   } catch {
+     return String(request && request.endpoint);
+   }
+@@ -56,7 +58,7 @@ export function recordBackendOutcome(ctx, backendId, outcome) {
+     const logger = ctx && ctx.logger;
+     if (!logger) return;
+     const status = outcome && typeof outcome.status === "string" ? outcome.status : "";
+-    const line = "[websearch:" + backendId + "] outcome " + JSON.stringify(outcome ?? {}).slice(0, 500);
++    const line = redact("[websearch:" + backendId + "] outcome " + JSON.stringify(outcome ?? {}).slice(0, 500));
+     if (status === "error" && typeof logger.warn === "function") logger.warn(line);
+     else if (typeof logger.debug === "function") logger.debug(line);
+   } catch {
 diff --git a/lib/util/mcp-client.js b/lib/util/mcp-client.js
-index c864137..56f45dd 100644
+index bde2d28..a150028 100644
 --- a/lib/util/mcp-client.js
 +++ b/lib/util/mcp-client.js
-@@ -6,6 +6,7 @@
+@@ -6,25 +6,38 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
 +import { webErrorFromResponse } from "./web-error.js";
  import { egressFetch } from "./egress-fetch.js";
- import { describeError } from "./describe-error.js";
++import { describeError } from "./describe-error.js";
  
-@@ -13,19 +14,30 @@ const UA = "dsh-websearch/2.3";
+ const UA = "dsh-websearch/2.3";
  const PROTOCOL_VERSION = "2025-06-18";
  const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
  
@@ -2643,7 +3974,7 @@ index c864137..56f45dd 100644
      return cached.sessionId;
    }
  
-@@ -49,6 +61,7 @@ async function ensureSession(url, signal) {
+@@ -48,6 +61,7 @@ async function ensureSession(url, signal) {
          "Content-Type": "application/json",
          "Accept": "application/json, text/event-stream",
          "User-Agent": UA,
@@ -2651,7 +3982,16 @@ index c864137..56f45dd 100644
        },
        body: JSON.stringify(initBody),
        signal,
-@@ -64,7 +77,7 @@ async function ensureSession(url, signal) {
+@@ -55,12 +69,15 @@ async function ensureSession(url, signal) {
+     });
+   } catch (error) {
+     if (signal?.aborted) throw error;
+-    throw new WebError(`MCP initialize failed: ${error}`, "WEB_PROVIDER_ERROR", { cause: error });
++    // describeError (not `${error}`): undici puts the actionable failure —
++    // proxy rejection / ENOTFOUND / TLS / timeout — on error.cause; the bare
++    // form would only say "TypeError: fetch failed" (route6 audit).
++    throw new WebError(`MCP initialize failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+   }
  
    if (!initResponse.ok) {
      const text = await initResponse.text().catch(() => "").then((tx) => tx.slice(0, 300));
@@ -2660,15 +4000,18 @@ index c864137..56f45dd 100644
    }
  
    // Extract Mcp-Session-Id from response headers. Stateless MCP servers may
-@@ -86,6 +99,7 @@ async function ensureSession(url, signal) {
+@@ -80,8 +97,10 @@ async function ensureSession(url, signal) {
+       method: "POST",
+       headers: {
          "Content-Type": "application/json",
++        "MCP-Protocol-Version": PROTOCOL_VERSION,
          ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
          "User-Agent": UA,
 +        ...extraHeaders,
        },
        body: JSON.stringify(notifyBody),
        signal,
-@@ -100,7 +114,7 @@ async function ensureSession(url, signal) {
+@@ -96,7 +115,7 @@ async function ensureSession(url, signal) {
    }
  
    // Cache the session
@@ -2677,10 +4020,11 @@ index c864137..56f45dd 100644
    return sessionId;
  }
  
-@@ -109,40 +123,52 @@ async function ensureSession(url, signal) {
+@@ -104,41 +123,62 @@ async function ensureSession(url, signal) {
+  * Parse MCP response envelope - handles both SSE and plain JSON.
   * @returns {object} { id, result?, error? }
   */
- function parseEnvelope(text, expectedId) {
+-function parseEnvelope(text, expectedId) {
 -  // Try SSE format first: "event: message\ndata: {...}\n\n"
 -  if (text.includes("data:")) {
 -    // SSE spec: one JSON payload may span multiple data: lines - join them.
@@ -2694,6 +4038,7 @@ index c864137..56f45dd 100644
 -      try {
 -        return JSON.parse(joined);
 -      } catch {}
++export function parseEnvelope(text, expectedId) {
 +  // Strip a UTF-8 BOM: some MCP servers prepend it to the first SSE line,
 +  // which would otherwise make the leading `data:` invisible to the split.
 +  const body = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
@@ -2729,16 +4074,24 @@ index c864137..56f45dd 100644
 -    if (Array.isArray(parsed)) {
 -      // Batch response - find matching id
 -      return parsed.find((r) => r.id === expectedId) ?? parsed[0];
--    }
--    return parsed;
--  } catch {}
--  
--  throw new WebError("MCP: failed to parse response envelope", "WEB_PROVIDER_ERROR");
 +    parsed = JSON.parse(body);
 +  } catch {
 +    throw new WebError("MCP: failed to parse response envelope", "WEB_PROVIDER_ERROR");
 +  }
-+  if (Array.isArray(parsed)) return parsed.find((r) => String(r.id) === String(expectedId)) ?? parsed[0];
++  if (Array.isArray(parsed)) {
++    const match = parsed.find((r) => String(r.id) === String(expectedId));
++    if (match) return match;
++    // A batch that only carries frames for other requests must not hand its
++    // first frame to this caller; the object path already rejects that case.
++    if (parsed.some((r) => r && r.id !== undefined && String(r.id) !== String(expectedId))) {
++      throw new WebError("MCP: response id does not match the request", "WEB_PROVIDER_ERROR");
+     }
+-    return parsed;
+-  } catch {}
+-  
+-  throw new WebError("MCP: failed to parse response envelope", "WEB_PROVIDER_ERROR");
++    return parsed[0];
++  }
 +  if (parsed && typeof parsed === "object" && parsed.id !== undefined
 +      && String(parsed.id) !== String(expectedId)) {
 +    throw new WebError("MCP: response id does not match the request", "WEB_PROVIDER_ERROR");
@@ -2756,7 +4109,7 @@ index c864137..56f45dd 100644
  }
  
  /**
-@@ -152,14 +178,25 @@ export function invalidateSession(url) {
+@@ -148,14 +188,25 @@ export function invalidateSession(url) {
   * @param {object} args - Tool arguments
   * @param {object} extraHeaders - Additional headers
   * @param {AbortSignal} signal - Abort signal
@@ -2785,7 +4138,22 @@ index c864137..56f45dd 100644
      method: "tools/call",
      params: { name: toolName, arguments: args },
    };
-@@ -187,9 +224,9 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+@@ -167,6 +218,7 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+       headers: {
+         "Content-Type": "application/json",
+         "Accept": "application/json, text/event-stream",
++        "MCP-Protocol-Version": PROTOCOL_VERSION,
+         ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+         "User-Agent": UA,
+         ...extraHeaders,
+@@ -177,21 +229,22 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+     });
+   } catch (error) {
+     if (signal?.aborted) throw error;
+-    throw new WebError(`MCP tools/call failed: ${error}`, "WEB_PROVIDER_ERROR", { cause: error });
++    throw new WebError(`MCP tools/call failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+   }
+ 
    // On 401/403/404 with a sessionful server, invalidate and retry once.
    // Stateless servers (no session id) have no session to invalidate — fail loud.
    if (sessionId && (response.status === 401 || response.status === 403 || response.status === 404)) {
@@ -2798,7 +4166,21 @@ index c864137..56f45dd 100644
      try {
        response = await egressFetch(url, {
          method: "POST",
-@@ -212,7 +249,7 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+         headers: {
+           "Content-Type": "application/json",
+           "Accept": "application/json, text/event-stream",
++          "MCP-Protocol-Version": PROTOCOL_VERSION,
+           ...(newSessionId ? { "Mcp-Session-Id": newSessionId } : {}),
+           "User-Agent": UA,
+           ...extraHeaders,
+@@ -202,13 +255,13 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+       });
+     } catch (error) {
+       if (signal?.aborted) throw error;
+-      throw new WebError(`MCP tools/call retry failed: ${error}`, "WEB_PROVIDER_ERROR", { cause: error });
++      throw new WebError(`MCP tools/call retry failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+     }
+   }
  
    if (!response.ok) {
      const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
@@ -2840,6 +4222,61 @@ index 0000000..39f42d5
 +  return candidates.find((row) => row.value !== undefined && row.value !== null
 +    && typeof row.value === "object"
 +    && SHAPE_FIELDS.filter((key) => Object.hasOwn(row.value, key)).length >= 2);
++}
+diff --git a/lib/util/redact.js b/lib/util/redact.js
+new file mode 100644
+index 0000000..8e2e3af
+--- /dev/null
++++ b/lib/util/redact.js
+@@ -0,0 +1,49 @@
++/**
++ * Credential redaction for text that leaves the plugin.
++ *
++ * Backends forward upstream error bodies, and providers sometimes echo the
++ * presented key back ("Incorrect API key provided: sk-live-…"). That text
++ * reaches the host log, the health/history payload, the telemetry line, and
++ * the model-visible failure message; none of those may carry a key.
++ *
++ * @module lib/util/redact
++ */
++
++/** Token shapes we can recognise without knowing the issuing vendor. */
++const SECRET_PATTERNS = [
++  /sk-[A-Za-z0-9_-]{8,}/g,
++  /tvly-[A-Za-z0-9_-]{8,}/g,
++  /BSA[A-Za-z0-9_-]{16,}/g,
++  /exa_[A-Za-z0-9_-]{8,}/g,
++  /ghp_[A-Za-z0-9]{16,}/g,
++  /github_pat_[A-Za-z0-9_]{16,}/g,
++  /npm_[A-Za-z0-9]{16,}/g,
++  /cfut_[A-Za-z0-9_-]{16,}/g,
++  /Bearer\s+[A-Za-z0-9._-]{8,}/gi,
++  /(api[_-]?key|token|secret|password)\s*[=:]\s*["']?[^\s"',]{6,}/gi,
++];
++
++/**
++ * Replace token-like fragments with `[redacted]`.
++ *
++ * @param {unknown} value - text to sanitize; non-strings stringify first.
++ * @returns {string} redacted text.
++ */
++export function redact(value) {
++  let text = value instanceof Error ? value.message : String(value ?? "");
++  for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, "[redacted]");
++  return text;
++}
++
++/**
++ * Redact, collapse whitespace, and bound length for diagnostics/UI.
++ *
++ * @param {unknown} value - error or text to sanitize.
++ * @param {number} [maxChars] - maximum output length.
++ * @returns {string} safe, bounded text.
++ */
++export function sanitizeError(value, maxChars = 120) {
++  if (value === null || value === undefined) return "";
++  const text = redact(value).replace(/\s+/g, " ").trim();
++  return text.length > maxChars ? text.slice(0, maxChars) : text;
 +}
 diff --git a/lib/util/web-error.js b/lib/util/web-error.js
 new file mode 100644
