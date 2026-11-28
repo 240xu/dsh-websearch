@@ -366,3 +366,42 @@ test("a backend that can merge facets receives one plan and is skipped for later
   assert.ok(Array.isArray(planCalls[0]?.queries) && planCalls[0].queries.length > 1, "all facets travel in one plan");
   assert.ok(plainCalls.length > 1, "backends that cannot merge facets still run per variant");
 });
+
+test("cache-hit history counts whitelisted sources, not pre-filter entries", async () => {
+  const seen = [];
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: { get: () => ({ value: { sources: [{ url: "https://ok.example/1" }, { url: "javascript:alert(1)" }], backendsOk: 1, backendsTotal: 1 }, age: 3 }) },
+    history: { record: (row) => seen.push(row) },
+    backends: { fake: { id: "fake", available: () => true, async search() { return { sources: [] }; } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["fake"], backends: { fake: {} }, filters: {},
+      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 5000,
+      language: "", recency: "any", cacheEnabled: true, breakerEnabled: false, historyEnabled: true,
+    }),
+  });
+  const out = await provider.search({ query: "cache count", maxResults: 5 }, new AbortController().signal);
+  assert.equal(out.sources.length, 1);
+  assert.equal(seen.at(-1).resultCount, 1);
+});
+
+test("a failed plan backend is retried per variant instead of disappearing", async () => {
+  let calls = 0;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: {
+      plan: { id: "plan", handlesAllVariants: true, available: () => true, async search() {
+        calls += 1;
+        if (calls === 1) throw new Error("primary plan failed");
+        return { sources: [{ url: "https://plan.example/1" }] };
+      } },
+    },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["plan"], backends: { plan: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 5000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.ok(calls > 1, "later variants retry the plan backend");
+  assert.equal(out.sources[0]?.url, "https://plan.example/1");
+});

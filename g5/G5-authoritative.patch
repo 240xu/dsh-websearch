@@ -3476,7 +3476,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..86a09bb 100644
+index 744917e..834a155 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3787,7 +3787,7 @@ index 744917e..86a09bb 100644
 +          // cache hit for a four-backend search used to report one backend.
 +          const hitOk = Number.isInteger(hit.value.backendsOk) ? hit.value.backendsOk : 1;
 +          const hitTotal = Number.isInteger(hit.value.backendsTotal) ? hit.value.backendsTotal : 1;
-+          recordHistory(history, request?.query, hit.value.sources.length, hitOk, hitTotal);
++          recordHistory(history, request?.query, safeSources.length, hitOk, hitTotal);
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
@@ -4036,7 +4036,7 @@ index 744917e..86a09bb 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -372,15 +612,61 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -372,15 +612,68 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -4050,6 +4050,8 @@ index 744917e..86a09bb 100644
 +      // Final outcome per backend across every variant. Success wins; otherwise
 +      // keep the latest failure and the most severe quota classification.
 +      const searchHealth = new Map();
++      const planBackendIds = new Set(eligible.filter(({ backend }) => backend.handlesAllVariants === true).map(({ id }) => id));
++      let primaryPlanFailed = false;
 +      for (let variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
 +        const variantQuery = variants[variantIndex];
 +        const remaining = searchDeadline - Date.now();
@@ -4069,7 +4071,9 @@ index 744917e..86a09bb 100644
 +        const searchPlan = useMulti && variantIndex === 0
 +          ? { objective: effReq.query, queries: variants.slice(0, 3) }
 +          : undefined;
-+        const variantEligible = variantIndex === 0
++        // If the single planned call failed, later variants retry the
++        // plan-capable backend per facet instead of silently losing it.
++        const variantEligible = variantIndex === 0 || primaryPlanFailed
 +          ? eligible
 +          : eligible.filter(({ backend }) => backend.handlesAllVariants !== true);
          const variantReq = {
@@ -4084,6 +4088,9 @@ index 744917e..86a09bb 100644
          };
 -        const fold = await fanoutVariant(variantReq);
 +        const fold = await fanoutVariant(variantReq, share, searchDeadline, variantEligible);
++        if (variantIndex === 0 && useMulti) {
++          primaryPlanFailed = fold.failures.some((failure) => planBackendIds.has(failure.id));
++        }
 +        for (const outcome of fold.health) {
 +          const prev = searchHealth.get(outcome.id);
 +          if (prev === undefined || outcome.ok === true) {
@@ -4100,7 +4107,7 @@ index 744917e..86a09bb 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -395,58 +681,127 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -395,58 +688,127 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4249,7 +4256,7 @@ index 744917e..86a09bb 100644
          };
        }
  
-@@ -454,20 +809,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -454,20 +816,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4290,7 +4297,7 @@ index 744917e..86a09bb 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -475,21 +841,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -475,21 +848,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          };
        }
  

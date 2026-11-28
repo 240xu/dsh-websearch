@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.13.0 - 2026-11-28
+
+Round-5 fixes; details `docs/audit/131-round5-20261128.md`.
+
+- Parallel plan fallback: if the primary `searchPlan` call fails, later
+  variants retry the plan-capable backend per facet instead of losing it for
+  the whole search. Success still costs one call.
+- Cache-hit history uses the scheme-whitelisted source count, so a tampered
+  `javascript:` cache entry cannot inflate `resultCount`.
+- Exa advanced-domain backlog closed with evidence: the public endpoint's
+  `tools/list` exposes only `web_search_exa` (query/numResults/objective) and
+  `web_fetch_exa` (urls/maxCharacters); no advanced/domain tool exists.
+- Tests: 227.
 ## 2.12.0 - 2026-11-28
 
 Round-4 expert fixes; details `docs/audit/130-round4-20261128.md`.
