@@ -918,3 +918,39 @@ test("the save button stays focusable after a successful save", async () => {
   const save = nodes.find((n) => n.type === "button" && n.props.children === "save");
   assert.equal(save.props.disabled, false, "disabling the button after save drops keyboard focus");
 });
+
+test("official intervention disables the controls the provider overrides", async () => {
+  const { props, component } = bootWithFetch(async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, writable: true, value: { numResults: 8, intervention: "balanced" }, base: {}, user: {}, revision: 1 }),
+  }));
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("intervention", "official");
+  const nodes = flatten(component, props);
+  const byLabel = (label) => nodes.find((n) => (n.type === "input" || n.type === "select") && n.props["aria-label"] === label);
+  assert.equal(byLabel("numResultsLabel").props.disabled, true);
+  assert.equal(byLabel("rerankLabel").props.disabled, true);
+  assert.equal(byLabel("telemetryLabel").props.disabled, true);
+  assert.equal(byLabel("resultHeaderLabel").props.disabled, true);
+  assert.notEqual(byLabel("concurrencyLabel").props.disabled, true);
+});
+
+test("a staged official-overridden field stays editable until saved or discarded", async () => {
+  const { props, component } = bootWithFetch(async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, writable: true, value: { numResults: 8, intervention: "balanced" }, base: {}, user: {}, revision: 1 }),
+  }));
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("numResults", "40");
+  props.edit("intervention", "official");
+  let nodes = flatten(component, props);
+  let input = nodes.find((n) => n.type === "input" && n.props["aria-label"] === "numResultsLabel");
+  assert.equal(input.props.disabled, false, "a drafted field must remain correctable");
+  assert.match(String(nodes.find((n) => n.type === "p" && n.props.id === "wsc-intervention-hint").props.children), /officialHint/);
+  props.edit("numResults", "0");
+  await props.save();
+  nodes = flatten(component, props);
+  input = nodes.find((n) => n.type === "input" && n.props["aria-label"] === "numResultsLabel");
+  assert.equal(input.props["aria-invalid"], true);
+  assert.equal(input.props.disabled, false, "the invalid field must stay focusable");
+});

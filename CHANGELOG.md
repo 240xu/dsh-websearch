@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.13.6 - 2026-11-28
+
+- UI: under `intervention=official`, gate `numResults`, `rerank`,
+  `resultTelemetry` and `resultHeader` because the provider overrides them;
+  the intervention hint names the four and is wired via aria-describedby.
+  A control with a staged draft stays editable, so it can be corrected; the
+  gate only locks untouched fields.
+- UI: cache switch and TTL are adjacent again; TTL stays editable while a
+  staged value exists.
+- Tests: 239.
 ## 2.13.5 - 2026-11-28
 
 - Fix: an empty multi-query result stopped by the search budget still carries
