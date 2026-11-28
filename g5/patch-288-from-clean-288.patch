@@ -541,7 +541,7 @@ index 037ea85..4cb3495 100644
          { cause: err },
        );
 diff --git a/lib/backends/parallel.js b/lib/backends/parallel.js
-index 37a439d..a7efa03 100644
+index 37a439d..8d9f7f2 100644
 --- a/lib/backends/parallel.js
 +++ b/lib/backends/parallel.js
 @@ -27,6 +27,9 @@ const SESSION_ID = "dsh-websearch-" + randomUUID().slice(0, 8);
@@ -575,7 +575,7 @@ index 37a439d..a7efa03 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
-@@ -59,32 +63,13 @@ export const parallelBackend = {
+@@ -59,36 +63,30 @@ export const parallelBackend = {
      }
  
      if (result?.isError === true) {
@@ -593,9 +593,10 @@ index 37a439d..a7efa03 100644
      }
  
 -
-     const sources = parseParallelResult(result, request.maxResults ?? 8);
+-    const sources = parseParallelResult(result, request.maxResults ?? 8);
 -
 -
++    const sources = parseParallelResult(result, parallelParseLimit(request));
      hooks.recordOutcome?.({ status: "ok", count: sources.length });
 -
 -    if (result?.isError === true) {
@@ -608,6 +609,23 @@ index 37a439d..a7efa03 100644
      return { sources, content: undefined, truncated: false };
    },
  };
+ 
++/**
++ * A planned call merges several facets into one response. Cap the local parse
++ * by the facet count so facet 2/3 tails are not sliced before the provider's
++ * cross-backend merge; the normal (single-query) path keeps maxResults.
++ * @param {object} request
++ * @returns {number}
++ */
++export function parallelParseLimit(request) {
++  const maxResults = Math.max(1, Number(request?.maxResults) || 8);
++  const facets = Array.isArray(request?.searchPlan?.queries) ? request.searchPlan.queries.length : 1;
++  return Math.min(300, maxResults * Math.max(1, facets));
++}
++
+ export function parseParallelResult(result, maxResults) {
+   const text = result?.content?.[0]?.text;
+   if (typeof text !== "string" || text.length === 0) return [];
 diff --git a/lib/backends/searxng.js b/lib/backends/searxng.js
 index 499763f..a8530ca 100644
 --- a/lib/backends/searxng.js

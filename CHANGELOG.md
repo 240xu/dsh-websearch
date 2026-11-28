@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.13.4 - 2026-11-28
+
+- Fix: a planned Parallel call parses up to `maxResults × facets` (cap 300)
+  instead of the single-query bound, so facet 2/3 tail sources survive until
+  the provider's cross-backend merge. Single-query behavior is unchanged.
+- Tests: 236.
 ## 2.13.3 - 2026-11-28
 
 - Fix: `credentialMissing` is preserved through the per-variant health fold;

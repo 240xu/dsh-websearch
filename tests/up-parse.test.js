@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseParallelResult } from "../lib/backends/parallel.js";
+import { parseParallelResult, parallelParseLimit } from "../lib/backends/parallel.js";
 import { parseExaResult } from "../lib/backends/exa.js";
 import { parseDdgHtml } from "../lib/backends/ddg.js";
 import { parseOpenAIResponses } from "../lib/backends/openai.js";
@@ -397,4 +397,11 @@ test("parseMojeekResult: caps at maxResults", () => {
   };
   const got = parseMojeekResult(data, 5);
   assert.equal(got.length, 5);
+});
+
+test("parallelParseLimit: a plan keeps room for every facet", () => {
+  assert.equal(parallelParseLimit({ maxResults: 8 }), 8);
+  assert.equal(parallelParseLimit({ maxResults: 8, searchPlan: { queries: ["a", "b", "c"] } }), 24);
+  assert.equal(parallelParseLimit({ maxResults: 100, searchPlan: { queries: ["a", "b"] } }), 200);
+  assert.equal(parallelParseLimit({}), 8);
 });
