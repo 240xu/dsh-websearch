@@ -1115,7 +1115,7 @@ index 7218312..8c9caa1 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..25cec9e 100644
+index 88dc8c3..8ed7fad 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
 @@ -1,7 +1,7 @@
@@ -1136,7 +1136,7 @@ index 88dc8c3..25cec9e 100644
    existsSync,
    mkdirSync,
    readdirSync,
-@@ -29,18 +30,27 @@ export const CACHE_DEFAULTS = {
+@@ -29,22 +30,39 @@ export const CACHE_DEFAULTS = {
  
  /**
   * Compute the deterministic cache key for a search.
@@ -1151,7 +1151,7 @@ index 88dc8c3..25cec9e 100644
   */
 -export function cacheKeyFor({ query, filters, maxResults, backends, mode }) {
 -  const backendSet = Array.isArray(backends) ? [...backends].sort().join(",") : "";
-+export function cacheKeyFor({ query, filters, maxResults, backends, mode, resultOptions }) {
++export function cacheKeyFor({ query, filters, maxResults, backends, mode, resultOptions, version = CACHE_SEMANTICS_VERSION }) {
 +  const backendSet = Array.isArray(backends) ? backends.join(",") : "";
 +  let shaped = {};
 +  if (resultOptions && typeof resultOptions === "object") {
@@ -1166,10 +1166,22 @@ index 88dc8c3..25cec9e 100644
      b: backendSet,
      m: typeof mode === "string" ? mode : "",
 +    o: shaped,
++    v: Number(version) || 0,
    });
    return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
  }
-@@ -62,12 +72,18 @@ function ageSeconds(record, nowMs) {
+ 
++/**
++ * Bump when a change alters cached result semantics without changing the
++ * existing key fields (e.g. multi-query truncation, plan parsing). Old
++ * entries then miss instead of replaying results produced by the old code.
++ */
++export const CACHE_SEMANTICS_VERSION = 2;
++
+ /** Age of a record in whole seconds (bounded >= 0). */
+ function ageSeconds(record, nowMs) {
+   return Math.max(0, Math.floor((nowMs - (record?.time ?? 0)) / 1000));
+@@ -62,12 +80,18 @@ function ageSeconds(record, nowMs) {
  export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntries = CACHE_DEFAULTS.maxEntries }) {
    // ttlMs may be a number or () => number (settings can change at runtime).
    const ttlOf = typeof ttlMs === "function" ? ttlMs : () => Number(ttlMs) || 0;
@@ -1189,7 +1201,7 @@ index 88dc8c3..25cec9e 100644
    }
  
    /**
-@@ -77,8 +93,14 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -77,8 +101,14 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
     */
    function atomicWrite(file, data) {
      const tmp = `${file}.${process.pid}.tmp`;
@@ -1206,7 +1218,7 @@ index 88dc8c3..25cec9e 100644
    }
  
    /** List current entries as [{key, file, mtime}] sorted oldest first. */
-@@ -97,9 +119,40 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -97,9 +127,40 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
      return out.sort((a, b) => a.mtime - b.mtime);
    }
  
@@ -1248,7 +1260,7 @@ index 88dc8c3..25cec9e 100644
        try { unlinkSync(entries[i].file); } catch { /* raced */ }
      }
    }
-@@ -110,25 +163,32 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -110,25 +171,32 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
       * @returns {{ value: object, age: number } | null} age in seconds; null on miss/expiry
       */
      get(key, nowMs = Date.now()) {
@@ -1291,7 +1303,7 @@ index 88dc8c3..25cec9e 100644
        try {
          ensureDir();
          atomicWrite(fileFor(key), JSON.stringify({ key, time: nowMs, value }));
-@@ -141,6 +201,7 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -141,6 +209,7 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
      /** Drop every cached entry (best-effort). */
      clear() {
        try {

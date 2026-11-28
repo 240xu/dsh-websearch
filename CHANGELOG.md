@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.13.9 - 2026-11-28
+
+- Fix: result-cache keys include `CACHE_SEMANTICS_VERSION` (currently 2).
+  A result-semantics change (multi-query truncation, plan parsing, …) now
+  invalidates old entries instead of replaying them after an upgrade; files
+  are not deleted, they simply miss.
+- Tests: 240.
 ## 2.13.8 - 2026-11-28
 
 - Fix: if the shared deadline is already spent before the first variant, the

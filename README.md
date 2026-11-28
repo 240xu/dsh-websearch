@@ -208,6 +208,7 @@ pnpm install
 - 存储位置：`$DSH_HOME/cache/websearch/results/`，单条目一个 JSON 文件，tmp+rename 原子写，超出上限按最旧淘汰；任何 fs 错误都被吞掉，缓存坏了绝不影响搜索。
 - 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900；**0 = no-store**，不读也不写）。
 - 上限 200 条，超出按 mtime 最旧淘汰；缓存目录 0700、文件 0600（查询与结果属于用户数据）。
+- 缓存键带 `CACHE_SEMANTICS_VERSION`；修改结果语义（如多查询截断、计划解析）时升版，旧条目自动 miss，不会回放旧行为。
 - 清理：`rm -rf $DSH_HOME/cache/websearch/results`（`DSH_HOME` 通常为 `~/.dsh`）。
 
 ### 2. 后端熔断器（默认开，保守阈值）
