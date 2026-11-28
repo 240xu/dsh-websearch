@@ -7,7 +7,7 @@ import { resolveOptions } from "../lib/index.js";
 import { shapeQuery } from "../lib/prompting.js";
 import { tokenize, tokenSimilarity, dedupeSources } from "../lib/util/rank.js";
 import { rrfFuse } from "../lib/rrf.js";
-import { createUnifiedSearchProvider, getBackendBreaker, getLatestBackendHealth, shouldStartVariant } from "../lib/provider.js";
+import { createUnifiedSearchProvider, getBackendBreaker, getLatestBackendHealth, shouldStartVariant, variantStarted } from "../lib/provider.js";
 import { braveBackend } from "../lib/backends/brave.js";
 
 const CTX = { get: () => undefined };
@@ -570,4 +570,26 @@ test("shouldStartVariant runs variant 1 on any remaining budget but floors later
   assert.equal(shouldStartVariant(0, 0, 1000), false);
   assert.equal(shouldStartVariant(1, 999, 1000), false);
   assert.equal(shouldStartVariant(1, 1000, 1000), true);
+});
+
+test("variantStarted counts a variant only when a backend actually started", () => {
+  assert.equal(variantStarted([{ skipped: true }, { skipped: true }]), false);
+  assert.equal(variantStarted([{ skipped: true }, { ok: false, error: "429" }]), true);
+  assert.equal(variantStarted([{ ok: true }]), true);
+});
+
+test("an invalid baseURL is reported as a configuration error, not budget exhaustion", async () => {
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { bad: { id: "bad", available: () => true, async search() { return { sources: [] }; } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["bad"], backends: { bad: { baseURL: "http://example.com/api" } },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  await assert.rejects(
+    provider.search({ query: "bad url", maxResults: 5 }, new AbortController().signal),
+    /invalid baseURL/,
+  );
 });

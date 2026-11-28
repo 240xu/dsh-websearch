@@ -3406,7 +3406,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..97ac0cf 100644
+index 7242a56..2e3fe47 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3491,7 +3491,7 @@ index 7242a56..97ac0cf 100644
    });
  }
  
-@@ -89,12 +114,31 @@ export function getBackendBreaker(id) {
+@@ -89,12 +114,42 @@ export function getBackendBreaker(id) {
    return e ? { failCount: e.failCount ?? 0, cooledUntil: e.cooledUntil ?? 0 } : { failCount: 0, cooledUntil: 0 };
  }
  
@@ -3510,6 +3510,17 @@ index 7242a56..97ac0cf 100644
 +  return remaining >= floor;
 +}
 +
++/**
++ * Whether a variant actually started at least one backend. A variant whose
++ * deadline expired between admission and the first backend start only has
++ * `skipped` telemetry and must not count as attempted.
++ * @param {Array<{ skipped?: boolean }>} telemetry
++ * @returns {boolean}
++ */
++export function variantStarted(telemetry) {
++  return telemetry.some((entry) => entry.skipped !== true);
++}
++
  /**
   * Simple concurrency limiter using a semaphore pattern.
   * No external dependency needed.
@@ -3523,7 +3534,7 @@ index 7242a56..97ac0cf 100644
    const queue = [];
    let running = 0;
    
-@@ -104,7 +148,7 @@ export function createLimiter(concurrency) {
+@@ -104,7 +159,7 @@ export function createLimiter(concurrency) {
        process();
        
        function process() {
@@ -3532,7 +3543,7 @@ index 7242a56..97ac0cf 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -131,7 +175,7 @@ export function createLimiter(concurrency) {
+@@ -131,7 +186,7 @@ export function createLimiter(concurrency) {
   * compromised or poisoned backends never reach model/GUI consumers.
   */
  function collectFanoutResults(results, eligible, signal) {
@@ -3541,7 +3552,7 @@ index 7242a56..97ac0cf 100644
    let mergedContent;
    let hardAborted = false;
    let hardError = null;
-@@ -145,11 +189,15 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -145,11 +200,15 @@ function collectFanoutResults(results, eligible, signal) {
        if (mergedContent === undefined && typeof settled.value?.content === "string" && settled.value.content.length > 0) {
          mergedContent = settled.value.content;
        }
@@ -3559,7 +3570,7 @@ index 7242a56..97ac0cf 100644
        if (err instanceof WebError && err.code === "WEB_ABORTED") {
          // Per-backend abort -> soft unless the caller signal fired.
          if (signal?.aborted === true) hardAborted = true;
-@@ -160,6 +208,16 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -160,6 +219,16 @@ function collectFanoutResults(results, eligible, signal) {
        }
      }
    }
@@ -3576,7 +3587,7 @@ index 7242a56..97ac0cf 100644
    return { collected, mergedContent, hardAborted, hardError, failures };
  }
  
-@@ -198,48 +256,114 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -198,48 +267,114 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
      async search(request, signal) {
        throwIfSearchAborted(signal);
        const opts = resolveOptions();
@@ -3713,7 +3724,7 @@ index 7242a56..97ac0cf 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -252,15 +376,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -252,15 +387,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
              cacheKey = null;
            } else {
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
@@ -3741,7 +3752,7 @@ index 7242a56..97ac0cf 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -290,22 +417,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -290,22 +428,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -3813,7 +3824,7 @@ index 7242a56..97ac0cf 100644
            "WEB_PROVIDER_UNAVAILABLE",
          );
        }
-@@ -313,8 +484,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -313,8 +495,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // Run ONE query variant through the full fan-out: breaker-aware backend
        // execution under the per-variant limiter, then PHASE 1 collect. The
        // internal abort/timeout semantics are unchanged from v2.7.
@@ -3827,7 +3838,7 @@ index 7242a56..97ac0cf 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -322,29 +497,75 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -322,29 +508,80 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -3839,7 +3850,12 @@ index 7242a56..97ac0cf 100644
 -              throw new WebError(`backend "${id}" has an invalid baseURL: https required (plain http only for private hosts), credentials-in-URL rejected`, "WEB_PROVIDER_ERROR");
 +            const invalid = invalidBaseURL(beOpts.baseURL);
 +            if (invalid !== undefined) {
-+              throw new WebError(`backend "${id}" has an invalid baseURL: ${invalid}`, "WEB_PROVIDER_ERROR");
++              const reason = `backend "${id}" has an invalid baseURL: ${invalid}`;
++              // This throw happens before the timeout/attempt telemetry below;
++              // record it so `variantStarted` does not misread the empty
++              // telemetry as a budget skip and mask the configuration error.
++              telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: sanitizeError(reason, 80) });
++              throw new WebError(reason, "WEB_PROVIDER_ERROR");
              }
            }
            const controller = new AbortController();
@@ -3914,7 +3930,7 @@ index 7242a56..97ac0cf 100644
                  // Timeout classification happens BEFORE telemetry/health are
                  // recorded (route6 P6): backends surface an internal timeout
                  // as their own abort-flavored error ("unified search aborted",
-@@ -353,22 +574,41 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -353,22 +590,41 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
                  // thrown error said "timed out after Nms" — the two disagreed
                  // and "(unified search aborted)" read as if the USER cancelled.
                  const timedOut = controller.signal.aborted && !(signal && signal.aborted);
@@ -3964,7 +3980,7 @@ index 7242a56..97ac0cf 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -377,8 +617,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -377,8 +633,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -3975,7 +3991,7 @@ index 7242a56..97ac0cf 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -386,15 +626,81 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -386,22 +642,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -4031,6 +4047,8 @@ index 7242a56..97ac0cf 100644
 +          pageLimit: coverage && !useMulti ? 2 : 1,
          };
 -        const fold = await fanoutVariant(variantReq);
+-        allTelemetry.push(...fold.telemetry);
+-        allFailures.push(...fold.failures);
 +        const fold = await fanoutVariant(variantReq, share, searchDeadline, variantEligible);
 +        if (variantIndex === 0 && useMulti) {
 +          // A hung plan backend will not recover under a smaller later share;
@@ -4055,11 +4073,25 @@ index 7242a56..97ac0cf 100644
 +            });
 +          }
 +        }
-+        variantsRun += 1;
-         allTelemetry.push(...fold.telemetry);
-         allFailures.push(...fold.failures);
++        const started = variantStarted(fold.telemetry);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -409,43 +715,113 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+         // Caller-cancellation check (hard abort fires before we yield results).
+         if (signal?.aborted === true || fold.hardAborted) {
+           throw searchAborted(signal);
+         }
++        if (!started) {
++          // Every backend hit the deadline between admission and start; this
++          // is budget exhaustion, not an attempted fan-out. Leave it to the
++          // zero-variant guard / facet-skip note.
++          continue;
++        }
++        variantsRun += 1;
++        allTelemetry.push(...fold.telemetry);
++        allFailures.push(...fold.failures);
+         // PHASE 2 dedupe / PHASE 3 rerank (per variant list, pre-fusion).
+         const strategy = opts.dedupStrategy === "url+title" ? "url+title" : "url";
+         const deduped = dedupeSources(fold.collected, strategy);
+@@ -409,43 +738,113 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4191,7 +4223,7 @@ index 7242a56..97ac0cf 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,23 +829,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +852,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
@@ -4220,7 +4252,7 @@ index 7242a56..97ac0cf 100644
          };
        }
  
-@@ -477,20 +854,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +877,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4261,7 +4293,7 @@ index 7242a56..97ac0cf 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +888,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +911,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.

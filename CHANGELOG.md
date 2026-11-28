@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.13.12 - 2026-11-28
+
+- Fix: a variant whose deadline expired between admission and the first
+  backend start no longer counts as attempted. It contributes no failures, so
+  the public error cannot read "0 of N attempted" and the zero-variant guard /
+  facet-skip note describes budget exhaustion.
+- Test: `variantStarted` predicate matrix (all skipped / mixed / success).
+- Tests: 244.
 ## 2.13.11 - 2026-11-28
 
 - Fix (P1): a reload/reconcile no longer deletes `numResults`/`rerank` edits
