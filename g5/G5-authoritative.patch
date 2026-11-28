@@ -582,7 +582,7 @@ index 037ea85..4cb3495 100644
          { cause: err },
        );
 diff --git a/lib/backends/parallel.js b/lib/backends/parallel.js
-index 5dde6a0..4e15f69 100644
+index 5dde6a0..a7efa03 100644
 --- a/lib/backends/parallel.js
 +++ b/lib/backends/parallel.js
 @@ -16,6 +16,7 @@
@@ -603,17 +603,18 @@ index 5dde6a0..4e15f69 100644
  
    available() {
      return true; // keyless endpoint
-@@ -34,7 +38,8 @@ export const parallelBackend = {
+@@ -33,8 +37,8 @@ export const parallelBackend = {
+ 
    async search(request, signal, options, hooks = {}) {
      const args = {
-       objective: request.query,
+-      objective: request.query,
 -      search_queries: [request.query],
 +      objective: request.searchPlan?.objective ?? request.query,
 +      search_queries: request.searchPlan?.queries?.slice(0, 3) ?? [request.query],
        session_id: SESSION_ID,
        model_name: "dsh-websearch",
      };
-@@ -47,43 +52,25 @@ export const parallelBackend = {
+@@ -47,43 +51,25 @@ export const parallelBackend = {
  
      let result;
      try {
@@ -1456,7 +1457,7 @@ index 88dc8c3..25cec9e 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..9a9213b 100644
+index 783cbe6..c8b799c 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,29 @@ window.__ModuleLoader__.load({
@@ -1549,7 +1550,7 @@ index 783cbe6..9a9213b 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +128,54 @@ window.__ModuleLoader__.load({
+@@ -90,22 +128,56 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1559,6 +1560,8 @@ index 783cbe6..9a9213b 100644
 +			resultHeaderLabel: "结果引用提示头",
 +			cacheLabel: "结果缓存",
 +			cacheTtlLabel: "缓存有效期（秒）",
++			cacheTtlHint: "30 秒的整数倍；0 = 不缓存（no-store）",
++			cacheOffHint: "结果缓存关闭时此项不生效。",
 +			fallbackHint: "全部后端已关闭：搜索将回退到默认免 Key 后端（计量型仍保持关闭）",
  			invalidFields: "以下字段未通过校验：",
  			readOnlyScope: "当前配置只读（可能由宿主锁定）",
@@ -1607,7 +1610,7 @@ index 783cbe6..9a9213b 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +186,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +188,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1628,7 +1631,7 @@ index 783cbe6..9a9213b 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +218,28 @@ window.__ModuleLoader__.load({
+@@ -142,15 +220,30 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1638,6 +1641,8 @@ index 783cbe6..9a9213b 100644
 +			resultHeaderLabel: "Citation header",
 +			cacheLabel: "Result cache",
 +			cacheTtlLabel: "Cache TTL (s)",
++			cacheTtlHint: "Multiple of 30 s; 0 disables the cache (no-store).",
++			cacheOffHint: "Ignored while the result cache is off.",
 +			fallbackHint: "All backends off: search falls back to the default keyless four (metered backends stay off).",
  			invalidFields: "Fields failed validation:",
  			readOnlyScope: "Configuration is read-only (locked by host?)",
@@ -1656,11 +1661,11 @@ index 783cbe6..9a9213b 100644
  
  		//#region styles
 -		const css = ".wsc-card{display:flex;flex-direction:column;gap:14px}.wsc-sectionTitle{font-size:13px;font-weight:600;opacity:.75;margin:4px 0 0}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-subtle);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0}.wsc-toggle input{accent-color:var(--dsw-alias-accent-primary)}.wsc-input,.wsc-keyInput{box-sizing:border-box;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-subtle);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;font-family:inherit}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:12px;opacity:.8}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-subtle)}.wsc-badgeOn{color:var(--dsw-alias-accent-primary);border-color:var(--dsw-alias-accent-primary)}.wsc-hint{font-size:11px;opacity:.55;margin:3px 0 0}.wsc-actions{display:flex;gap:8px;align-items:center}.wsc-btn{cursor:pointer;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-family:inherit;background:var(--dsw-alias-accent-primary);color:#fff}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-subtle)}.wsc-btn:disabled{opacity:.5;cursor:default}.wsc-status{font-size:12px;opacity:.7}";
-+		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}";
++		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +277,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +281,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1719,7 +1724,7 @@ index 783cbe6..9a9213b 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +335,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +339,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1756,7 +1761,7 @@ index 783cbe6..9a9213b 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +373,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +377,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1784,7 +1789,7 @@ index 783cbe6..9a9213b 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +405,23 @@ window.__ModuleLoader__.load({
+@@ -258,11 +409,23 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1809,7 +1814,7 @@ index 783cbe6..9a9213b 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +435,19 @@ window.__ModuleLoader__.load({
+@@ -276,11 +439,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1829,7 +1834,7 @@ index 783cbe6..9a9213b 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +459,170 @@ window.__ModuleLoader__.load({
+@@ -292,59 +463,170 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1850,7 +1855,8 @@ index 783cbe6..9a9213b 100644
 +				if (this.disposed) return;
 +				this.store.set(this.projection());
 +			}
-+
+ 
+-			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
 +			/** Detach from the host scope; late responses must not publish. */
 +			dispose() {
 +				this.disposed = true;
@@ -1861,8 +1867,7 @@ index 783cbe6..9a9213b 100644
 +			reload() {
 +				return typeof this.scope.load === "function" ? this.scope.load() : undefined;
 +			}
- 
--			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
++
 +			/** Stage a field edit (clears the saved marker so the card shows "unsaved"). */
 +			edit(field, text) {
 +				const committed = String(this.sectionValue(field) ?? "");
@@ -2020,7 +2025,7 @@ index 783cbe6..9a9213b 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +632,80 @@ window.__ModuleLoader__.load({
+@@ -354,47 +636,84 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2032,7 +2037,8 @@ index 783cbe6..9a9213b 100644
 +			 * as if it had been saved. A second call while one is running is a no-op.
 +			 */
  			async save() {
- 				if (this.saving) return;
+-				if (this.saving) return;
++				if (this.saving || (this.staged.size === 0 && this.stagedKeys.size === 0)) return;
  				this.saving = true; this.failed = false;
  			this.conflict = false; this.failedFields.clear(); this.republish();
  				const doneFields = [];
@@ -2095,7 +2101,11 @@ index 783cbe6..9a9213b 100644
 -							await this.scope.set(field, staged.text);
 -							doneFields.push(field);
 +							fieldOps.push({ op: "set", path: [field], value: staged.text }); fieldOpNames.push(field);
-+						}
+ 						}
+ 					}
++					if (this.failedFields.size > 0) {
++						// All-or-nothing: never half-commit a Save the card reports as failed.
++						this.saving = false; this.republish(); return;
 +					}
 +					if (fieldOps.length > 0) {
 +						if (typeof this.scope.setMany === "function") {
@@ -2105,16 +2115,16 @@ index 783cbe6..9a9213b 100644
 +								if (op.op === "unset") await this.scope.unset(op.path[0]);
 +								else await this.scope.set(op.path[0], op.value);
 +							}
- 						}
++						}
 +						doneFields.push(...fieldOpNames);
- 					}
++					}
  					for (const [ref, staged] of this.stagedKeys) {
 +						// Snapshot before any await, same reason as the field loop.
 +						savedKeyRefs.set(ref, staged);
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +716,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +724,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -2165,7 +2175,7 @@ index 783cbe6..9a9213b 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +766,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +774,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2181,7 +2191,7 @@ index 783cbe6..9a9213b 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +780,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +788,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2254,7 +2264,7 @@ index 783cbe6..9a9213b 100644
  			] });
  		}
  
-@@ -463,6 +852,7 @@ window.__ModuleLoader__.load({
+@@ -463,6 +860,7 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2262,7 +2272,7 @@ index 783cbe6..9a9213b 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -473,169 +863,260 @@ window.__ModuleLoader__.load({
+@@ -473,169 +871,268 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -2392,6 +2402,7 @@ index 783cbe6..9a9213b 100644
 +		function SettingsFields(props) {
 +			const { state, card, t } = props;
 +			const selVal = (f, dflt) => state.stagedText(f) ?? String(state.value[f] ?? dflt);
++			const cacheOn = selVal("cacheEnabled", "true") !== "false";
 +			const recencyOptions = [
 +				{ value: "any", label: t("recencyAny") },
 +				{ value: "day", label: t("recencyDay") },
@@ -2443,7 +2454,8 @@ index 783cbe6..9a9213b 100644
 -						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: "backendTimeoutMs" }) }),
 -						react_jsx_runtime.jsx("input", { className: "wsc-input", value: state.stagedText("backendTimeoutMs") ?? String(state.value.backendTimeoutMs ?? ""), onChange: e => card.edit("backendTimeoutMs", e.target.value), inputMode: "numeric" }),
 +						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("cacheTtlLabel") }) }),
-+						react_jsx_runtime.jsx("input", { className: "wsc-input", "aria-label": t("cacheTtlLabel"), value: state.stagedText("cacheTtl") ?? String(state.value.cacheTtl ?? ""), onChange: (e) => card.edit("cacheTtl", e.target.value), inputMode: "numeric" }),
++						react_jsx_runtime.jsx("input", { className: "wsc-input", id: "wsc-cacheTtl", "aria-label": t("cacheTtlLabel"), "aria-describedby": "wsc-cacheTtl-hint", "aria-invalid": state.failedFields.includes("cacheTtl") || undefined, disabled: !cacheOn, value: state.stagedText("cacheTtl") ?? String(state.value.cacheTtl ?? ""), onChange: (e) => card.edit("cacheTtl", e.target.value), inputMode: "numeric" }),
++						react_jsx_runtime.jsx("p", { className: "wsc-hint", id: "wsc-cacheTtl-hint", children: cacheOn ? t("cacheTtlHint") : t("cacheTtlHint") + " " + t("cacheOffHint") }),
  					] }),
  				] }),
 -				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("shapingTitle") }),
@@ -2576,16 +2588,16 @@ index 783cbe6..9a9213b 100644
 -					(state.failedFields.length > 0) && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e5534b", fontSize: 11 }, children: props.t("invalidFields") + ": " + state.failedFields.join(", ") }),
 -				state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#e6a700" }, children: props.t("conflict") }),
 -					!state.failed && !state.saving && state.savedAt > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status", style: { color: "#2ea043" }, children: props.t("savedOk") }),
-+					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.stagedCount === 0 || state.writable === false, onClick: () => card.save(), children: state.saving ? t("saving") : t("save") }),
++					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.writable === false, onClick: () => card.save(), children: state.saving ? t("saving") : t("save") }),
 +					(state.stagedCount > 0) && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", disabled: state.saving, onClick: () => card.discard(), children: t("discard") }),
 +					react_jsx_runtime.jsxs("span", { className: "wsc-live", role: "status", "aria-live": "polite", children: [
 +						state.failed && !state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-error", children: t("saveFailed") }),
 +						state.toggleFailed && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-error", children: t("toggleFailed") + (state.toggleConflict ? " — " + t("conflict") : "") }),
-+						(state.failedFields.length > 0) && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-warn", children: t("invalidFields") + " " + state.failedFields.join(", ") }),
++						(state.failedFields.length > 0) && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-warn", children: t("invalidFields") + " " + state.failedFields.map((f) => t({ cacheTtl: "cacheTtlLabel", backendTimeoutMs: "timeoutLabel", numResults: "numResultsLabel", concurrency: "concurrencyLabel" }[f] ?? f)).join(", ") }),
 +						state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-warn", children: t("conflictHint") }),
-+						state.conflict && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", disabled: state.saving, onClick: () => card.retry(), children: t("retry") }),
 +						!state.failed && !state.saving && state.savedAt > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status", children: t("savedOk") }),
 +					] }),
++					state.conflict && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", disabled: state.saving, onClick: () => card.retry(), children: t("retry") }),
 +				] }),
 +			] });
 +		}
@@ -2593,6 +2605,11 @@ index 783cbe6..9a9213b 100644
 +		function UnifiedSearchSection(props) {
 +			const state = props.useUnifiedSearchCard((snapshot) => snapshot);
 +			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard, retry: props.retry };
++			react.useEffect(() => {
++				if (!state.failedFields || state.failedFields.length === 0) return;
++				if (typeof document === "undefined") return;
++				document.querySelector('.wsc-input[aria-invalid="true"]')?.focus();
++			}, [state.failedFields.join(",")]);
 +			// Occupants of settings.plugin.item render inside the tab's <ul>; use <li>.
 +			if (!state.ready) {
 +				return react_jsx_runtime.jsx("div", { className: "wsc-card", style: { fontSize: 12, opacity: .6 }, role: "status", "aria-live": "polite", children: props.t("loading") });
@@ -2636,6 +2653,7 @@ index 783cbe6..9a9213b 100644
 +				{ value: "false", label: props.t("off") },
 +			];
 +			const selVal = (f, dflt) => state.stagedText(f) ?? String(state.value[f] ?? dflt);
++			const cacheOn = selVal("cacheEnabled", "true") !== "false";
 +
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
 +				react_jsx_runtime.jsx(StatusSummary, { state, enabledCount, hasOverride: override.length > 0, keysReady, t: props.t }),
@@ -2649,7 +2667,7 @@ index 783cbe6..9a9213b 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1127,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1143,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2663,7 +2681,7 @@ index 783cbe6..9a9213b 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1158,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1174,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2680,7 +2698,7 @@ index 783cbe6..9a9213b 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1194,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1210,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -2958,7 +2976,7 @@ index dd15b37..b614d1a 100644
 +  return [disposerA, disposerB].filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 549b13b..256feaf 100644
+index 549b13b..4efe6e9 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,8 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -3065,7 +3083,7 @@ index 549b13b..256feaf 100644
 +  includeDomains: z.string().default("")
 +    .description("只约束 OpenAI/Anthropic 原生后端的允许域名（逗号/空格分隔，最多 20 个）；其余后端不支持，合并结果仍可能来自其他域名"),
 +  excludeDomains: z.string().default("")
-+    .description("排除这些域名（逗号/空格分隔，最多 20 个）；Anthropic 仅发 allowed（include 优先），OpenAI 两个列表同时发送由服务端裁决"),
++    .description("排除这些域名（逗号/空格分隔，最多 20 个）；OpenAI 与 Anthropic 均只发一个列表（include 优先）"),
    dedupStrategy: z.union(["url", "url+title"]).default("url")
      .description("去重策略：url 仅按链接；url+title 额外合并同标题的转载镜像"),
    rerank: z.boolean().default(false)

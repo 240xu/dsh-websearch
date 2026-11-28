@@ -33,7 +33,7 @@ function loadModule() {
     if (name === "react/jsx-runtime") {
       return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: Symbol("Fragment") };
     }
-    if (name === "react") return { createElement: (type, props) => ({ type, props }) };
+    if (name === "react") return { createElement: (type, props) => ({ type, props }), useEffect: () => {} };
     throw new Error(`unexpected require: ${name}`);
   });
 }
@@ -867,4 +867,54 @@ test("a credential read that started before a successful key save cannot unpaint
   releaseRead(false);
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(store.getSnapshot().keyState.BRAVE_API_KEY.configured, true, "the stale read must not unpaint it");
+});
+
+test("one invalid field makes Save all-or-nothing: no partial POST", async () => {
+  const posts = [];
+  const { props } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 8, cacheTtl: 900 }, base: {}, user: {}, revision: 1 }) };
+    }
+    posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 12, cacheTtl: 900 }, base: {}, user: {}, revision: 2 }) };
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("numResults", "12");
+  props.edit("cacheTtl", "45");
+  await props.save();
+  assert.equal(posts.length, 0, "a failed validation must not half-commit valid siblings");
+  const snapshot = props.hooks.unifiedSearchCard.getSnapshot();
+  assert.equal(snapshot.failedFields.includes("cacheTtl"), true);
+  assert.equal(snapshot.stagedCount, 2, "both staged fields stay editable");
+});
+
+test("cache TTL is disabled and explains itself while the cache is off", async () => {
+  const { props, component } = bootWithFetch(async () => ({
+    ok: true, status: 200,
+    json: async () => ({ ok: true, writable: true, value: { numResults: 8, cacheEnabled: true, cacheTtl: 900 }, base: {}, user: {}, revision: 1 }),
+  }));
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("cacheEnabled", "false");
+  const nodes = flatten(component, props);
+  const ttl = nodes.find((n) => n.type === "input" && n.props["aria-label"] === "cacheTtlLabel");
+  assert.equal(ttl.props.disabled, true);
+  assert.match(String(ttl.props["aria-describedby"]), /cacheTtl-hint/);
+  const hint = nodes.find((n) => n.type === "p" && n.props.id === "wsc-cacheTtl-hint");
+  assert.match(String(hint.props.children), /cacheTtlHint/);
+  assert.match(String(hint.props.children), /cacheOffHint/);
+});
+
+test("the save button stays focusable after a successful save", async () => {
+  const { props, component } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 8 }, base: {}, user: {}, revision: 1 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 4 }, base: {}, user: {}, revision: 2 }) };
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("numResults", "4");
+  await props.save();
+  const nodes = flatten(component, props);
+  const save = nodes.find((n) => n.type === "button" && n.props.children === "save");
+  assert.equal(save.props.disabled, false, "disabling the button after save drops keyboard focus");
 });

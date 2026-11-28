@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.13.2 - 2026-11-28
+
+Frontend UX fixes from the round-6 review; details
+`docs/audit/133-frontend-20261128.md`.
+
+- Save is all-or-nothing: one invalid field no longer half-commits the valid
+  siblings while reporting failure.
+- Cache TTL shows its rules (30 s steps, 0 = no-store), is marked invalid, and
+  is disabled with an explanatory hint while the cache is off.
+- Cache switch and TTL now sit together in the globals grid.
+- Save no longer disables itself after success (keyboard focus stays put); a
+  failed validation focuses the first invalid field.
+- Conflict Retry moved outside the `role=status` live region.
+- Remove the duplicate `objective` assignment in the Parallel backend; correct
+  the OpenAI domain-filter description to match the one-list behavior.
+- Tests: 232.
 ## 2.13.1 - 2026-11-28
 
 - Fix: a timed-out plan backend is not retried per variant. Only fast failures
