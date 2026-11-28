@@ -325,21 +325,30 @@ test("changing a domain filter cannot be served from the prior cache entry", asy
 
 test("budget-starved healthy backends are not cooled by the breaker", async () => {
   getLatestBackendHealth().clear();
-  const sleeper = (id) => ({ id, available: () => true, async search() { await new Promise((r) => setTimeout(r, 60)); return { sources: [{ url: `https://${id}.example/1` }] }; } });
-  const provider = createUnifiedSearchProvider({
-    ctx: {}, cache: undefined, history: undefined,
-    backends: { a: sleeper("a"), b: sleeper("b") },
-    resolveOptions: () => ({
-      ...resolveOptions(CTX, {}), enabledBackends: ["a", "b"], backends: { a: {}, b: {} }, filters: {},
-      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 80,
-      language: "", recency: "any", cacheEnabled: false, breakerEnabled: true,
-      breakerThreshold: 3, breakerCooldownMs: 60_000, historyEnabled: false,
-    }),
-  });
-  for (let i = 0; i < 3; i += 1) {
-    await provider.search({ query: "budget", maxResults: 5 }, new AbortController().signal);
+  const realNow = Date.now;
+  let shift = 0;
+  Date.now = () => realNow() + shift;
+  try {
+    const a = { id: "a", available: () => true, search() { shift = 70; return { sources: [{ url: "https://a.example/1" }] }; } };
+    const b = { id: "b", available: () => true, search() { return new Promise(() => {}); } };
+    const provider = createUnifiedSearchProvider({
+      ctx: {}, cache: undefined, history: undefined,
+      backends: { a, b },
+      resolveOptions: () => ({
+        ...resolveOptions(CTX, {}), enabledBackends: ["a", "b"], backends: { a: {}, b: {} }, filters: {},
+        safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 80,
+        language: "", recency: "any", cacheEnabled: false, breakerEnabled: true,
+        breakerThreshold: 3, breakerCooldownMs: 60_000, historyEnabled: false,
+      }),
+    });
+    for (let i = 0; i < 3; i += 1) {
+      shift = 0;
+      await provider.search({ query: "budget", maxResults: 5 }, new AbortController().signal);
+    }
+    assert.equal(getBackendBreaker("b").failCount, 0, "a backend cut by the shared budget is not an outage");
+  } finally {
+    Date.now = realNow;
   }
-  assert.equal(getBackendBreaker("b").failCount, 0, "a backend cut by the shared budget is not an outage");
 });
 
 
@@ -592,4 +601,50 @@ test("an invalid baseURL is reported as a configuration error, not budget exhaus
     provider.search({ query: "bad url", maxResults: 5 }, new AbortController().signal),
     /invalid baseURL/,
   );
+});
+
+test("a deadline spent before the first variant throws the budget error", async () => {
+  const realNow = Date.now;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { b: { id: "b", available: () => true, async search() { return { sources: [{ url: "https://b.example/1" }] }; } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["b"], backends: { b: {} }, filters: {},
+      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  let calls = 0;
+  Date.now = () => realNow() + (calls++ < 2 ? 0 : 10_000);
+  try {
+    await assert.rejects(
+      provider.search({ query: "late", maxResults: 5 }, new AbortController().signal),
+      /budget exhausted before any backend/,
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("a deadline spent between admission and first start is not a 0-of-N failure", async () => {
+  const realNow = Date.now;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { b: { id: "b", available: () => true, async search() { return { sources: [{ url: "https://b.example/1" }] }; } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["b"], backends: { b: {} }, filters: {},
+      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  let calls = 0;
+  Date.now = () => realNow() + (calls++ < 3 ? 0 : 10_000);
+  try {
+    await assert.rejects(
+      provider.search({ query: "late", maxResults: 5 }, new AbortController().signal),
+      /budget exhausted before any backend/,
+    );
+  } finally {
+    Date.now = realNow;
+  }
 });

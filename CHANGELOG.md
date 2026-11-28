@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.13.13 - 2026-11-28
+
+- Tests: the budget-starved breaker case advances a stubbed clock instead of
+  sleeping 60ms against an 80ms budget; no wall-clock margin remains.
+- Tests: deterministic zero-variant and admission race probes assert the
+  budget error, including the path that previously produced "0 of N
+  attempted".
+- Tests: 246.
 ## 2.13.12 - 2026-11-28
 
 - Fix: a variant whose deadline expired between admission and the first
