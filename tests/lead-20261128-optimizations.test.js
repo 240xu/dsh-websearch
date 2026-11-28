@@ -3,7 +3,7 @@
 // Run: node --test tests/lead-20261128-optimizations.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createSearchCache } from "../lib/cache.js";
@@ -80,5 +80,37 @@ test("native egress path enforces the 10 MiB response cap", async () => {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("cacheTtl 0 is a no-store mode and cache files are owner-only", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "dsh-cache-priv-"));
+  try {
+    const cache = createSearchCache({ dir, ttlMs: 0, maxEntries: 10 });
+    cache.set("k", { sources: [{ url: "https://e/1" }] });
+    assert.equal(cache.get("k"), null);
+    assert.deepEqual(readdirSync(dir), [], "no-store writes nothing");
+    const stored = createSearchCache({ dir, ttlMs: 900_000, maxEntries: 10 });
+    stored.set("k", { sources: [{ url: "https://e/2" }] });
+    const file = readdirSync(dir).find((n) => n.endsWith(".json"));
+    assert.ok(file, "a normal cache still writes");
+    assert.equal(statSync(dir).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(dir, file)).mode & 0o777, 0o600);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a transient ttl() error is a cache miss, not a deleted entry", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "dsh-cache-ttl-"));
+  let failing = false;
+  try {
+    const cache = createSearchCache({ dir, ttlMs: () => { if (failing) throw new Error("settings transient"); return 900_000; }, maxEntries: 10 });
+    cache.set("k", { sources: [{ url: "https://e/1" }] });
+    failing = true;
+    assert.equal(cache.get("k"), null);
+    assert.equal(readdirSync(dir).filter((n) => n.endsWith(".json")).length, 1, "valid entry survives a transient TTL error");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

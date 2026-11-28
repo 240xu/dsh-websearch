@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.9.1 - 2026-11-28
+
+Second expert re-audit on 2.9.0. Details: `docs/audit/127-expert-round2-20261128.md`.
+
+- Fix (crash): a synchronously throwing backend could leave the timeout guard
+  unhandled and terminate the process; the call is now evaluated in a promise
+  chain so the guard is always cleaned up.
+- Fix (timeout): the search-wide budget is now an absolute deadline. Each
+  backend clamps to `remainingNow`, variants split the remaining time, and a
+  variant with less than 2 s is not started; one hung backend or slow variant
+  can no longer multiply the budget or be reported as a timeout after it
+  already succeeded.
+- Fix: default `backendTimeoutMs` is 24 s, leaving 6 s of headroom under the
+  host's 30 s tool deadline; an abort at the host deadline no longer discards
+  partial sources.
+- Fix: cache TTL errors are a miss (valid entries are no longer deleted),
+  expired reads no longer unlink by path, corrupt entries and aged orphan
+  `.tmp` files are cleaned; `cacheTtl: 0` is a true no-store mode and cache /
+  history files are owner-only (0700/0600).
+- Fix: a missing API key no longer folds into the breaker/health as an outage;
+  telemetry still reports it.
+- Fix: `truncated` is true only for a cut at the seam's host bound; a
+  `numResults` preference cut is not seam truncation. The host bound is part
+  of the cache key.
+- Fix: bare IPv6 entries in `NO_PROXY` now match (the last colon was parsed as
+  a port).
+- Fix: duplicate fast-fail history entry; malformed backends now appear in
+  telemetry/health; `keyChecking` is defined in both dictionaries.
+- Fix: cache-hit notes follow `resultTelemetry` rather than `resultHeader`.
+- URL dedupe lowercases only protocol/host, preserving path case.
+- Settings: all validated field edits are sent in one POST (`setMany`); legacy
+  hosts fall back per field.
+- UI: live region contains only the message strip; one conflict message plus a
+  Retry button; dictionary loading text; read-only placeholders; per-row toggle
+  errors; no-op edits do not stage; integer bounds; pending badge only when the
+  state is unknown.
+- Depth: status-specific error/warn colors (WCAG-fixed mixes), link hover class,
+  env badge full contrast, disabled rows do not hover, official 32px input
+  metrics, static retry bar.
+- Tests: 218 unit tests; patches 32/32 (2.8.8) and 33/33 (2.8.4).
+
 ## 2.9.0 - 2026-11-28
 
 Expert polish round on top of 2.8.9 (six independent audits: bugs, logic,

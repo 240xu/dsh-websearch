@@ -92,7 +92,7 @@ pnpm install
 > 每个 API Key 字段旁有 **「获取 Key ↗」** 直达对应平台控制台；保存即写入凭证库并立即生效。
 
 
-插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 23 个开关/参数；缓存、熔断、历史、多查询、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 profile patch 配置：
+插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 24 个开关/参数；缓存、熔断、历史、多查询、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 profile patch 配置：
 
 **全局**
 
@@ -101,7 +101,7 @@ pnpm install
 | `intervention` | balanced | 搜索介入程度：`official` / `balanced` / `thorough`（见下表） |
 | `numResults` | 10 | 每次搜索返回结果数（1-50；official 档沿用宿主工具的条数上限） |
 | `concurrency` | 6 | 并发后端数（1-10） |
-| `backendTimeoutMs` | 30000 | 单后端超时毫秒 |
+| `backendTimeoutMs` | 24000 | 单后端超时毫秒（为宿主 30s 工具超时预留余量） |
 | `recency` | any | 时间范围过滤：day / week / month / year（映射到各后端原生参数） |
 | `language` | 空 | 搜索语言，如 en、zh-CN（SearXNG/Brave/Serper 支持） |
 | `safeSearch` | true | 安全搜索开关（SearXNG/Brave 支持） |
@@ -170,7 +170,7 @@ pnpm install
 
 ### 4. per-backend 超时上限（P2）
 
-- `ddg` / `searxng` 专属超时上限 8s（`min(8s, backendTimeoutMs)`，全局默认仍 30s、配置更短则以配置为准）——不可达后端不再拖住整个扇出尾。实测见 docs/real-call-2.8.0.md。
+- `ddg` / `searxng` 专属超时上限 8s（`min(8s, backendTimeoutMs)`，全局默认 24s、配置更短则以配置为准）——不可达后端不再拖住整个扇出尾。实测见 docs/real-call-2.8.0.md。
 
 ## v2.7.3 兼容修复 | What's new in v2.7.3
 
@@ -227,7 +227,7 @@ pnpm install
 - **Dedup strategies**: `url` keeps the historical URL-key merge with cross-backend field fill-in; `url+title` additionally collapses same-story syndicated mirrors (title Jaccard >= 0.9, CJK-aware tokenizer) while still enriching the kept entry.
 - **Deterministic rerank (optional)**: query-term overlap scoring (title x3 / snippet x2 / URL x1); stable ties preserve fan-out priority — same input always yields the same order.
 - **Honest timeouts**: each backend runs under an internal abort controller merged into the caller signal; when only the internal timer fires, the failure is reclassified as WEB_PROVIDER_ERROR ("backend <id> timed out") instead of being masked as a user cancellation.
-- **Concurrency & Timeout Control**: `concurrency` (default 6) limits simultaneous calls; `backendTimeoutMs` (default 30s) caps each backend.
+- **Concurrency & Timeout Control**: `concurrency` (default 6) limits simultaneous calls; `backendTimeoutMs` (default 24s) caps each backend.
 - **Streamable-http MCP, custom handshake**: `lib/util/mcp-client.js` implements `initialize → notifications/initialized → tools/call` with `Mcp-Session-Id` header caching and `MCP-Protocol-Version` after initialization, against Exa, Parallel, Firecrawl and TinyFish — no dependency on the full MCP SDK.
 - **Host-logger diagnostics**: each backend routes request/outcome through lib/util/log.js to the host logger (ctx.logger), best-effort and never thrown - deliberately NOT session events: the session event vocabulary is a closed set third-party plugins must not extend (an unknown envelope type makes the whole session log unreadable).
 
@@ -264,7 +264,7 @@ tests/
 node --test tests/
 ```
 
-当前 213/213 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 218/218 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 
@@ -277,7 +277,7 @@ live service before running the suite:
 ```bash
 bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 find node_modules/@deepseek-ai -xtype l   # expect no output
-node --test tests/*.test.js                 # 213/213
+node --test tests/*.test.js                 # 218/218
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。

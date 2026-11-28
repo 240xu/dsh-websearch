@@ -223,3 +223,44 @@ test("a backend that ignores its abort signal still obeys the per-backend timeou
   );
   assert.ok(Date.now() - started < 1000, "the race must not wait for the hung promise");
 });
+
+test("URL dedupe preserves path case but ignores fragments and tracking params", () => {
+  const merged = dedupeSources([
+    { url: "https://Example.com/A?utm_source=x#frag" },
+    { url: "https://example.com/a" },
+    { url: "https://example.com/A" },
+  ], "url");
+  assert.equal(merged.length, 2, "different path case is a different resource");
+  assert.equal(merged[0].url, "https://Example.com/A?utm_source=x#frag");
+});
+
+test("truncated is true only when the provider cut at the seam's host bound", async () => {
+  const many = { id: "many", available: () => true, async search() { return { sources: Array.from({ length: 25 }, (_, i) => ({ url: `https://many.example/${i}` })) }; } };
+  const make = () => createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined, backends: { many },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { numResults: 10 }), enabledBackends: ["many"], backends: { many: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 2, backendTimeoutMs: 30_000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const userCut = await make().search({ query: "many", maxResults: 20 }, new AbortController().signal);
+  assert.equal(userCut.sources.length, 10);
+  assert.equal(userCut.truncated, false, "a numResults preference cut is not seam truncation");
+  const hostCut = await make().search({ query: "many", maxResults: 10 }, new AbortController().signal);
+  assert.equal(hostCut.sources.length, 10);
+  assert.equal(hostCut.truncated, true, "cutting at the host bound is seam truncation");
+});
+
+test("a synchronously throwing backend does not create an unhandled rejection", async () => {
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { boom: { id: "boom", available: () => true, search() { throw new Error("sync boom"); } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["boom"], backends: { boom: {} }, filters: {},
+      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 100,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  await assert.rejects(provider.search({ query: "x", maxResults: 5 }, new AbortController().signal), /sync boom/);
+});
