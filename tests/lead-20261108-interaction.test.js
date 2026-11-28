@@ -62,12 +62,13 @@ test("cache key includes result-affecting options", () => {
   assert.match(prov, /cacheKeyFor\(\{[^}]*resultOptions/);
 });
 
-// M-3: a keyed TinyFish call must force a fresh MCP session; a keyless call
-// must remain byte-identical to the stateless path.
-test("M-3: keyed tinyfish forces a fresh session, keyless is unchanged", async () => {
+// M-3: keyed TinyFish reuses the per-credential session (the session cache key
+// contains X-API-Key, so rotation still re-initializes); keyless stays stateless.
+test("M-3: keyed tinyfish reuses the cached session, keyless is unchanged", async () => {
   const { readFileSync } = await import("node:fs");
   const tf = readFileSync(new URL("../lib/backends/tinyfish.js", HERE), "utf8");
-  assert.match(tf, /\{ skipInitialize: !keyed, forceFreshSession: keyed \}/);
+  assert.match(tf, /\{ skipInitialize: !keyed \}/);
+  assert.doesNotMatch(tf, /forceFreshSession/);
   const mc = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
   assert.match(mc, /async function ensureSession\(url, signal, options = \{\}, extraHeaders = \{\}\)/);
   assert.match(mc, /!options\.forceFreshSession && cached/);
@@ -91,9 +92,9 @@ test("M-1: exa/parallel/firecrawl skip initialize; call ids avoid initialize's",
   const mc = readFileSync(new URL("../lib/util/mcp-client.js", HERE), "utf8");
   // ids must avoid initialize's id=1 (see 65 号 N3 / sse.test.js).
   assert.match(mc, /id: options\.skipInitialize \? 2 : 3/);
-  // tinyfish keyless still skips; keyed still uses the handshake + fresh session.
+  // tinyfish keyless still skips; keyed still uses the handshake (once per key).
   const tf = readFileSync(new URL("../lib/backends/tinyfish.js", HERE), "utf8");
-  assert.match(tf, /\{ skipInitialize: !keyed, forceFreshSession: keyed \}/);
+  assert.match(tf, /\{ skipInitialize: !keyed \}/);
 });
 
 // readErrors: READ failures are tracked separately from SAVE failures, with
@@ -189,11 +190,15 @@ test("N4: session cache is keyed by credential; handshake carries the key", asyn
   const url = `http://127.0.0.1:${srv.address().port}/mcp`;
   const call = (key) => mcpCall(url, "search", { q: "x" }, { "X-API-Key": key }, new AbortController().signal, { forceFreshSession: false });
   await call("KEY_A");
+  await call("KEY_A");
   await call("KEY_B");
   const inits = seen.filter((s) => s.method === "initialize");
   assert.equal(inits.length, 2, "a rotated key must force a fresh initialize");
   assert.equal(inits[0].apiKey, "KEY_A");
   assert.equal(inits[1].apiKey, "KEY_B");
   assert.equal(seen.find((s) => s.method === "notifications/initialized").apiKey, "KEY_A");
+  const toolCalls = seen.filter((s) => s.method !== "initialize" && s.method !== "notifications/initialized");
+  assert.equal(toolCalls.length, 3, "three tools/call requests (two for KEY_A, one for KEY_B)");
+  assert.equal(toolCalls[1].session, "s1", "the second KEY_A call reuses the first session");
   srv.close();
 });

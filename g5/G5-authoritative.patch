@@ -447,7 +447,7 @@ index 037ea85..8c5d070 100644
          { cause: err },
        );
 diff --git a/lib/backends/parallel.js b/lib/backends/parallel.js
-index 5dde6a0..125c10d 100644
+index 5dde6a0..daa02da 100644
 --- a/lib/backends/parallel.js
 +++ b/lib/backends/parallel.js
 @@ -16,6 +16,7 @@
@@ -458,7 +458,7 @@ index 5dde6a0..125c10d 100644
  
  const PARALLEL_ENDPOINT = "https://search.parallel.ai/mcp";
  const PARALLEL_TOOL = "web_search";
-@@ -47,11 +48,12 @@ export const parallelBackend = {
+@@ -47,43 +48,25 @@ export const parallelBackend = {
  
      let result;
      try {
@@ -473,6 +473,38 @@ index 5dde6a0..125c10d 100644
          "WEB_PROVIDER_ERROR",
          { cause: err },
        );
+     }
+ 
+     if (result?.isError === true) {
+-
+-
+       const message = String(result.content?.[0]?.text ?? "unknown");
+-
+-
+       hooks.recordOutcome?.({ status: "error", message });
+-
+-
+       throw new WebError(`parallel returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
+-
+-
+     }
+ 
+-
+     const sources = parseParallelResult(result, request.maxResults ?? 8);
+-
+-
+     hooks.recordOutcome?.({ status: "ok", count: sources.length });
+-
+-    if (result?.isError === true) {
+-      throw new WebError(
+-        `parallel returned an MCP error: ${String(result.content?.[0]?.text ?? "unknown")}`,
+-        "WEB_PROVIDER_ERROR",
+-      );
+-    }
+-
+     return { sources, content: undefined, truncated: false };
+   },
+ };
 diff --git a/lib/backends/searxng.js b/lib/backends/searxng.js
 index 97faf2e..b235157 100644
 --- a/lib/backends/searxng.js
@@ -827,10 +859,10 @@ index 23f0219..23b2238 100644
      let data;
 diff --git a/lib/backends/tinyfish.js b/lib/backends/tinyfish.js
 new file mode 100644
-index 0000000..30b688c
+index 0000000..230afa2
 --- /dev/null
 +++ b/lib/backends/tinyfish.js
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,124 @@
 +// tinyfish.js — TinyFish search backend (streamable-http MCP).
 +//
 +// Aligned with the OpenCode v2 websearch provider:
@@ -904,10 +936,11 @@ index 0000000..30b688c
 +        args,
 +        extraHeaders,
 +        signal,
-+        // Keyless is stateless: skip initialize. Keyed uses the full
-+        // handshake and a fresh session so a rotated key cannot reuse the
-+        // Mcp-Session-Id cached for the previous credential.
-+        { skipInitialize: !keyed, forceFreshSession: keyed },
++        // Keyless is stateless: skip initialize. Keyed uses the handshake
++        // once; the session cache is keyed by URL *and* X-API-Key, so a
++        // rotated credential cannot reuse the previous Mcp-Session-Id, and a
++        // server-side expiry still triggers the 401/403/404 retry.
++        { skipInitialize: !keyed },
 +      );
 +    } catch (err) {
 +      if (err instanceof WebError) throw err;
@@ -1008,7 +1041,7 @@ index 7218312..8c9caa1 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..7e7e35b 100644
+index 88dc8c3..6d6a88a 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
 @@ -31,16 +31,26 @@ export const CACHE_DEFAULTS = {
@@ -1040,28 +1073,39 @@ index 88dc8c3..7e7e35b 100644
    });
    return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
  }
-@@ -97,8 +107,16 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -97,9 +107,26 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
      return out.sort((a, b) => a.mtime - b.mtime);
    }
  
-+  // Amortized eviction: an exact entry count cannot be kept cheaply (overwrites
-+  // must not increment it, get() drops expired files), and a drifted count
-+  // would pin the slow path forever. Sweep every SWEEP_EVERY writes instead.
-+  // maxEntries is a hard directory bound, not a hint. The listing is already
-+  // needed to decide whether we are over the cap, so evicting from it costs
-+  // nothing extra; deferring the sweep to every Nth write let the directory
-+  // grow unbounded between sweeps.
++  /** Count entry names without stat()ing them (the common, under-cap path). */
++  function countEntries() {
++    if (!existsSync(dir)) return 0;
++    let n = 0;
++    for (const name of readdirSync(dir)) {
++      if (name.endsWith(".json") && !name.includes(".tmp")) n += 1;
++    }
++    return n;
++  }
++
++  // maxEntries is a hard bound. Checking it costs one readdir of names; only
++  // an over-cap write pays the stat() of every entry. Trimming to a low-water
++  // mark (10%, at least one) keeps that scan amortized over ~cap/10 writes
++  // instead of running synchronously on every single write.
    function evict() {
++    if (countEntries() <= cap) return;
      const entries = listEntries();
-+    if (entries.length <= cap) return;
-     for (let i = 0; i < entries.length - cap; i++) {
+-    for (let i = 0; i < entries.length - cap; i++) {
++    const lowWater = Math.max(1, cap - Math.max(1, Math.ceil(cap * 0.1)));
++    const remove = entries.length - lowWater;
++    for (let i = 0; i < remove; i++) {
        try { unlinkSync(entries[i].file); } catch { /* raced */ }
      }
+   }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..6c2ea9c 100644
+index 783cbe6..8d97680 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -23,6 +23,13 @@ window.__ModuleLoader__.load({
+@@ -23,16 +23,29 @@ window.__ModuleLoader__.load({
  			{ id: "deepseek", keyEnv: "DEEPSEEK_API_KEY", label: "DeepSeek" },
  			{ id: "anthropic", keyEnv: "ANTHROPIC_API_KEY", label: "Anthropic" },
  			{ id: "openai", keyEnv: "OPENAI_API_KEY", label: "OpenAI" },
@@ -1075,7 +1119,10 @@ index 783cbe6..6c2ea9c 100644
  		];
  		const GLOBAL_FIELDS = ["numResults", "concurrency", "backendTimeoutMs"];
  		/** Enum-valued settings (validated client-side, saved as strings). */
-@@ -32,7 +39,12 @@ window.__ModuleLoader__.load({
+ 		const SELECT_FIELDS = {
++			intervention: ["official", "balanced", "thorough"],
+ 			recency: ["any", "day", "week", "month", "year"],
+ 			dedupStrategy: ["url", "url+title"],
  		};
  		/** Boolean settings staged as "true"/"false" strings by the selects. */
  		const BOOLEAN_FIELDS = ["rerank", "safeSearch", "resultTelemetry"];
@@ -1089,7 +1136,7 @@ index 783cbe6..6c2ea9c 100644
  		const KEYED = BACKENDS.filter((b) => b.keyEnv && !b.optionalKey);
  		const OPTIONAL_KEYS = BACKENDS.filter((b) => b.keyEnv && b.optionalKey);
  
-@@ -51,12 +63,18 @@ window.__ModuleLoader__.load({
+@@ -51,12 +64,18 @@ window.__ModuleLoader__.load({
  			nav: "搜索",
  			groupFree: "免密钥（开箱即用）",
  			groupKeyed: "需要 API Key",
@@ -1109,7 +1156,7 @@ index 783cbe6..6c2ea9c 100644
  			save: "保存",
  			discard: "放弃修改",
  			dirty: "有未保存修改",
-@@ -67,12 +85,17 @@ window.__ModuleLoader__.load({
+@@ -67,12 +86,17 @@ window.__ModuleLoader__.load({
  			overridden: "已自定义",
  			keyLabel: "{id} API Key",
  			getKey: "获取 Key ↗",
@@ -1129,7 +1176,7 @@ index 783cbe6..6c2ea9c 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +113,32 @@ window.__ModuleLoader__.load({
+@@ -90,22 +114,37 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1140,6 +1187,11 @@ index 783cbe6..6c2ea9c 100644
  			invalidFields: "以下字段未通过校验：",
  			readOnlyScope: "当前配置只读（可能由宿主锁定）",
 -			optionalTitle: "私有实例可选 Key",
++			interventionLabel: "搜索介入程度",
++			interventionOfficial: "官方（原样查询，不加结果头/遥测）",
++			interventionBalanced: "平衡（确定性去噪 + 去重/遥测，默认）",
++			interventionThorough: "彻底（相关性重排 + 深度覆盖）",
++			interventionHint: "official 把查询与结果呈现完全交给官方工具；balanced 只剥明确的口语前缀；thorough 会重排并扩大后端请求，延迟与额度消耗更高。内部多查询仍是独立开关。",
 +			unavailable: "设置暂不可用：宿主没有返回配置快照（服务未就绪或路由未挂载）。",
 +			retry: "重试",
 +			toggleFailed: "开关未生效",
@@ -1165,7 +1217,7 @@ index 783cbe6..6c2ea9c 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +149,17 @@ window.__ModuleLoader__.load({
+@@ -116,12 +155,17 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1185,7 +1237,7 @@ index 783cbe6..6c2ea9c 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +180,19 @@ window.__ModuleLoader__.load({
+@@ -142,15 +186,24 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1196,6 +1248,11 @@ index 783cbe6..6c2ea9c 100644
  			invalidFields: "Fields failed validation:",
  			readOnlyScope: "Configuration is read-only (locked by host?)",
 -			optionalTitle: "Private instance optional keys",
++			interventionLabel: "Search intervention",
++			interventionOfficial: "Official (raw query, no header/telemetry)",
++			interventionBalanced: "Balanced (deterministic cleanup + dedupe/telemetry, default)",
++			interventionThorough: "Thorough (relevance rerank + deep coverage)",
++			interventionHint: "official leaves query construction and presentation to the host tool; balanced strips only explicit conversational prefixes; thorough reranks and widens backend requests, costing more latency and quota. Internal multi-query stays a separate opt-in.",
 +			unavailable: "Settings are unavailable: the host returned no configuration snapshot (service not ready or route not mounted).",
 +			retry: "Retry",
 +			toggleFailed: "Toggle failed",
@@ -1208,7 +1265,7 @@ index 783cbe6..6c2ea9c 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +230,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +241,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1267,7 +1324,7 @@ index 783cbe6..6c2ea9c 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +288,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +299,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1304,7 +1361,7 @@ index 783cbe6..6c2ea9c 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,6 +326,7 @@ window.__ModuleLoader__.load({
+@@ -236,6 +337,7 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1312,7 +1369,7 @@ index 783cbe6..6c2ea9c 100644
  				this.accept(payload);
  			}
  
-@@ -247,6 +338,13 @@ window.__ModuleLoader__.load({
+@@ -247,6 +349,13 @@ window.__ModuleLoader__.load({
  		 * Card state machine: reads the bound settings scope snapshot, stages edits,
  		 * writes section fields through scope.set/unset and secrets via credentials.
  		 */
@@ -1326,7 +1383,7 @@ index 783cbe6..6c2ea9c 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +356,22 @@ window.__ModuleLoader__.load({
+@@ -258,11 +367,22 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1350,7 +1407,7 @@ index 783cbe6..6c2ea9c 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +385,19 @@ window.__ModuleLoader__.load({
+@@ -276,11 +396,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1370,7 +1427,7 @@ index 783cbe6..6c2ea9c 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +409,142 @@ window.__ModuleLoader__.load({
+@@ -292,59 +420,142 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1532,7 +1589,7 @@ index 783cbe6..6c2ea9c 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,14 +554,33 @@ window.__ModuleLoader__.load({
+@@ -354,14 +565,33 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -1566,7 +1623,7 @@ index 783cbe6..6c2ea9c 100644
  						// Empty draft clears the override so the schema default applies again.
  						if (staged.clear || staged.text === "") { await this.scope.unset(field); doneFields.push(field); continue; }
  						if (SELECT_FIELDS[field]) {
-@@ -395,6 +614,8 @@ window.__ModuleLoader__.load({
+@@ -395,6 +625,8 @@ window.__ModuleLoader__.load({
  						}
  					}
  					for (const [ref, staged] of this.stagedKeys) {
@@ -1575,7 +1632,7 @@ index 783cbe6..6c2ea9c 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +626,42 @@ window.__ModuleLoader__.load({
+@@ -405,22 +637,42 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -1622,7 +1679,7 @@ index 783cbe6..6c2ea9c 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +672,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +683,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -1638,7 +1695,7 @@ index 783cbe6..6c2ea9c 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -457,6 +699,55 @@ window.__ModuleLoader__.load({
+@@ -457,6 +710,55 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -1694,7 +1751,7 @@ index 783cbe6..6c2ea9c 100644
  		/** Labeled <select> for enum / boolean settings. */
  		function SelectField(props) {
  			return react_jsx_runtime.jsxs("div", { children: [
-@@ -473,169 +764,225 @@ window.__ModuleLoader__.load({
+@@ -473,169 +775,238 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -1836,7 +1893,20 @@ index 783cbe6..6c2ea9c 100644
 +				{ value: "true", label: t("on") },
 +				{ value: "false", label: t("off") },
 +			];
++			const interventionOptions = [
++				{ value: "official", label: t("interventionOfficial") },
++				{ value: "balanced", label: t("interventionBalanced") },
++				{ value: "thorough", label: t("interventionThorough") },
++			];
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
++				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("interventionLabel") }),
++				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: react_jsx_runtime.jsx(SelectField, {
++					label: t("interventionLabel"),
++					value: selVal("intervention", "balanced"),
++					options: interventionOptions,
++					onChange: (v) => card.edit("intervention", v),
++				}) }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: t("interventionHint") }),
 +				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("globalsTitle") }),
  				react_jsx_runtime.jsxs("div", { className: "wsc-grid", children: [
  					react_jsx_runtime.jsxs("div", { children: [
@@ -2044,7 +2114,7 @@ index 783cbe6..6c2ea9c 100644
  				] }),
  			] });
  		}
-@@ -646,7 +993,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1017,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2058,7 +2128,7 @@ index 783cbe6..6c2ea9c 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,6 +1024,9 @@ window.__ModuleLoader__.load({
+@@ -672,6 +1048,9 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2068,7 +2138,7 @@ index 783cbe6..6c2ea9c 100644
  			// Credential invalidations: 0.2.x forwards `credentials/reference-updated`;
  			// older lines forwarded `credentials/updated`. Subscribe to whichever
  			// event face this build exposes; a missing face must not abort apply().
-@@ -705,22 +1060,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1084,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -2318,7 +2388,7 @@ index dd15b37..7122300 100644
 +  return [disposerA, disposerB].filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 549b13b..22aafd2 100644
+index 549b13b..8924410 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,7 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -2398,7 +2468,20 @@ index 549b13b..22aafd2 100644
  };
  
  /**
-@@ -188,24 +215,33 @@ export const Config = z.object({
+@@ -132,8 +159,10 @@ const DEFAULT_LABELS = {
+  */
+ export const Config = z.object({
+   // Global
+-  numResults: z.number().step(1).min(1).max(50).default(8)
+-    .description("每次搜索返回的最大结果数"),
++  intervention: z.union(["official", "balanced", "thorough"]).default("balanced")
++    .description("搜索介入程度【策略】：official=只做官方 provider 该做的（原样查询、不加结果头/遥测、沿用工具的条数上限）；balanced=确定性去噪 + 去重/遥测（默认）；thorough=额外启用相关性重排与深度覆盖（内部多查询仍是独立开关，默认关）"),
++  numResults: z.number().step(1).min(1).max(50).default(10)
++    .description("每次搜索返回的最大结果数（official 档沿用宿主工具的条数上限）"),
+   concurrency: z.number().step(1).min(1).max(10).default(6)
+     .description("同时并发的后端数量"),
+   backendTimeoutMs: z.number().step(1000).min(1000).max(120000).default(30000)
+@@ -188,24 +217,33 @@ export const Config = z.object({
    enableDeepseek: z.boolean().default(false).description(DEFAULT_LABELS.deepseek),
    enableAnthropic: z.boolean().default(false).description(DEFAULT_LABELS.anthropic),
    enableOpenai: z.boolean().default(false).description(DEFAULT_LABELS.openai),
@@ -2440,7 +2523,7 @@ index 549b13b..22aafd2 100644
  
    // Base URLs (defaults from built-in registry)
    braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
-@@ -218,12 +254,20 @@ export const Config = z.object({
+@@ -218,12 +256,20 @@ export const Config = z.object({
      .description("Mojeek API 端点（默认官方；自托管/代理实例改此项）"),
    searxngBaseURL: z.string().default(DEFAULT_BASE_URLS.searxng)
      .description("SearXNG API 端点（默认官方；自托管/代理实例改此项）"),
@@ -2461,7 +2544,15 @@ index 549b13b..22aafd2 100644
  
    // Models
    deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
-@@ -279,7 +323,9 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+@@ -258,6 +304,7 @@ Config.meta = { ...Config.meta, volatile: true };
+  * provides the field regardless.
+  */
+ const FIELD_LABELS = {
++  intervention: "搜索介入程度",
+   cacheEnabled: "启用搜索结果缓存",
+   cacheTtl: "缓存有效期（秒）",
+   breakerEnabled: "后端熔断器",
+@@ -279,7 +326,9 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
   * service -> env.
   */
  export function resolveOptions(ctx, config) {
@@ -2472,7 +2563,7 @@ index 549b13b..22aafd2 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -287,20 +333,9 @@ export function resolveOptions(ctx, config) {
+@@ -287,20 +336,9 @@ export function resolveOptions(ctx, config) {
    }
  
    if (enabledBackends.length === 0) {
@@ -2496,7 +2587,7 @@ index 549b13b..22aafd2 100644
    }
  
    if (enabledBackends.length === 0) {
-@@ -328,9 +363,16 @@ export function resolveOptions(ctx, config) {
+@@ -328,9 +366,16 @@ export function resolveOptions(ctx, config) {
        baseURL: config?.[`${id}BaseURL`] ?? DEFAULT_BASE_URLS[id],
        model: config?.[`${id}Model`] ?? DEFAULT_MODELS[id],
        ...(id === "tavily" ? { searchDepth: config?.tavilySearchDepth ?? "basic" } : {}),
@@ -2514,16 +2605,60 @@ index 549b13b..22aafd2 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -352,7 +394,7 @@ export function resolveOptions(ctx, config) {
-     rerank: config?.rerank === true,
-     resultTelemetry: config?.resultTelemetry !== false,
+@@ -341,18 +386,33 @@ export function resolveOptions(ctx, config) {
+   }
+ 
+   const language = typeof config?.language === "string" ? config.language.trim() : "";
++  // Coarse intervention preset. `balanced` is the historical default and keeps
++  // every field independently configurable; `official` removes provider-level
++  // rewriting/presentation so the consumer (dsh-tool-web) owns them; `thorough`
++  // opts into the expensive stages. Explicit non-default flags still win under
++  // `balanced` only — the presets are authoritative by design.
++  const intervention = ["official", "balanced", "thorough"].includes(config?.intervention)
++    ? config.intervention
++    : "balanced";
++  const official = intervention === "official";
++  const thorough = intervention === "thorough";
+ 
+   return {
+     enabledBackends,
+-    numResults: config?.numResults ?? 8,
++    intervention,
++    queryShaping: !official,
++    // official follows the consumer's maxResults bound; the other tiers keep
++    // the user's explicit count (and still never exceed the host cap).
++    numResults: official ? undefined : (config?.numResults ?? 10),
+     concurrency: config?.concurrency ?? 6,
+     backendTimeoutMs: config?.backendTimeoutMs ?? 30000,
+     // v2.1 shaping options consumed by the provider merge pipeline.
+     dedupStrategy: config?.dedupStrategy === "url+title" ? "url+title" : "url",
+-    rerank: config?.rerank === true,
+-    resultTelemetry: config?.resultTelemetry !== false,
++    rerank: thorough || (!official && config?.rerank === true),
++    resultHeader: official ? false : config?.resultHeader !== false,
++    resultTelemetry: official ? false : config?.resultTelemetry !== false,
      // v2.7.0 cache / breaker / history
 -    cacheEnabled: config?.cacheEnabled === true,
 +    cacheEnabled: config?.cacheEnabled !== false,
      cacheTtlS: Math.max(30, Math.floor(Number(config?.cacheTtl) || CACHE_DEFAULTS.ttlMs / 1000)),
      breakerEnabled: config?.breakerEnabled !== false,
      breakerThreshold: Math.max(1, Math.floor(Number(config?.breakerThreshold) || BREAKER_DEFAULTS.threshold)),
-@@ -407,11 +449,28 @@ export function apply(ctx, config) {
+@@ -361,8 +421,12 @@ export function resolveOptions(ctx, config) {
+       : BREAKER_DEFAULTS.cooldownMs,
+     historyEnabled: config?.historyEnabled !== false,
+     // v2.8.0 coverage / multiQuery
+-    multiQueryEnabled: config?.multiQueryEnabled === true,
+-    deepCoverage: config?.deepCoverage === true,
++    // Internal multi-query stays an explicit opt-in in every tier: the
++    // official consumer already lets the model send 1-10 queries per call and
++    // merges them round-robin, so a "thorough" preset must not multiply calls
++    // invisibly.
++    multiQueryEnabled: !official && config?.multiQueryEnabled === true,
++    deepCoverage: thorough || (!official && config?.deepCoverage === true),
+     filters: {
+       recency: typeof config?.recency === "string" && config.recency !== "any" ? config.recency : undefined,
+       lang: language.length > 0 ? language : undefined,
+@@ -407,11 +471,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -2557,7 +2692,7 @@ index 549b13b..22aafd2 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -433,10 +492,9 @@ export function apply(ctx, config) {
+@@ -433,10 +514,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -2571,7 +2706,7 @@ index 549b13b..22aafd2 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -460,26 +518,48 @@ export function apply(ctx, config) {
+@@ -460,26 +540,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
@@ -2641,10 +2776,55 @@ index 549b13b..22aafd2 100644
 +    }, "unified-search: web routes");
    });
  }
+diff --git a/lib/prompting.js b/lib/prompting.js
+index 105fff8..f66deae 100644
+--- a/lib/prompting.js
++++ b/lib/prompting.js
+@@ -26,11 +26,20 @@
+ /** 查询硬上限（Tavily：agent 查询应简短聚焦；>1500 字符视为跑题长文）。 */
+ export const QUERY_MAX_CHARS = 1500;
+ 
+-/** 去口语化前缀（中英常见寒暄/请求词，确定性剥离，不改写语义）。 */
++/**
++ * Conversational prefixes that are safe to strip. Bare verbs and question
++ * words are deliberately absent: "search", "find", "google", "what is" can be
++ * part of the subject ("searching algorithms", "findability testing", "google
++ * search api"), and `\b` alone is not enough because "find" is a word prefix
++ * of "findability". Quotes are search operators and are never stripped.
++ */
+ const FILLER_PREFIX_RE =
+-  /^(?:please|pls|kindly|could you(?: please)?|can you(?: please)?|help me(?: to)?|search for|search|look up|google|find me|find|i(?:'d| would)? like to know|tell me|what is|who is|when is|where is|"|「|『)\s*/i;
++  /^(?:please|pls|kindly|could you(?: please)?|can you(?: please)?|would you(?: please)?|help me(?: to)?|i(?:'d| would)? like to know|tell me)\b[\s,，]*/i;
+ const FILLER_PREFIX_RE_ZH =
+-  /^(?:请|麻烦|帮我?|帮忙|帮我查一?下|查一?下|查询|搜索一?下?|搜一下?|查一下?|帮我找|找一下?|我想知道|请问)/;
++  /^(?:请(?:帮我|帮忙)?(?:查一?下|查询|搜索一下|搜一下|找一下)|麻烦(?:帮我)?(?:查一?下|查询|搜索|搜一下|找一下)|帮我(?:查一?下|查询|搜索|搜一下|找一下|找)|帮忙(?:查一?下|查询|搜索|搜一下|找一下)|(?:查一?下|查询一下|搜索一下|搜一下|找一下)|我想知道|我想了解|请问)/;
++
++/** A query that is only a request word ("search", "搜索") has no subject. */
++const PURE_FILLER_RE = /^(?:search|please|pls|kindly|google|find|look up|查询|搜索|搜一下|查一下|请|麻烦|帮我查一下|请问)$/i;
+ 
+ /**
+  * 确定性查询整形：剥离口语前缀（循环多次以处理叠加寒暄）、压缩空白、
+@@ -41,6 +50,7 @@ const FILLER_PREFIX_RE_ZH =
+ export function shapeQuery(query) {
+   if (typeof query !== "string") return "";
+   let q = query.replace(/\s+/g, " ").trim();
++  if (PURE_FILLER_RE.test(q)) return "";
+   // 中文寒暄与英文寒暄交替剥离，直到稳定。
+   for (let i = 0; i < 6; i++) {
+     const before = q;
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..077c3e5 100644
+index 744917e..27ce15a 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
+@@ -15,7 +15,7 @@
+ // Per-backend timeout: each backend call wrapped with opts.backendTimeoutMs (default 30s).
+ 
+ import { WebError } from "@deepseek-ai/dsh-web";
+-import { maybeAbortError, searchAborted, throwIfSearchAborted, isAbortedWebError } from "./util/abort.js";
++import { searchAborted, throwIfSearchAborted } from "./util/abort.js";
+ import {
+   recordBackendRequest,
+   recordBackendOutcome,
 @@ -25,8 +25,12 @@ import { normalizeFilters } from "./util/filters.js";
  import { shapeQuery, resultHeader, TELEMETRY_TAG } from "./prompting.js";
  import { cacheKeyFor } from "./cache.js";
@@ -2741,22 +2921,82 @@ index 744917e..077c3e5 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -191,7 +226,13 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -191,19 +226,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        ...(opts.filters ?? {}),
        ...(request?.filters ?? {}),
        });
 -        let effReq = { ...request, maxResults: Math.max(1, Number(request?.maxResults) || opts.numResults || 8) };
+-      // 系统性查询整形（Tavily/Exa best practices）：扇出前对口语化查询做
+-      // 确定性归一 —— 剥离寒暄前缀、压缩空白、截断到 1500 字符；
+-      // 专名/版本号/日期原样保留，不改写语义。
+-      effReq.query = shapeQuery(effReq.query);
+-      // 2.8.2（P2）：整形后为空（"搜索"/"search" 等寒暄独词被剥光）→ 早拒。
+-      // 不拒会：①空串扇出全部后端 ②不同原始查询共享 "" 缓存键（别名污染）
+-      // ③落入 all-backends-failed(0) 的误导错误。
+-      if (!effReq.query) {
+-        throw new WebError(
+-          "unified search: empty query after shaping (the request contained only fillers like \"search\")",
+-          "WEB_PROVIDER_ERROR",
+-        );
 +        // The host sends its deployment cap as request.maxResults; the card's
 +        // numResults is the user's requested count. Neither alone is right:
 +        // cap wins when smaller (never exceed the deployment limit), the user
 +        // value wins when smaller (settings must actually take effect).
-+        const hostCap = Number(request?.maxResults) || Infinity;
-+        const userMax = Number(opts.numResults) || 8;
-+        let effReq = { ...request, maxResults: Math.max(1, Math.min(hostCap, userMax)) };
-       // 系统性查询整形（Tavily/Exa best practices）：扇出前对口语化查询做
-       // 确定性归一 —— 剥离寒暄前缀、压缩空白、截断到 1500 字符；
-       // 专名/版本号/日期原样保留，不改写语义。
-@@ -228,7 +269,29 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
++        const hostCap = Number(request?.maxResults);
++        const userMax = opts.numResults === undefined || opts.numResults === null
++          ? Number.POSITIVE_INFINITY
++          : Number(opts.numResults);
++        // `official` leaves the count to the consumer (the tool always sends
++        // maxResults); every other tier keeps the user's explicit count as an
++        // upper bound, but never exceeds the host cap.
++        const finiteCaps = [hostCap, userMax].filter((n) => Number.isFinite(n) && n > 0);
++        const boundedMax = finiteCaps.length > 0 ? Math.max(1, Math.min(...finiteCaps)) : 10;
++        let effReq = { ...request, maxResults: boundedMax };
++      // `official` passes the model's exact query: the official consumer owns
++      // query construction, and provider-level rewriting can change a quoted
++      // phrase or a product name. `balanced`/`thorough` strip only
++      // conversational prefixes (see prompting.js).
++      if (opts.queryShaping !== false) {
++        effReq.query = shapeQuery(effReq.query);
++        // 2.8.2（P2）：整形后为空（"搜索"/"search" 等寒暄独词被剥光）→ 早拒。
++        // 不拒会：①空串扇出全部后端 ②不同原始查询共享 "" 缓存键（别名污染）
++        // ③落入 all-backends-failed(0) 的误导错误。
++        if (!effReq.query) {
++          throw new WebError(
++            "unified search: empty query after shaping (the request contained only fillers like \"search\")",
++            "WEB_PROVIDER_ERROR",
++          );
++        }
++      } else if (typeof effReq.query !== "string" || effReq.query.trim() === "") {
++        throw new WebError("unified search: empty query", "WEB_PROVIDER_ERROR");
+       }
+       if (Object.keys(filters).length > 0) effReq = { ...effReq, filters };
+       const maxResults = effReq.maxResults;
+@@ -215,11 +268,20 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+       const coverage = opts.deepCoverage === true;
+       // Per-backend widening: fetch more per backend, dedupe down afterwards.
+       const backendMaxResults = coverage ? Math.ceil(maxResults * 1.5) : maxResults;
+-      const multi = opts.multiQueryEnabled === true && isComplexQuery(effReq.query);
+-      const variants = multi ? deriveSubQueries(effReq.query) : [effReq.query];
++      const multiGate = opts.multiQueryEnabled === true && isComplexQuery(effReq.query);
++      const derived = multiGate ? deriveSubQueries(effReq.query) : [effReq.query];
++      // A gate-true query can still derive zero useful variants ("C vs Rust"
++      // drops the one-character "C"). Treat that as single-query instead of
++      // flipping cacheMode and paying for a duplicate cache entry.
++      const useMulti = derived.length > 1;
++      const variants = useMulti ? derived : [effReq.query];
++      // Result-presentation language also keys the cache: two raw queries can
++      // shape to the same string ("请搜索 cats" / "cats") while the header
++      // language follows the raw request.
++      const queryLanguage = /[\u4e00-\u9fff]/.test(String(request?.query ?? "")) ? "zh" : "en";
+       // Cache-key mode marker: different coverage/multiQuery settings must not
+       // serve each other's cached results.
+-      const cacheMode = (multi ? "multi" : "single") + (coverage ? "+coverage" : "");
++      const cacheMode = (useMulti ? "multi" : "single") + (coverage ? "+coverage" : "");
+ 
+       // v2.7.0 disk cache: keyed on (shaped query + filters + maxResults +
+       // backends + mode). A hit short-circuits the fan-out entirely; sources
+@@ -228,7 +290,30 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const cacheEnabled = opts.cacheEnabled === true && cache;
        let cacheKey = null;
        if (cacheEnabled) {
@@ -2766,7 +3006,7 @@ index 744917e..077c3e5 100644
 +        const resultOptions = {};
 +        for (const [k, v] of Object.entries(opts)) {
 +          if (typeof v === "function") continue;
-+          if (/^(safeSearch|rerank|dedupStrategy|language|recency|numResults|resultHeader|resultTelemetry|backendTimeoutMs|concurrency|multiQueryEnabled|deepCoverage)$/.test(k)
++          if (/^(safeSearch|rerank|dedupStrategy|language|recency|numResults|resultHeader|resultTelemetry|backendTimeoutMs|concurrency|multiQueryEnabled|deepCoverage|intervention|queryShaping)$/.test(k)
 +              || /BaseURL$|^.*Model$|^.*ApiKeyEnv$|^enable[A-Z]/.test(k)) resultOptions[k] = v;
 +        }
 +        // resolveOptions() keeps per-backend settings under opts.backends[id],
@@ -2783,11 +3023,12 @@ index 744917e..077c3e5 100644
 +            if (be[k] !== undefined) resultOptions[`${id}.${k}`] = be[k];
 +          }
 +        }
++        resultOptions.queryLanguage = queryLanguage;
 +        cacheKey = cacheKeyFor({ query: effReq.query, filters, maxResults, backends: opts.enabledBackends, mode: cacheMode, resultOptions });
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -243,13 +306,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -243,13 +328,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
            const cacheNote = `[websearch cache] cache hit, age ${hit.age}s`;
            hitContent = hitContent === undefined ? cacheNote : hitContent + "\n\n" + cacheNote;
@@ -2805,7 +3046,7 @@ index 744917e..077c3e5 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -279,17 +339,56 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -279,17 +361,56 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -2866,7 +3107,18 @@ index 744917e..077c3e5 100644
        }
  
        if (eligible.length === 0) {
-@@ -311,12 +410,9 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -304,6 +425,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+       // internal abort/timeout semantics are unchanged from v2.7.
+       const fanoutVariant = async (variantReq) => {
+         const telemetry = [];
++        // Health is folded once per backend per SEARCH, after every variant
++        // finished: recording per variant let one multi-query search trip the
++        // 3-failure breaker (and inflate history counters) by itself.
++        const health = [];
+         const limit = createLimiter(concurrency);
+         const runBackend = ({ id, backend, beOpts, hooks }) => {
+           const startedAtMs = Date.now();
+@@ -311,12 +436,9 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -2882,7 +3134,20 @@ index 744917e..077c3e5 100644
              }
            }
            const controller = new AbortController();
-@@ -334,22 +430,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -326,30 +448,44 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           const effectiveTimeoutMs = effectiveBackendTimeoutMs(id, backendTimeoutMs);
+           const timeoutId = setTimeout(() => controller.abort(), effectiveTimeoutMs);
+           return backend
+-            .search(variantReq, mergedSignal, beOpts, hooks)
++            // SearXNG's multi-instance split needs the effective budget to
++            // divide it across candidates; without it the backend saw an
++            // undefined budget and every instance got its own 4.5s.
++            .search(variantReq, mergedSignal, { ...beOpts, backendTimeoutMs: effectiveTimeoutMs }, hooks)
+             .then(
+               (value) => {
+                 telemetry.push({ id, ok: true, ms: Date.now() - startedAtMs, count: value?.sources?.length ?? 0 });
+-                recordBackendHealth(id, { ok: true, at: Date.now(), ms: Date.now() - startedAtMs, count: value?.sources?.length ?? 0 }, breakerCfg);
++                health.push({ id, ok: true, at: Date.now(), ms: Date.now() - startedAtMs, count: value?.sources?.length ?? 0 });
                  return value;
                },
                (err) => {
@@ -2907,8 +3172,10 @@ index 744917e..077c3e5 100644
                  telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: msg });
 -                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg);
 -                throw err;
-+                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg,
-+                  { rateLimited: rateLimited(err), keylessRejected: keylessRejected(err), retryAfterMs: retryAfterMsFrom(err) });
++                health.push({
++                  id, ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg,
++                  rateLimited: rateLimited(err), keylessRejected: keylessRejected(err), retryAfterMs: retryAfterMsFrom(err),
++                });
 +                throw timedOut
 +                  ? new WebError(reason, "WEB_PROVIDER_ERROR", { cause: err instanceof Error ? err : undefined })
 +                  : err;
@@ -2927,18 +3194,92 @@ index 744917e..077c3e5 100644
              .finally(() => clearTimeout(timeoutId));
          };
  
-@@ -395,6 +500,10 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -364,7 +500,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+         );
+         throwIfSearchAborted(signal);
+         const fold = collectFanoutResults(results, eligible, signal);
+-        return { ...fold, telemetry };
++        return { ...fold, telemetry, health };
+       };
+ 
+       // Fan out per variant (sequential — the limiter already parallelizes
+@@ -373,6 +509,9 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+       const allTelemetry = [];
+       const allFailures = [];
+       let hardError = null;
++      // Final outcome per backend across every variant. Success wins; otherwise
++      // keep the latest failure and the most severe quota classification.
++      const searchHealth = new Map();
+       for (const variantQuery of variants) {
+         const variantReq = {
+           ...effReq,
+@@ -381,6 +520,19 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           ...(coverage ? { deepCoverage: true } : {}),
+         };
+         const fold = await fanoutVariant(variantReq);
++        for (const outcome of fold.health) {
++          const prev = searchHealth.get(outcome.id);
++          if (prev === undefined || outcome.ok === true) {
++            searchHealth.set(outcome.id, { ...outcome });
++          } else if (prev.ok !== true) {
++            searchHealth.set(outcome.id, {
++              ...outcome,
++              rateLimited: prev.rateLimited === true || outcome.rateLimited === true,
++              keylessRejected: prev.keylessRejected === true || outcome.keylessRejected === true,
++              retryAfterMs: Math.max(prev.retryAfterMs ?? 0, outcome.retryAfterMs ?? 0) || undefined,
++            });
++          }
++        }
+         allTelemetry.push(...fold.telemetry);
+         allFailures.push(...fold.failures);
+         if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
+@@ -395,24 +547,53 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
++      // Fold the breaker once per backend per search. `null` (breaker off) is
++      // honoured by recordBackendHealth and never publishes a cooldown.
++      for (const [id, outcome] of searchHealth) {
++        recordBackendHealth(
++          id,
++          { ok: outcome.ok, at: outcome.at, ms: outcome.ms, count: outcome.count, error: outcome.error },
++          breakerCfg,
++          {
++            rateLimited: outcome.rateLimited === true,
++            keylessRejected: outcome.keylessRejected === true,
++            retryAfterMs: outcome.retryAfterMs,
++          },
++        );
++      }
++
 +      // Counted once: every history record below needs it, and the fan-out is
-+      // finished by this point so the array no longer grows.
++      // finished by this point so the array no longer grows. History counts
++      // unique backends, not attempts: multi-query fans one backend out once
++      // per variant, which used to report `backendsTotal` as variants × backends.
 +      const okCount = allTelemetry.filter((t) => t.ok).length;
++      const historyOk = new Set(allTelemetry.filter((t) => t.ok).map((t) => t.id)).size;
++      const historyTotal = new Set(allTelemetry.map((t) => t.id)).size;
 +
        // PHASE 4 fuse: multi-query mode fuses the per-variant ranked lists with
        // RRF (k=60); single-query mode keeps the historical behavior (the one
        // list, unchanged ordering).
-@@ -408,8 +517,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+-      const orderedLists = perVariant.filter((v) => v.ordered.length > 0).map((v) => v.ordered);
+-      const ordered = multi
+-        ? rrfFuse(orderedLists).fused
+-        : (orderedLists[0] ?? []);
++      // The original query keeps full weight and derived variants contribute
++      // at half weight: presence in several narrow variants must not outrank a
++      // page that answers the user's actual query (RRF is rank-only, so a
++      // homepage repeated across sub-queries otherwise wins).
++      const orderedVariants = perVariant.filter((v) => v.ordered.length > 0);
++      const ordered = useMulti
++        ? rrfFuse(orderedVariants.map((v) => v.ordered), {
++            weights: orderedVariants.map((v) => (v.query === effReq.query ? 2 : 1)),
++          }).fused
++        : (orderedVariants[0]?.ordered ?? []);
+ 
+       // If we got ANY sources, return them even if some backends failed.
+       if (ordered.length > 0) {
          const sources = ordered.slice(0, maxResults);
          // 结果呈现头（Anthropic web-search / OpenAI grounding 官方指引）：
          // 置于结果块最前，要求逐条引用来源 URL、优先官方/一手与较新来源；
@@ -2948,8 +3289,12 @@ index 744917e..077c3e5 100644
 +        // query text (CJK selects the Chinese header).
          let outContent = perVariant.find((v) => v.mergedContent !== undefined)?.mergedContent;
          if (opts.resultHeader !== false && (sources.length > 0 || outContent !== undefined)) {
-           const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
-@@ -420,24 +529,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+-          const header = resultHeader(typeof request?.query === "string" && /[\u4e00-\u9fff]/.test(request.query) ? "zh" : "en");
++          const header = resultHeader(queryLanguage);
+           outContent = outContent === undefined ? header : header + "\n\n" + outContent;
+         }
+         // Store the pre-telemetry core (sources + headered content) so a cache
+@@ -420,24 +601,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          if (cacheKey && cache) {
            cache.set(cacheKey, { sources, content: outContent, truncated: ordered.length > maxResults });
          }
@@ -2960,7 +3305,7 @@ index 744917e..077c3e5 100644
 -          backendsOk: allTelemetry.filter((t) => t.ok).length,
 -          backendsTotal: allTelemetry.length,
 -        });
-+        recordHistory(history, request?.query, sources.length, okCount, allTelemetry.length);
++        recordHistory(history, request?.query, sources.length, historyOk, historyTotal);
          if (opts.resultTelemetry !== false && (allTelemetry.length > 0 || cooled.size > 0)) {
 +          // Only backends that actually never ran get a cooldown note here.
 +          // fail-open puts non-quota cooled backends back into the fan-out, so
@@ -2997,7 +3342,7 @@ index 744917e..077c3e5 100644
              .concat(cooledParts);
            if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
            const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
-@@ -454,20 +576,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -454,20 +648,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -3031,14 +3376,14 @@ index 744917e..077c3e5 100644
 +          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
 +          emptyContent = emptyContent === undefined ? line : emptyContent + "\n\n" + line;
 +        }
-+        recordHistory(history, request?.query, 0, okCount, allTelemetry.length);
++        recordHistory(history, request?.query, 0, historyOk, historyTotal);
 +        // An empty result is never served from the cache (the read path
 +        // requires a non-empty sources array), so writing it only pays for a
 +        // full eviction scan and can push real entries out.
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -475,19 +608,38 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -475,19 +680,38 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          };
        }
  
@@ -3066,7 +3411,7 @@ index 744917e..077c3e5 100644
 +      // A total outage must be visible in history: otherwise the newest entry
 +      // still shows the last success while health already records failures,
 +      // making failure-rate/availability statistics silently omit outages.
-+      recordHistory(history, request?.query, 0, okCount, allTelemetry.length);
++      recordHistory(history, request?.query, 0, historyOk, historyTotal);
 +      // Anchor the note to the fan-out instant: recomputing at render time would
 +      // claim "expired" for a backend that was genuinely cooling when skipped.
 +      // fail-open re-runs non-quota cooled backends, so only those that were
@@ -3082,6 +3427,44 @@ index 744917e..077c3e5 100644
          "WEB_PROVIDER_ERROR",
          { cause: hardError ?? undefined },
        );
+diff --git a/lib/rrf.js b/lib/rrf.js
+index 6113acd..7802bff 100644
+--- a/lib/rrf.js
++++ b/lib/rrf.js
+@@ -24,24 +24,29 @@ function itemKey(item) {
+  * Fuse ranked lists of search sources with Reciprocal Rank Fusion.
+  *
+  * @param {Array<Array<object>>} lists  each list is already ranked best-first
+- * @param {{k?: number}} [opts]         k constant (default 60)
++ * @param {{k?: number, weights?: number[]}} [opts]  k constant (default 60);
++ *   optional per-list weights (the original query can outweigh derived variants)
+  * @returns {{ fused: object[], scores: Map<string, number> }}
+  *   fused: sources sorted by accumulated RRF score desc (ties keep first
+  *   appearance order); sources without a usable key are dropped.
+  */
+-export function rrfFuse(lists, { k = RRF_K } = {}) {
++export function rrfFuse(lists, { k = RRF_K, weights } = {}) {
+   const kk = Number(k) > 0 ? Number(k) : RRF_K;
+   const scores = new Map(); // key -> accumulated score
+   const firstSeen = new Map(); // key -> source object (first metadata wins)
+   const order = []; // keys in first-appearance order (stable ties)
+ 
+-  for (const list of Array.isArray(lists) ? lists : []) {
++  const allLists = Array.isArray(lists) ? lists : [];
++  for (let index = 0; index < allLists.length; index++) {
++    const list = allLists[index];
+     if (!Array.isArray(list)) continue;
++    const weight = Number(weights?.[index]);
++    const w = Number.isFinite(weight) && weight > 0 ? weight : 1;
+     for (let rank = 0; rank < list.length; rank++) {
+       const item = list[rank];
+       const key = itemKey(item);
+       if (!key) continue;
+-      scores.set(key, (scores.get(key) ?? 0) + 1 / (kk + rank));
++      scores.set(key, (scores.get(key) ?? 0) + w / (kk + rank));
+       if (!firstSeen.has(key)) {
+         firstSeen.set(key, item);
+         order.push(key);
 diff --git a/lib/settings-api.js b/lib/settings-api.js
 index 7765df5..4336663 100644
 --- a/lib/settings-api.js
@@ -3262,6 +3645,68 @@ index 7a75fc2..0d7d952 100644
  /** Return a fixed reason without exposing caller-supplied strings. */
  function structuralReason(req) {
    const host = authorityOf(req.headers.host, 'http')
+diff --git a/lib/util/base-url.js b/lib/util/base-url.js
+new file mode 100644
+index 0000000..5a04c48
+--- /dev/null
++++ b/lib/util/base-url.js
+@@ -0,0 +1,56 @@
++/**
++ * Validation for operator-supplied backend base URLs.
++ *
++ * A base URL decides where the backend connects AND where its API key is
++ * sent, so it is a trust boundary, not a formatting preference: only HTTPS,
++ * plus plain HTTP for loopback/RFC1918 self-hosted instances. Embedded
++ * credentials are rejected because the caller supplies the key separately.
++ * Link-local ranges are rejected regardless of scheme — they host instance
++ * metadata, not a search service, and an attacker-controlled settings write
++ * must not turn the plugin into a metadata client.
++ *
++ * @module lib/util/base-url
++ */
++
++/** Hosts that may be reached over plain HTTP (self-hosted SearXNG etc.). */
++const PRIVATE_HOST_RE = /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})$/;
++
++/** Always-off-limits hosts: cloud instance metadata and the unspecified address. */
++const BLOCKED_HOST_RE = /^(0\.0\.0\.0|169\.254\.\d{1,3}\.\d{1,3}|metadata(\.google\.internal)?|instance-data)$/;
++
++/**
++ * Why a candidate base URL is unusable, or `undefined` when it is allowed.
++ *
++ * @param {unknown} raw - candidate URL string.
++ * @returns {string|undefined} short reason suitable for an error message.
++ */
++export function invalidBaseURL(raw) {
++  if (typeof raw !== "string" || raw.trim() === "") return "empty URL";
++  let url;
++  try {
++    url = new URL(raw);
++  } catch {
++    return "not a URL";
++  }
++  if (url.username !== "" || url.password !== "") return "credentials in URL rejected";
++  // URL.hostname keeps brackets on IPv6 literals.
++  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
++  if (BLOCKED_HOST_RE.test(host)
++      || /^fe[89ab][0-9a-f]:/.test(host)
++      || host === "fd00:ec2::254"
++      || /^::ffff:(a9fe|fe[89ab])/i.test(host)) return "link-local host rejected";
++  if (url.protocol === "https:") return undefined;
++  if (url.protocol === "http:" && (PRIVATE_HOST_RE.test(host) || host === "::1")) return undefined;
++  return "https required (plain http only for private hosts)";
++}
++
++/**
++ * True when every candidate is allowed. Convenience wrapper for callers that
++ * only need a boolean.
++ *
++ * @param {unknown} raw - candidate URL string.
++ * @returns {boolean} whether the URL passed validation.
++ */
++export function isAllowedBaseURL(raw) {
++  return invalidBaseURL(raw) === undefined;
++}
 diff --git a/lib/util/describe-error.js b/lib/util/describe-error.js
 new file mode 100644
 index 0000000..a7f7391
@@ -4160,6 +4605,80 @@ index 0000000..39f42d5
 +  return candidates.find((row) => row.value !== undefined && row.value !== null
 +    && typeof row.value === "object"
 +    && SHAPE_FIELDS.filter((key) => Object.hasOwn(row.value, key)).length >= 2);
++}
+diff --git a/lib/util/rank.js b/lib/util/rank.js
+index afbaa0b..43f8338 100644
+--- a/lib/util/rank.js
++++ b/lib/util/rank.js
+@@ -16,8 +16,12 @@ export function tokenize(text) {
+   const tokens = new Set();
+   if (typeof text !== "string" || text.length === 0) return tokens;
+   const lower = text.toLowerCase();
+-  // ASCII word runs of length >= 2 ...
+-  for (const w of lower.match(/[a-z0-9]{2,}/g) ?? []) tokens.add(w);
++  // ASCII word runs of length >= 2, plus every digit run: single digits are
++  // version discriminators ("GPT-4" vs "GPT-5"), and dropping them made
++  // url+title dedupe merge different versions and made rerank blind to them.
++  for (const w of lower.match(/[a-z0-9]+/g) ?? []) {
++    if (w.length >= 2 || /^\d+$/.test(w)) tokens.add(w);
++  }
+   // ... plus individual CJK chars (U+3400-U+9FFF common range covers CJK).
+   for (const ch of lower.match(/[\u3400-\u9fff]/g) ?? []) tokens.add(ch);
+   return tokens;
+diff --git a/lib/util/redact.js b/lib/util/redact.js
+new file mode 100644
+index 0000000..8e2e3af
+--- /dev/null
++++ b/lib/util/redact.js
+@@ -0,0 +1,49 @@
++/**
++ * Credential redaction for text that leaves the plugin.
++ *
++ * Backends forward upstream error bodies, and providers sometimes echo the
++ * presented key back ("Incorrect API key provided: sk-live-…"). That text
++ * reaches the host log, the health/history payload, the telemetry line, and
++ * the model-visible failure message; none of those may carry a key.
++ *
++ * @module lib/util/redact
++ */
++
++/** Token shapes we can recognise without knowing the issuing vendor. */
++const SECRET_PATTERNS = [
++  /sk-[A-Za-z0-9_-]{8,}/g,
++  /tvly-[A-Za-z0-9_-]{8,}/g,
++  /BSA[A-Za-z0-9_-]{16,}/g,
++  /exa_[A-Za-z0-9_-]{8,}/g,
++  /ghp_[A-Za-z0-9]{16,}/g,
++  /github_pat_[A-Za-z0-9_]{16,}/g,
++  /npm_[A-Za-z0-9]{16,}/g,
++  /cfut_[A-Za-z0-9_-]{16,}/g,
++  /Bearer\s+[A-Za-z0-9._-]{8,}/gi,
++  /(api[_-]?key|token|secret|password)\s*[=:]\s*["']?[^\s"',]{6,}/gi,
++];
++
++/**
++ * Replace token-like fragments with `[redacted]`.
++ *
++ * @param {unknown} value - text to sanitize; non-strings stringify first.
++ * @returns {string} redacted text.
++ */
++export function redact(value) {
++  let text = value instanceof Error ? value.message : String(value ?? "");
++  for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, "[redacted]");
++  return text;
++}
++
++/**
++ * Redact, collapse whitespace, and bound length for diagnostics/UI.
++ *
++ * @param {unknown} value - error or text to sanitize.
++ * @param {number} [maxChars] - maximum output length.
++ * @returns {string} safe, bounded text.
++ */
++export function sanitizeError(value, maxChars = 120) {
++  if (value === null || value === undefined) return "";
++  const text = redact(value).replace(/\s+/g, " ").trim();
++  return text.length > maxChars ? text.slice(0, maxChars) : text;
 +}
 diff --git a/lib/util/web-error.js b/lib/util/web-error.js
 new file mode 100644

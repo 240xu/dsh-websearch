@@ -603,7 +603,7 @@ test("R3-1 the language field stays free text, not a select", async () => {
   assert.ok(langInput, "language must render as an input with the langPlaceholder hint");
   assert.equal(String(langInput.props.value), "zh-CN", "the input shows the stored language");
   const selects = nodes.filter((n) => n.type === "select");
-  assert.equal(selects.length, 5, "exactly five enum selects (recency/dedup/rerank/safeSearch/telemetry)");
+  assert.equal(selects.length, 6, "six enum selects (intervention/recency/dedup/rerank/safeSearch/telemetry)");
 });
 
 test("R3-2 the save button is disabled while the scope is read-only", async () => {

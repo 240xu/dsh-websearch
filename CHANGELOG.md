@@ -33,7 +33,38 @@ Base: npm 2.8.8 plus the local 34-file fix set (2.8.4 lineage) and the
   back newer writes, a save conflict reloads the revision and remains
   retryable, a failed toggle clears on retry, and a read-only/unavailable
   snapshot no longer renders live controls or fabricated counts.
-- Tests: 199 unit tests plus the separate health suite.
+- Add: `intervention` setting (`official` / `balanced` / `thorough`) that makes
+  the provider's degree of query rewriting and result presentation explicit.
+  `official` passes the model's query verbatim, adds no header/telemetry to
+  `content`, and follows the consumer's `maxResults`; `balanced` is the
+  historical default; `thorough` enables rerank + deep coverage. Internal
+  multi-query stays an independent opt-in because the host tool already merges
+  1-10 model-authored queries.
+- Fix: query shaping no longer deletes content words or one side of a quoted
+  phrase (`findability` -> `ability`, `searching` -> `ing`,
+  `Google Search Console` -> `Console`, unbalanced quotes). Only explicit
+  conversational/request prefixes are stripped; pure filler still fails early.
+- Fix: ranking keeps version digits, so `url+title` dedupe and rerank no longer
+  merge "GPT-4" with "GPT-5" or "Node 8" with "Node 9".
+- Fix: RRF gives the original query double weight, so a homepage repeated in
+  narrow sub-query variants cannot outrank the page that answers the query.
+- Fix: breaker/health fold once per backend per search instead of once per
+  multi-query variant; one search can no longer trip the 3-failure threshold
+  by itself.
+- Fix: the result header's language and the tier/shaping switches participate
+  in the cache key, so cross-language or cross-tier hits cannot replay the
+  wrong header or flags.
+- Fix: TinyFish keyed searches reuse the per-credential MCP session instead of
+  re-running initialize on every search (rotation still re-initializes).
+- Fix: SearXNG's multi-instance budget now receives the effective backend
+  timeout; per-instance attempts split the real budget instead of each taking
+  4.5s against the provider's 8s ceiling.
+- Perf: cache eviction counts directory names on the common path and only
+  stats entries when over the cap, then trims to a low-water mark (about 3x
+  faster at the default 200-entry cap, still a hard bound).
+- Align: default `numResults` is 10, matching `dsh-tool-web`'s
+  `searchMaxResults` default; `official` ignores the user count entirely.
+- Tests: 211 unit tests plus the separate health suite.
 
 ## 2.8.6 - 2026-10-18
 

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { foldBreaker } from "../lib/breaker.js";
 import { rateLimited, retryAfterMsFrom } from "../lib/util/failure-label.js";
 import { webErrorFromResponse, RATE_LIMIT_CODE, QUOTA_CODE } from "../lib/util/web-error.js";
+import { createUnifiedSearchProvider } from "../lib/provider.js";
 
 test("rateLimited() routes on structured fields, with a narrow legacy fallback", () => {
   assert.equal(rateLimited(new Error("MCP tools/call HTTP 429: too many requests")), true);
@@ -100,12 +101,31 @@ test("breaker: an expired cooldown resets the failure streak", () => {
   assert.equal(after.cooledUntil, 0);
 });
 
-test("numResults: host cap and user setting are both honoured by min()", async () => {
-  const { readFileSync } = await import("node:fs");
-  const src = readFileSync(new URL("../lib/provider.js", import.meta.url), "utf8");
-  assert.match(src, /Math\.min\(hostCap, userMax\)/);
-  assert.match(src, /ddg: 8000/);
-  assert.match(src, /timed out after \$\{effectiveTimeoutMs\}ms/);
+test("numResults: the smaller of host cap and user setting reaches the backend", async () => {
+  const mk = (calls) => ({
+    id: "fake",
+    available: () => true,
+    async search(request) {
+      calls.push(request.maxResults);
+      return { sources: [] };
+    },
+  });
+  for (const [host, user, expected] of [[10, 3, 3], [10, 50, 10]]) {
+    const calls = [];
+    const provider = createUnifiedSearchProvider({
+      ctx: {}, cache: undefined, history: undefined,
+      backends: { fake: mk(calls) },
+      resolveOptions: () => ({
+        enabledBackends: ["fake"], backends: { fake: {} }, numResults: user,
+        filters: {}, safeSearch: true, rerank: false, dedupStrategy: "url",
+        cacheEnabled: false, resultTelemetry: false, breakerEnabled: false,
+        multiQueryEnabled: false, deepCoverage: false, backendTimeoutMs: 30000,
+        language: "", recency: "any", resultHeader: false, historyEnabled: false,
+      }),
+    });
+    await provider.search({ query: "q", maxResults: host }, new AbortController().signal);
+    assert.equal(calls[0], expected, `host ${host} / user ${user}`);
+  }
 });
 
 test("retryAfterMsFrom: an http-date in the past falls back, not to a zero window", () => {

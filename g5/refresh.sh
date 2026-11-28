@@ -23,7 +23,9 @@ trap 'rm -rf "$TMP"' EXIT
 fetch_base() {
   local version="$1" envvar="$2" out="$3"
   local configured="${!envvar:-}"
-  for candidate in "$configured" "$HERE/base$version/package" "$ROOT/../../g5/base$version/package" \
+  local tag="${version//./}"
+  for candidate in "$configured" "$HERE/base$version/package" "$HERE/base$tag/package" \
+                   "$ROOT/../../g5/base$version/package" "$ROOT/../../g5/base$tag/package" \
                    "$ROOT/../../publish-work/base/package"; do
     if [[ -n "$candidate" && -d "$candidate" ]]; then
       echo "$candidate"
