@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.13.15 - 2026-11-28
+
+- UI: replace the `intervention` enum select with a three-stop discrete
+  slider styled from DSH tokens (track/ticks/thumb, selected labels, focus
+  ring, reduced motion). The native range is the interaction layer; ticks and
+  labels are decorative, labels are clickable shortcuts.
+- Behavior: dragging previews without staging; release commits one string op;
+  keyboard waits 160ms so arrow-walking through official does not drop the
+  four overridden drafts. The uncontrolled range keeps focus across commits
+  and re-syncs via ref when the committed tier changes.
+- Accessibility: `aria-valuetext` carries the localized stop name,
+  `aria-describedby` keeps the existing hint; no remount on commit.
+- Tests: 255.
 ## 2.13.14 - 2026-11-28
 
 - Fix: dropping invalid official-overridden drafts clears the validation

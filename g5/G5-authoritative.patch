@@ -1487,7 +1487,7 @@ index 88dc8c3..8ed7fad 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..932cfc1 100644
+index 783cbe6..72d69d8 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,33 @@ window.__ModuleLoader__.load({
@@ -1584,7 +1584,7 @@ index 783cbe6..932cfc1 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +132,57 @@ window.__ModuleLoader__.load({
+@@ -90,22 +132,60 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1604,6 +1604,9 @@ index 783cbe6..932cfc1 100644
 +			interventionOfficial: "官方（原样查询，不加结果头/遥测）",
 +			interventionBalanced: "平衡（确定性去噪 + 去重/遥测，默认）",
 +			interventionThorough: "彻底（相关性重排 + 深度覆盖）",
++			interventionOfficialShort: "官方",
++			interventionBalancedShort: "平衡",
++			interventionThoroughShort: "彻底",
 +			interventionHint: "official 把查询与结果呈现完全交给官方工具；balanced 只剥明确的口语前缀；thorough 会重排并扩大后端请求，延迟与额度消耗更高。内部多查询仍是独立开关。",
 +			officialHint: "官方档会覆盖：结果条数、相关性重排、结果健康遥测、引用提示头——这四项在你离开 official 前不生效。",
 +			unavailable: "设置暂不可用：宿主没有返回配置快照（服务未就绪或路由未挂载）。",
@@ -1645,7 +1648,7 @@ index 783cbe6..932cfc1 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +193,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +196,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1666,7 +1669,7 @@ index 783cbe6..932cfc1 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +225,31 @@ window.__ModuleLoader__.load({
+@@ -142,15 +228,34 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1686,6 +1689,9 @@ index 783cbe6..932cfc1 100644
 +			interventionOfficial: "Official (raw query, no header/telemetry)",
 +			interventionBalanced: "Balanced (deterministic cleanup + dedupe/telemetry, default)",
 +			interventionThorough: "Thorough (relevance rerank + deep coverage)",
++			interventionOfficialShort: "Official",
++			interventionBalancedShort: "Balanced",
++			interventionThoroughShort: "Thorough",
 +			interventionHint: "official leaves query construction and presentation to the host tool; balanced strips only explicit conversational prefixes; thorough reranks and widens backend requests, costing more latency and quota. Internal multi-query stays a separate opt-in.",
 +			officialHint: "Official also overrides Results, Relevance rerank, Result health telemetry and Citation header; those controls have no effect until you leave official.",
 +			unavailable: "Settings are unavailable: the host returned no configuration snapshot (service not ready or route not mounted).",
@@ -1697,11 +1703,11 @@ index 783cbe6..932cfc1 100644
  
  		//#region styles
 -		const css = ".wsc-card{display:flex;flex-direction:column;gap:14px}.wsc-sectionTitle{font-size:13px;font-weight:600;opacity:.75;margin:4px 0 0}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-subtle);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0}.wsc-toggle input{accent-color:var(--dsw-alias-accent-primary)}.wsc-input,.wsc-keyInput{box-sizing:border-box;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-subtle);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;font-family:inherit}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:12px;opacity:.8}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-subtle)}.wsc-badgeOn{color:var(--dsw-alias-accent-primary);border-color:var(--dsw-alias-accent-primary)}.wsc-hint{font-size:11px;opacity:.55;margin:3px 0 0}.wsc-actions{display:flex;gap:8px;align-items:center}.wsc-btn{cursor:pointer;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-family:inherit;background:var(--dsw-alias-accent-primary);color:#fff}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-subtle)}.wsc-btn:disabled{opacity:.5;cursor:default}.wsc-status{font-size:12px;opacity:.7}";
-+		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}";
++		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}.wsc-slider{position:relative;grid-column:1/-1;display:flex;flex-direction:column;gap:2px;padding:4px 0 2px;--wsc-progress:50%}.wsc-sliderTrack{position:relative;height:8px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3)}.wsc-sliderFill{position:absolute;inset:0 auto 0 0;width:var(--wsc-progress);border-radius:inherit;background:var(--dsw-alias-state-business-primary);transition:width .12s}.wsc-sliderThumb{position:absolute;top:50%;left:clamp(9px,var(--wsc-progress),calc(100% - 9px));width:18px;height:18px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:50%;corner-shape:round;background:var(--dsw-alias-switch-thumb);transform:translate(-50%,-50%);pointer-events:none;transition:left .12s}.wsc-sliderTicks{position:relative;height:4px;margin-top:3px}.wsc-sliderTick{position:absolute;top:0;width:4px;height:4px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-tertiary);transform:translateX(-50%)}.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(3){background:var(--dsw-alias-state-business-primary)}.wsc-sliderLabels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:3px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.wsc-sliderLabel{border:0;background:0 0;padding:0;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}.wsc-sliderLabel:nth-child(2){text-align:center}.wsc-sliderLabel:nth-child(3){text-align:end}.wsc-slider[data-index=\"0\"] .wsc-sliderLabel:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderLabel:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderLabel:nth-child(3){color:var(--dsw-alias-label-primary);font-weight:500}.wsc-sliderInput{position:absolute;z-index:2;inset:0 0 auto;width:100%;height:24px;margin:0;opacity:0;cursor:pointer}.wsc-sliderInput:disabled{cursor:default}.wsc-slider:has(.wsc-sliderInput:focus-visible){outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:var(--dsw-radius-md)}.wsc-slider:has(.wsc-sliderInput:disabled){opacity:.5}@media (prefers-reduced-motion:reduce){.wsc-sliderFill,.wsc-sliderThumb{transition:none}}";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +287,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +293,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1760,7 +1766,7 @@ index 783cbe6..932cfc1 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +345,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +351,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1797,7 +1803,7 @@ index 783cbe6..932cfc1 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +383,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +389,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1825,7 +1831,7 @@ index 783cbe6..932cfc1 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +415,23 @@ window.__ModuleLoader__.load({
+@@ -258,11 +421,23 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1850,7 +1856,7 @@ index 783cbe6..932cfc1 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +445,19 @@ window.__ModuleLoader__.load({
+@@ -276,11 +451,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1870,7 +1876,7 @@ index 783cbe6..932cfc1 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +469,201 @@ window.__ModuleLoader__.load({
+@@ -292,59 +475,201 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1900,8 +1906,7 @@ index 783cbe6..932cfc1 100644
 +				this.dropOfficialDrafts({ intervention: tier });
 +				this.store.set(this.projection());
 +			}
- 
--			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
++
 +			/** Detach from the host scope; late responses must not publish. */
 +			dispose() {
 +				this.disposed = true;
@@ -1912,7 +1917,8 @@ index 783cbe6..932cfc1 100644
 +			reload() {
 +				return typeof this.scope.load === "function" ? this.scope.load() : undefined;
 +			}
-+
+ 
+-			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
 +			/**
 +			 * Drop drafts for fields the official tier overrides, and their
 +			 * stale validation errors. Returns whether anything changed.
@@ -2092,7 +2098,7 @@ index 783cbe6..932cfc1 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +673,84 @@ window.__ModuleLoader__.load({
+@@ -354,47 +679,84 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2191,7 +2197,7 @@ index 783cbe6..932cfc1 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +761,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +767,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -2242,7 +2248,7 @@ index 783cbe6..932cfc1 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +811,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +817,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2258,7 +2264,7 @@ index 783cbe6..932cfc1 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +825,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +831,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2331,7 +2337,7 @@ index 783cbe6..932cfc1 100644
  			] });
  		}
  
-@@ -463,6 +897,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +903,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2341,10 +2347,11 @@ index 783cbe6..932cfc1 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -473,169 +910,273 @@ window.__ModuleLoader__.load({
+@@ -472,170 +915,402 @@ window.__ModuleLoader__.load({
+ 			] });
  		}
  
- 		/** The card root. */
+-		/** The card root. */
 -		function UnifiedSearchSection(props) {
 -			const state = props.useUnifiedSearchCard((snapshot) => snapshot);
 -			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard };
@@ -2376,11 +2383,136 @@ index 783cbe6..932cfc1 100644
 -				{ value: "false", label: props.t("off") },
 -			];
 -			const selVal = (f, dflt) => state.stagedText(f) ?? String(state.value[f] ?? dflt);
--
++		/**
++		 * Three-stop intervention slider. The native range is uncontrolled so
++		 * a drag preview survives unrelated republishes; an effect re-syncs it
++		 * only when the committed tier changes, without remounting the focused
++		 * input. Pointer release commits immediately; keyboard commits after a
++		 * short settle so passing through official does not drop the four
++		 * overridden drafts between arrow presses.
++		 * @param {object} props { value, tiers, labels, label, describedBy, onCommit }
++		 */
++		function InterventionSlider(props) {
++			const tiers = props.tiers;
++			const labels = props.labels;
++			const span = Math.max(1, tiers.length - 1);
++			const found = tiers.indexOf(props.value);
++			const index = found >= 0 ? found : Math.max(0, tiers.indexOf("balanced"));
++			const progress = (index / span) * 100;
++			const valueText = labels[index];
++			const inputRef = react.useRef(null);
++			const timerRef = react.useRef(undefined);
++			const clearTimer = () => {
++				if (timerRef.current !== undefined) {
++					clearTimeout(timerRef.current);
++					timerRef.current = undefined;
++				}
++			};
++			// Re-sync only on a committed tier change; the input itself stays
++			// uncontrolled so unrelated republishes do not snap a drag preview.
++			react.useEffect(() => {
++				clearTimer();
++				const input = inputRef.current;
++				if (input === null) return;
++				input.value = String(index);
++				input.setAttribute("aria-valuetext", valueText);
++				const wrapper = input.parentElement;
++				if (wrapper === null || wrapper === undefined) return;
++				wrapper.style.setProperty("--wsc-progress", progress + "%");
++				wrapper.dataset.index = String(index);
++			}, [index, progress, valueText]);
++			react.useEffect(() => () => clearTimer(), []);
++			const restore = (input) => {
++				clearTimer();
++				input.value = String(index);
++				input.setAttribute("aria-valuetext", valueText);
++				const wrapper = input.parentElement;
++				if (wrapper === null || wrapper === undefined) return;
++				wrapper.style.setProperty("--wsc-progress", progress + "%");
++				wrapper.dataset.index = String(index);
++			};
++			const preview = (input) => {
++				const next = Number(input.value);
++				if (!Number.isInteger(next) || next < 0 || next >= tiers.length) return;
++				const wrapper = input.parentElement;
++				if (wrapper === null || wrapper === undefined) return;
++				wrapper.style.setProperty("--wsc-progress", (next / span) * 100 + "%");
++				wrapper.dataset.index = String(next);
++				input.setAttribute("aria-valuetext", labels[next]);
++			};
++			const commit = (input) => {
++				clearTimer();
++				const next = Number(input.value);
++				if (!Number.isInteger(next) || next < 0 || next >= tiers.length) return;
++				if (tiers[next] !== props.value) props.onCommit(tiers[next]);
++			};
++			const settle = (input) => {
++				clearTimer();
++				const next = Number(input.value);
++				if (!Number.isInteger(next) || next < 0 || next >= tiers.length) return;
++				const tier = tiers[next];
++				timerRef.current = setTimeout(() => {
++					timerRef.current = undefined;
++					props.onCommit(tier);
++				}, 160);
++			};
++			return react_jsx_runtime.jsxs("div", {
++				className: "wsc-slider",
++				"data-index": index,
++				style: { "--wsc-progress": progress + "%" },
++				children: [
++					react_jsx_runtime.jsxs("div", { className: "wsc-sliderTrack", "aria-hidden": "true", children: [
++						react_jsx_runtime.jsx("div", { className: "wsc-sliderFill" }),
++						react_jsx_runtime.jsx("span", { className: "wsc-sliderThumb" }),
++					] }),
++					react_jsx_runtime.jsx("input", {
++						ref: inputRef,
++						className: "wsc-sliderInput",
++						type: "range",
++						min: 0,
++						max: tiers.length - 1,
++						step: 1,
++						defaultValue: index,
++						"aria-label": props.label,
++						"aria-valuetext": labels[index],
++						"aria-describedby": props.describedBy,
++						onChange: (e) => preview(e.currentTarget),
++						onPointerUp: (e) => commit(e.currentTarget),
++						onPointerCancel: (e) => restore(e.currentTarget),
++						onKeyDown: (e) => {
++							if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key)) {
++								clearTimer();
++							}
++						},
++						onKeyUp: (e) => {
++							if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key)) {
++								settle(e.currentTarget);
++							}
++						},
++						onBlur: (e) => commit(e.currentTarget),
++					}),
++					react_jsx_runtime.jsx("div", { className: "wsc-sliderTicks", "aria-hidden": "true", children: tiers.map((tier, i) =>
++						react_jsx_runtime.jsx("span", { className: "wsc-sliderTick", style: { left: (i / span) * 100 + "%" } }, tier)
++					) }),
++					react_jsx_runtime.jsx("div", { className: "wsc-sliderLabels", "aria-hidden": "true", children: labels.map((label, i) =>
++						react_jsx_runtime.jsx("button", {
++							type: "button",
++							tabIndex: -1,
++							className: "wsc-sliderLabel",
++							onMouseDown: (e) => e.preventDefault(),
++							onClick: () => { if (tiers[i] !== props.value) props.onCommit(tiers[i]); },
++							children: label,
++						}, label)
++					) }),
++				],
++			});
++		}
+ 
 -			return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
 -				react_jsx_runtime.jsx("div", { style: { display: "flex", gap: 14, alignItems: "center", padding: "10px 12px", marginBottom: 10, borderRadius: 8, background: "rgba(127,127,127,.08)", fontSize: 13 }, children: [
 -					react_jsx_runtime.jsxs("span", { children: [props.t("statusEnabled"), ": ", react_jsx_runtime.jsx("b", { children: enabledCount + "/" + BACKENDS.length })] }),
 -					react_jsx_runtime.jsxs("span", { children: [props.t("statusKeys"), ": ", react_jsx_runtime.jsx("b", { children: keysReady + "/" + keyedBackends.length })] }),
++		/** The card root. */
 +		/**
 +		 * Status strip above the settings form: enabled / keyed counts plus the
 +		 * three advisories (all-off fallback, read-only scope, metered default-off).
@@ -2493,18 +2625,21 @@ index 783cbe6..932cfc1 100644
 +				{ value: "true", label: t("on") },
 +				{ value: "false", label: t("off") },
 +			];
-+			const interventionOptions = [
-+				{ value: "official", label: t("interventionOfficial") },
-+				{ value: "balanced", label: t("interventionBalanced") },
-+				{ value: "thorough", label: t("interventionThorough") },
-+			];
++			const interventionTiers = SELECT_FIELDS.intervention;
++			// Keep labels derived from the same ordered tier list the save
++			// validator uses; reordering one must reorder the other.
++			const interventionLabels = interventionTiers.map((tier) =>
++				t("intervention" + tier.charAt(0).toUpperCase() + tier.slice(1) + "Short")
++			);
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
 +				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("interventionLabel") }),
-+				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: react_jsx_runtime.jsx(SelectField, {
++				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: react_jsx_runtime.jsx(InterventionSlider, {
 +					label: t("interventionLabel"),
 +					value: selVal("intervention", "balanced"),
-+					options: interventionOptions,
-+					onChange: (v) => card.edit("intervention", v),
++					tiers: interventionTiers,
++					labels: interventionLabels,
++					describedBy: "wsc-intervention-hint",
++					onCommit: (tier) => card.edit("intervention", tier),
 +				}) }),
 +				react_jsx_runtime.jsx("p", { className: "wsc-hint", id: "wsc-intervention-hint", children: t("interventionHint") + (official ? " " + t("officialHint") : "") }),
 +				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("globalsTitle") }),
@@ -2741,7 +2876,7 @@ index 783cbe6..932cfc1 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1187,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1321,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2755,7 +2890,7 @@ index 783cbe6..932cfc1 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1218,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1352,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2772,7 +2907,7 @@ index 783cbe6..932cfc1 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1254,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1388,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });

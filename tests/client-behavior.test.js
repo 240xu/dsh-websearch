@@ -33,7 +33,11 @@ function loadModule() {
     if (name === "react/jsx-runtime") {
       return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: Symbol("Fragment") };
     }
-    if (name === "react") return { createElement: (type, props) => ({ type, props }), useEffect: () => {} };
+    if (name === "react") return {
+      createElement: (type, props) => ({ type, props }),
+      useEffect: (fn) => { fn(); },
+      useRef: (initial) => ({ current: initial }),
+    };
     throw new Error(`unexpected require: ${name}`);
   });
 }
@@ -64,19 +68,23 @@ function bootCard(options = {}) {
     // constant undefined would silently disable credential writes and make any
     // test that exercises them pass with nothing written.
     get: (name) => (name === "connection" ? options.connection : name === "remote" ? options.remote : undefined),
-    slots: { inject: (_name, fn) => { sections.push(fn?.()); }, register: (desc) => { sections.push(desc); return () => {}; } },
+    slots: {
+      inject: (_name, fn) => { sections.push(fn?.()); },
+      register: (desc, component) => { sections.push({ ...desc, component }); return () => {}; },
+    },
     remote: { $on: () => () => {} },
   };
   module.apply(ctx);
   const section = sections.find((entry) => entry && typeof entry.inject === "function");
   const props = section.inject();
+  const component = section.component;
   const store = props.hooks.unifiedSearchCard;
   /** Last write the card issued, parsed. */
   const lastWrite = () => {
     const post = [...requests].reverse().find((r) => r.method === "POST");
     return post === undefined ? undefined : JSON.parse(post.body);
   };
-  return { props, store, requests, lastWrite };
+  return { props, store, component, requests, lastWrite };
 }
 
 test("editing a field stages it and updates the published projection", () => {
@@ -104,7 +112,7 @@ test("reset drops the staged edit without touching the stored value", () => {
 });
 
 test("save sends one batched set op and clears the staged text", async () => {
-  const { props, store, lastWrite } = bootCard();
+  const { props, store, component, lastWrite } = bootCard();
   props.edit("numResults", "3");
   await props.save();
   const write = lastWrite();
@@ -603,7 +611,7 @@ test("R3-1 the language field stays free text, not a select", async () => {
   assert.ok(langInput, "language must render as an input with the langPlaceholder hint");
   assert.equal(String(langInput.props.value), "zh-CN", "the input shows the stored language");
   const selects = nodes.filter((n) => n.type === "select");
-  assert.equal(selects.length, 8, "eight enum selects (intervention/recency/dedup/rerank/safeSearch/telemetry/header/cache)");
+  assert.equal(selects.length, 7, "seven enum selects (intervention is now a discrete slider)");
 });
 
 test("R3-2 the save button is disabled while the scope is read-only", async () => {
@@ -818,6 +826,7 @@ test("the card CSS uses only theme tokens the DSH design system defines", async 
     "settings-card-stroke",
     "settings-card-fill",
     "bg-layer-2",
+    "switch-thumb",
   ]);
   const styles = [];
   globalThis.document = {
@@ -1006,4 +1015,130 @@ test("dropping an invalid overridden draft clears the validation status", async 
   const snap = store.getSnapshot();
   assert.equal(snap.failedFields.includes("numResults"), false);
   assert.equal(snap.failed, false, "the status strip has no invalid fields left to report");
+});
+
+/** Build the smallest DOM slice the slider handlers touch. */
+function sliderHarness() {
+  const parent = {
+    dataset: {},
+    values: {},
+    style: { setProperty(key, value) { parent.values[key] = value; } },
+  };
+  const input = (value) => ({
+    value: String(value),
+    parentElement: parent,
+    attrs: {},
+    setAttribute(key, next) { this.attrs[key] = next; },
+  });
+  return { parent, input };
+}
+
+test("intervention slider is discrete and commits only on release", async () => {
+  const { props, store, component, lastWrite } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  assert.ok(input, "the intervention control renders as a range");
+  assert.equal(input.props.min, 0);
+  assert.equal(input.props.max, 2);
+  assert.equal(input.props.step, 1);
+  assert.equal(input.props["aria-valuetext"], "interventionBalancedShort");
+  assert.equal(input.props["aria-describedby"], "wsc-intervention-hint");
+  assert.equal(input.props.defaultValue, 1);
+  assert.equal(store.getSnapshot().stagedCount, 0);
+
+  const { parent, input: fake } = sliderHarness();
+  const dragging = fake(2);
+  input.props.onChange({ currentTarget: dragging });
+  assert.equal(parent.dataset.index, "2");
+  assert.equal(parent.values["--wsc-progress"], "100%");
+  assert.equal(dragging.attrs["aria-valuetext"], "interventionThoroughShort");
+  assert.equal(store.getSnapshot().stagedCount, 0, "dragging does not stage");
+  assert.equal(store.getSnapshot().savedAt, 0);
+
+  input.props.onPointerUp({ currentTarget: dragging });
+  assert.equal(store.getSnapshot().stagedCount, 1, "release stages exactly once");
+  assert.equal(store.getSnapshot().stagedText("intervention"), "thorough");
+  await props.save();
+  assert.deepEqual(lastWrite().ops, [{ op: "set", path: ["intervention"], value: "thorough" }]);
+});
+
+test("clicking a slider label commits that stop", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const label = flatten(component, props).find((n) =>
+    n.type === "button" && n.props.className === "wsc-sliderLabel" && n.props.children === "interventionOfficialShort"
+  );
+  assert.ok(label, "each stop has a clickable label");
+  label.props.onClick();
+  assert.equal(store.getSnapshot().stagedText("intervention"), "official");
+});
+
+test("intervention slider keeps drafts while dragging through official", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  const { input: fake } = sliderHarness();
+  props.edit("numResults", "40");
+
+  input.props.onChange({ currentTarget: fake(0) });
+  assert.equal(store.getSnapshot().stagedText("numResults"), "40", "preview does not drop drafts");
+  input.props.onPointerUp({ currentTarget: fake(1) });
+  assert.equal(store.getSnapshot().stagedText("numResults"), "40", "returning to balanced keeps the draft");
+
+  input.props.onChange({ currentTarget: fake(0) });
+  input.props.onPointerUp({ currentTarget: fake(0) });
+  assert.equal(store.getSnapshot().stagedText("numResults"), undefined, "committing official drops overridden drafts");
+});
+
+test("intervention slider commits the settled keyboard stop without a drag", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  const { input: fake } = sliderHarness();
+  input.props.onKeyUp({ currentTarget: fake(0), key: "ArrowRight" });
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(store.getSnapshot().stagedText("intervention"), "official");
+  input.props.onKeyUp({ currentTarget: fake(2), key: "ArrowRight" });
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(store.getSnapshot().stagedText("intervention"), "thorough");
+});
+
+test("rapid keyboard stops do not commit through official and drop drafts", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  const { input: fake } = sliderHarness();
+  props.edit("numResults", "40");
+  const keyboard = fake(0);
+  input.props.onKeyUp({ currentTarget: keyboard, key: "ArrowRight" });
+  keyboard.value = "2";
+  input.props.onKeyUp({ currentTarget: keyboard, key: "ArrowRight" });
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(store.getSnapshot().stagedText("intervention"), "thorough");
+  assert.equal(store.getSnapshot().stagedText("numResults"), "40", "the intermediate official stop never commits");
+});
+
+test("releasing on the committed stop is a no-op", async () => {
+  const { props, store, requests, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  const { input: fake } = sliderHarness();
+  input.props.onPointerUp({ currentTarget: fake(1) });
+  assert.equal(store.getSnapshot().stagedCount, 0);
+  assert.equal(store.getSnapshot().savedAt, 0);
+  assert.equal(requests.filter((r) => r.method === "POST").length, 0);
+});
+
+test("a cancelled pointer gesture restores the committed stop", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props.type === "range");
+  const { parent, input: fake } = sliderHarness();
+  const dragged = fake(2);
+  input.props.onChange({ currentTarget: dragged });
+  assert.equal(parent.dataset.index, "2");
+  input.props.onPointerCancel({ currentTarget: dragged });
+  assert.equal(parent.dataset.index, "1");
+  assert.equal(dragged.value, "1");
+  assert.equal(store.getSnapshot().stagedCount, 0);
 });
