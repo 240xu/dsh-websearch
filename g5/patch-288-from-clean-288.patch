@@ -1312,10 +1312,10 @@ index 88dc8c3..8ed7fad 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..72d69d8 100644
+index 783cbe6..d280d2f 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -23,16 +23,33 @@ window.__ModuleLoader__.load({
+@@ -23,16 +23,36 @@ window.__ModuleLoader__.load({
  			{ id: "deepseek", keyEnv: "DEEPSEEK_API_KEY", label: "DeepSeek" },
  			{ id: "anthropic", keyEnv: "ANTHROPIC_API_KEY", label: "Anthropic" },
  			{ id: "openai", keyEnv: "OPENAI_API_KEY", label: "OpenAI" },
@@ -1343,6 +1343,9 @@ index 783cbe6..72d69d8 100644
 +		// be saved while having no runtime effect, and could block Save with an
 +		// invalid value the disabled control cannot correct.
 +		const OFFICIAL_IGNORED_FIELDS = ["numResults", "rerank", "resultTelemetry", "resultHeader"];
++		// thorough forces these in lib/index.js resolveOptions; their card
++		// controls must not offer a value the provider will ignore.
++		const THOROUGH_IGNORED_FIELDS = ["rerank"];
 +		// split metered, opt-in backends out of the
 +		// "keyless / ready to use" group. They work without a key but are rate
 +		// limited and default OFF, so a separate section with an explicit hint
@@ -1352,7 +1355,7 @@ index 783cbe6..72d69d8 100644
  		const KEYED = BACKENDS.filter((b) => b.keyEnv && !b.optionalKey);
  		const OPTIONAL_KEYS = BACKENDS.filter((b) => b.keyEnv && b.optionalKey);
  
-@@ -48,15 +65,34 @@ window.__ModuleLoader__.load({
+@@ -48,15 +68,34 @@ window.__ModuleLoader__.load({
  		};
  
  		const zh = {
@@ -1388,7 +1391,7 @@ index 783cbe6..72d69d8 100644
  			save: "保存",
  			discard: "放弃修改",
  			dirty: "有未保存修改",
-@@ -67,12 +103,18 @@ window.__ModuleLoader__.load({
+@@ -67,12 +106,18 @@ window.__ModuleLoader__.load({
  			overridden: "已自定义",
  			keyLabel: "{id} API Key",
  			getKey: "获取 Key ↗",
@@ -1409,7 +1412,7 @@ index 783cbe6..72d69d8 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +132,60 @@ window.__ModuleLoader__.load({
+@@ -90,22 +135,61 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1434,6 +1437,7 @@ index 783cbe6..72d69d8 100644
 +			interventionThoroughShort: "彻底",
 +			interventionHint: "official 把查询与结果呈现完全交给官方工具；balanced 只剥明确的口语前缀；thorough 会重排并扩大后端请求，延迟与额度消耗更高。内部多查询仍是独立开关。",
 +			officialHint: "官方档会覆盖：结果条数、相关性重排、结果健康遥测、引用提示头——这四项在你离开 official 前不生效。",
++			thoroughHint: "彻底档会强制开启相关性重排与深度覆盖；这里的“相关性重排”控件不生效。",
 +			unavailable: "设置暂不可用：宿主没有返回配置快照（服务未就绪或路由未挂载）。",
 +			retry: "重试",
 +			loading: "载入中…",
@@ -1473,7 +1477,7 @@ index 783cbe6..72d69d8 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +196,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +200,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1494,7 +1498,7 @@ index 783cbe6..72d69d8 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +228,34 @@ window.__ModuleLoader__.load({
+@@ -142,15 +232,35 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1519,6 +1523,7 @@ index 783cbe6..72d69d8 100644
 +			interventionThoroughShort: "Thorough",
 +			interventionHint: "official leaves query construction and presentation to the host tool; balanced strips only explicit conversational prefixes; thorough reranks and widens backend requests, costing more latency and quota. Internal multi-query stays a separate opt-in.",
 +			officialHint: "Official also overrides Results, Relevance rerank, Result health telemetry and Citation header; those controls have no effect until you leave official.",
++			thoroughHint: "Thorough forces relevance rerank and deep coverage; the Relevance rerank control has no effect in this tier.",
 +			unavailable: "Settings are unavailable: the host returned no configuration snapshot (service not ready or route not mounted).",
 +			retry: "Retry",
 +			loading: "Loading…",
@@ -1532,7 +1537,7 @@ index 783cbe6..72d69d8 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +293,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +298,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1591,7 +1596,7 @@ index 783cbe6..72d69d8 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +351,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +356,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1628,7 +1633,7 @@ index 783cbe6..72d69d8 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +389,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +394,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1656,7 +1661,7 @@ index 783cbe6..72d69d8 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +421,23 @@ window.__ModuleLoader__.load({
+@@ -258,11 +426,23 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1681,7 +1686,7 @@ index 783cbe6..72d69d8 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +451,19 @@ window.__ModuleLoader__.load({
+@@ -276,11 +456,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1701,7 +1706,7 @@ index 783cbe6..72d69d8 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +475,201 @@ window.__ModuleLoader__.load({
+@@ -292,59 +480,206 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1728,7 +1733,7 @@ index 783cbe6..72d69d8 100644
 +				const tier = stagedTier === undefined
 +					? this.scope.getSnapshot().value?.intervention
 +					: (stagedTier.clear ? "" : stagedTier.text);
-+				this.dropOfficialDrafts({ intervention: tier });
++				this.dropTierDrafts({ intervention: tier });
 +				this.store.set(this.projection());
 +			}
 +
@@ -1745,15 +1750,19 @@ index 783cbe6..72d69d8 100644
  
 -			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
 +			/**
-+			 * Drop drafts for fields the official tier overrides, and their
++			 * Drop drafts for fields the selected tier overrides, and their
 +			 * stale validation errors. Returns whether anything changed.
 +			 * @param {object} value settings snapshot
 +			 * @returns {boolean}
 +			 */
-+			dropOfficialDrafts(value) {
-+				if (String(value?.intervention) !== "official") return false;
++			dropTierDrafts(value) {
++				const tier = String(value?.intervention);
++				const ignoredFields = tier === "official"
++					? OFFICIAL_IGNORED_FIELDS
++					: tier === "thorough" ? THOROUGH_IGNORED_FIELDS : [];
++				if (ignoredFields.length === 0) return false;
 +				let changed = false;
-+				for (const ignored of OFFICIAL_IGNORED_FIELDS) {
++				for (const ignored of ignoredFields) {
 +					if (this.staged.delete(ignored)) changed = true;
 +					if (this.failedFields.delete(ignored)) changed = true;
 +				}
@@ -1764,9 +1773,10 @@ index 783cbe6..72d69d8 100644
 +			}
 +			/** Stage a field edit (clears the saved marker so the card shows "unsaved"). */
 +			edit(field, text) {
-+				// A revert to the saved official value must still drop ignored drafts.
-+				const dropped = field === "intervention" && String(text) === "official"
-+					? this.dropOfficialDrafts({ intervention: "official" })
++				// A revert to a saved official/thorough value must still drop
++				// the drafts that tier overrides.
++				const dropped = field === "intervention"
++					? this.dropTierDrafts({ intervention: String(text) })
 +					: false;
 +				const committed = String(this.sectionValue(field) ?? "");
 +				if (String(text) === committed) {
@@ -1923,7 +1933,7 @@ index 783cbe6..72d69d8 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +679,84 @@ window.__ModuleLoader__.load({
+@@ -354,47 +689,84 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2022,7 +2032,7 @@ index 783cbe6..72d69d8 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +767,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +777,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -2073,7 +2083,7 @@ index 783cbe6..72d69d8 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +817,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +827,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2089,7 +2099,7 @@ index 783cbe6..72d69d8 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +831,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +841,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2162,7 +2172,7 @@ index 783cbe6..72d69d8 100644
  			] });
  		}
  
-@@ -463,6 +903,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +913,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2172,7 +2182,7 @@ index 783cbe6..72d69d8 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -472,170 +915,402 @@ window.__ModuleLoader__.load({
+@@ -472,170 +925,404 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -2428,8 +2438,10 @@ index 783cbe6..72d69d8 100644
 +		function SettingsFields(props) {
 +			const { state, card, t } = props;
 +			const selVal = (f, dflt) => state.stagedText(f) ?? String(state.value[f] ?? dflt);
++			const tier = selVal("intervention", "balanced");
 +			const cacheOn = selVal("cacheEnabled", "true") !== "false";
-+			const official = selVal("intervention", "balanced") === "official";
++			const official = tier === "official";
++			const thorough = tier === "thorough";
 +			const hasDraft = (f) => state.stagedText(f) !== undefined;
 +			// A gate only locks untouched fields; a field with a pending edit
 +			// stays editable so the user can correct or discard it.
@@ -2466,7 +2478,7 @@ index 783cbe6..72d69d8 100644
 +					describedBy: "wsc-intervention-hint",
 +					onCommit: (tier) => card.edit("intervention", tier),
 +				}) }),
-+				react_jsx_runtime.jsx("p", { className: "wsc-hint", id: "wsc-intervention-hint", children: t("interventionHint") + (official ? " " + t("officialHint") : "") }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", id: "wsc-intervention-hint", children: t("interventionHint") + (official ? " " + t("officialHint") : thorough ? " " + t("thoroughHint") : "") }),
 +				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("globalsTitle") }),
  				react_jsx_runtime.jsxs("div", { className: "wsc-grid", children: [
  					react_jsx_runtime.jsxs("div", { children: [
@@ -2544,7 +2556,7 @@ index 783cbe6..72d69d8 100644
 -					}),
 +					react_jsx_runtime.jsx(SelectField, { label: t("recencyLabel"), value: selVal("recency", "any"), options: recencyOptions, onChange: (v) => card.edit("recency", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("dedupLabel"), value: selVal("dedupStrategy", "url"), options: dedupOptions, onChange: (v) => card.edit("dedupStrategy", v) }),
-+					react_jsx_runtime.jsx(SelectField, { label: t("rerankLabel"), value: selVal("rerank", "false"), options: boolOptions, disabled: officialLocked("rerank"), describedBy: official ? "wsc-intervention-hint" : undefined, onChange: (v) => card.edit("rerank", v) }),
++					react_jsx_runtime.jsx(SelectField, { label: t("rerankLabel"), value: thorough ? "true" : selVal("rerank", "false"), options: boolOptions, disabled: officialLocked("rerank") || thorough, describedBy: official || thorough ? "wsc-intervention-hint" : undefined, onChange: (v) => card.edit("rerank", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("safeSearchLabel"), value: selVal("safeSearch", "true"), options: boolOptions, onChange: (v) => card.edit("safeSearch", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("telemetryLabel"), value: selVal("resultTelemetry", "true"), options: boolOptions, disabled: officialLocked("resultTelemetry"), describedBy: official ? "wsc-intervention-hint" : undefined, onChange: (v) => card.edit("resultTelemetry", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("resultHeaderLabel"), value: selVal("resultHeader", "true"), options: boolOptions, disabled: officialLocked("resultHeader"), describedBy: official ? "wsc-intervention-hint" : undefined, onChange: (v) => card.edit("resultHeader", v) }),
@@ -2701,7 +2713,7 @@ index 783cbe6..72d69d8 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1321,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1333,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2715,7 +2727,7 @@ index 783cbe6..72d69d8 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1352,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1364,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2732,7 +2744,7 @@ index 783cbe6..72d69d8 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1388,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1400,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });

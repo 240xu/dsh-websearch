@@ -1142,3 +1142,17 @@ test("a cancelled pointer gesture restores the committed stop", async () => {
   assert.equal(dragged.value, "1");
   assert.equal(store.getSnapshot().stagedCount, 0);
 });
+
+test("thorough forces and locks the rerank control", async () => {
+  const { props, store, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  props.edit("rerank", "true");
+  props.edit("intervention", "thorough");
+  const nodes = flatten(component, props);
+  const rerank = nodes.find((n) => n.type === "select" && n.props["aria-label"] === "rerankLabel");
+  assert.equal(rerank.props.value, "true");
+  assert.equal(rerank.props.disabled, true, "thorough forces rerank");
+  assert.equal(store.getSnapshot().stagedText("rerank"), undefined, "the overridden draft is dropped");
+  assert.equal(rerank.props["aria-describedby"], "wsc-intervention-hint");
+  assert.match(String(nodes.find((n) => n.props.id === "wsc-intervention-hint").props.children), /thoroughHint/);
+});

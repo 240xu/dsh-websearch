@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.13.16 - 2026-11-28
+
+- UI: thorough forces rerank and deep coverage, so the Relevance rerank select
+  now shows `true`, is disabled under thorough, and drops a staged draft (and
+  its validation error) when entering the tier. The intervention hint names
+  the forced behavior.
+- Tests: 256.
 ## 2.13.15 - 2026-11-28
 
 - UI: replace the `intervention` enum select with a three-stop discrete
