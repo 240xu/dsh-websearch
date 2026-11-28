@@ -3,8 +3,7 @@
 // Run: node --test tests/lead-20261128-tiers.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveOptions, resetKeyPresence } from "../lib/index.js";
-import { braveBackend } from "../lib/backends/brave.js";
+import { resolveOptions } from "../lib/index.js";
 import { shapeQuery } from "../lib/prompting.js";
 import { tokenize, tokenSimilarity, dedupeSources } from "../lib/util/rank.js";
 import { rrfFuse } from "../lib/rrf.js";
@@ -291,7 +290,11 @@ test("domain filters accept wildcard/FQDN/fullwidth input and fail loud when emp
   const opts = resolveOptions(CTX, { includeDomains: "*.Example.com, a.com，b.com, x.com." });
   assert.deepEqual(opts.includeDomains, ["example.com", "a.com", "b.com", "x.com"]);
   assert.equal(opts.domainFilterError, undefined);
-  const bad = resolveOptions(CTX, { includeDomains: "not_a_host!" });
+  const idn = resolveOptions(CTX, { includeDomains: "пример.рф, https://*.arxiv.org/x" });
+  assert.deepEqual(idn.includeDomains, ["xn--e1afmkfd.xn--p1ai", "arxiv.org"]);
+  const noConsumer = resolveOptions(CTX, { includeDomains: "not_a_host!" });
+  assert.equal(noConsumer.domainFilterError, undefined, "non-domain backends do not brick the search");
+  const bad = resolveOptions(CTX, { enableOpenai: true, includeDomains: "not_a_host!" });
   assert.deepEqual(bad.includeDomains, []);
   assert.match(String(bad.domainFilterError), /no valid hostname/);
 });
@@ -337,17 +340,29 @@ test("budget-starved healthy backends are not cooled by the breaker", async () =
   assert.equal(getBackendBreaker("b").failCount, 0, "a backend cut by the shared budget is not an outage");
 });
 
-test("available() reflects a resolved missing key without a restart", async () => {
-  resetKeyPresence();
-  let value = "";
-  const ctx = { get: (name) => name === "credentials" ? { resolve: async () => ({ value }) } : undefined };
-  const first = resolveOptions(ctx, { enableBrave: true });
-  await first.backends.brave.resolveApiKey();
-  const missing = resolveOptions(ctx, { enableBrave: true });
-  assert.equal(braveBackend.available(missing.backends.brave), false);
-  value = "sk-test";
-  await missing.backends.brave.resolveApiKey();
-  const present = resolveOptions(ctx, { enableBrave: true });
-  assert.equal(braveBackend.available(present.backends.brave), true);
-  resetKeyPresence();
+
+test("a backend that can merge facets receives one plan and is skipped for later variants", async () => {
+  const planCalls = [];
+  const plainCalls = [];
+  const backend = (id, handles, bucket) => ({
+    id, handlesAllVariants: handles, available: () => true,
+    async search(request) { bucket.push(request.searchPlan ?? request.query); return { sources: [{ url: `https://${id}.example/1` }] }; },
+  });
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: {
+      plan: backend("plan", true, planCalls),
+      plain: backend("plain", false, plainCalls),
+    },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["plan", "plain"],
+      backends: { plan: {}, plain: {} }, filters: {}, safeSearch: true, dedupStrategy: "url",
+      concurrency: 2, backendTimeoutMs: 5000, language: "", recency: "any",
+      cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.equal(planCalls.length, 1, "the plan backend runs once, not once per variant");
+  assert.ok(Array.isArray(planCalls[0]?.queries) && planCalls[0].queries.length > 1, "all facets travel in one plan");
+  assert.ok(plainCalls.length > 1, "backends that cannot merge facets still run per variant");
 });

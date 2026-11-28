@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.12.0 - 2026-11-28
+
+Round-4 expert fixes; details `docs/audit/130-round4-20261128.md`.
+
+- Fix: revert the `available()` presence gate. It hid the actionable missing-key
+  error behind the seam's generic "registered but unavailable / none
+  registered" response; `/health` now exposes `credentialMissing` instead.
+- Fix: only budget-caused timeouts skip breaker/health. A 429/500 on a
+  budget-clipped multi-query attempt still folds; the per-variant share is
+  included in the clip classification.
+- SearXNG page 2: caller abort rethrows `WEB_ABORTED`; any page-2 failure
+  (including 5xx) pauses extra pages for 60 s; a successful extra page clears
+  the pause.
+- Domain filters: punycode TLDs and `https://*.example.com` accepted;
+  `domainFilterError` only fires when OpenAI/Anthropic is enabled, so a
+  keyless-only profile is not bricked by a domain setting it cannot use.
+- All-failed errors distinguish attempted backends from budget-skipped ones;
+  telemetry renders `⏭budget`, not a fake failure.
+- Add cache controls to the card: `cacheEnabled` select and `cacheTtl` numeric
+  (0 = no-store), 26 of 60 fields editable.
+- Parallel: one primary call carries `searchPlan` with 2–3 facets; later
+  variants skip it. Other backends remain per-variant.
+- Fix cache/history directory mode with the missing `chmodSync` import; correct
+  stale 24s/rank-major/cache-key/paging comments.
+- Tests: 225.
 ## 2.11.0 - 2026-11-28
 
 Round-3 expert fixes and the gated SearXNG pagination.

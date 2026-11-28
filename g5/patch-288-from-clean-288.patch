@@ -1,5 +1,5 @@
 diff --git a/lib/backends/anthropic-like.js b/lib/backends/anthropic-like.js
-index 1bde4ff..b908414 100644
+index 1bde4ff..e5e2c61 100644
 --- a/lib/backends/anthropic-like.js
 +++ b/lib/backends/anthropic-like.js
 @@ -17,9 +17,11 @@
@@ -15,15 +15,6 @@ index 1bde4ff..b908414 100644
  const UA = "dsh-websearch/2.3";
  
  /**
-@@ -56,7 +58,7 @@ export function createAnthropicLikeBackend(spec) {
-       const okKey = (typeof options?.apiKey === "string" && options.apiKey.length > 0)
-         || typeof options?.resolveApiKey === "function";
-       const urlOk = typeof options?.baseURL === "string" && URL.canParse(options.baseURL);
--      return okKey && urlOk;
-+      return okKey && urlOk && options?.credentialPresent !== false;
-     },
- 
-     /**
 @@ -84,6 +86,15 @@ export function createAnthropicLikeBackend(spec) {
        const maxUses = options.maxUses ?? 5;
        const endpoint = `${baseURL.replace(/\/$/, "")}/messages`;
@@ -95,7 +86,7 @@ index 1bde4ff..b908414 100644
            { cause: err },
          );
 diff --git a/lib/backends/brave.js b/lib/backends/brave.js
-index d5aff09..054b1e9 100644
+index d5aff09..ce61987 100644
 --- a/lib/backends/brave.js
 +++ b/lib/backends/brave.js
 @@ -6,9 +6,11 @@
@@ -110,15 +101,6 @@ index d5aff09..054b1e9 100644
  
  const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
  
-@@ -18,7 +20,7 @@ export const braveBackend = {
-   requiresCredential: true,
- 
-   available(options) {
--    return typeof options?.resolveApiKey === "function";
-+    return typeof options?.resolveApiKey === "function" && options?.credentialPresent !== false;
-   },
- 
-   async search(request, signal, options, hooks) {
 @@ -27,7 +29,7 @@ export const braveBackend = {
  
      const apiKey = await backendOpts.resolveApiKey?.();
@@ -408,7 +390,7 @@ index 0000000..f4e02fb
 +
 +export default firecrawlBackend;
 diff --git a/lib/backends/mojeek.js b/lib/backends/mojeek.js
-index 9699f72..e30c1c7 100644
+index 9699f72..5a803b6 100644
 --- a/lib/backends/mojeek.js
 +++ b/lib/backends/mojeek.js
 @@ -6,8 +6,10 @@
@@ -422,15 +404,6 @@ index 9699f72..e30c1c7 100644
  
  const MOJEEK_ENDPOINT = "https://api.mojeek.com/v1/search";
  
-@@ -17,7 +19,7 @@ export const mojeekBackend = {
-   requiresCredential: true,
- 
-   available(options) {
--    return typeof options?.resolveApiKey === "function";
-+    return typeof options?.resolveApiKey === "function" && options?.credentialPresent !== false;
-   },
- 
-   async search(request, signal, options, hooks) {
 @@ -26,7 +28,7 @@ export const mojeekBackend = {
  
      const apiKey = await backendOpts.resolveApiKey?.();
@@ -457,7 +430,7 @@ index 9699f72..e30c1c7 100644
  
      let data;
 diff --git a/lib/backends/openai.js b/lib/backends/openai.js
-index 037ea85..a3b5e44 100644
+index 037ea85..4cb3495 100644
 --- a/lib/backends/openai.js
 +++ b/lib/backends/openai.js
 @@ -12,7 +12,9 @@
@@ -470,15 +443,6 @@ index 037ea85..a3b5e44 100644
  
  const UA = "dsh-websearch/2.3";
  
-@@ -27,7 +29,7 @@ export const openaiBackend = {
-     const okKey = (typeof options?.apiKey === "string" && options.apiKey.length > 0)
-       || typeof options?.resolveApiKey === "function";
-     const urlOk = typeof options?.baseURL === "string" && URL.canParse(options.baseURL);
--    return okKey && urlOk;
-+    return okKey && urlOk && options?.credentialPresent !== false;
-   },
- 
-   /**
 @@ -51,9 +53,17 @@ export const openaiBackend = {
      const model = options.model || "gpt-4o";
      const endpoint = `${baseURL}/responses`;
@@ -545,10 +509,30 @@ index 037ea85..a3b5e44 100644
          { cause: err },
        );
 diff --git a/lib/backends/parallel.js b/lib/backends/parallel.js
-index 37a439d..daa02da 100644
+index 37a439d..4e15f69 100644
 --- a/lib/backends/parallel.js
 +++ b/lib/backends/parallel.js
-@@ -48,7 +48,8 @@ export const parallelBackend = {
+@@ -27,6 +27,9 @@ const SESSION_ID = "dsh-websearch-" + randomUUID().slice(0, 8);
+ export const parallelBackend = {
+   id: "parallel",
+   requiresCredential: false,
++  // The provider may hand all derived facets to one call on the primary
++  // variant; later variants then skip this backend.
++  handlesAllVariants: true,
+ 
+   available() {
+     return true; // keyless endpoint
+@@ -35,7 +38,8 @@ export const parallelBackend = {
+   async search(request, signal, options, hooks = {}) {
+     const args = {
+       objective: request.query,
+-      search_queries: [request.query],
++      objective: request.searchPlan?.objective ?? request.query,
++      search_queries: request.searchPlan?.queries?.slice(0, 3) ?? [request.query],
+       session_id: SESSION_ID,
+       model_name: "dsh-websearch",
+     };
+@@ -48,7 +52,8 @@ export const parallelBackend = {
  
      let result;
      try {
@@ -558,7 +542,7 @@ index 37a439d..daa02da 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
-@@ -59,32 +60,13 @@ export const parallelBackend = {
+@@ -59,32 +64,13 @@ export const parallelBackend = {
      }
  
      if (result?.isError === true) {
@@ -592,7 +576,7 @@ index 37a439d..daa02da 100644
    },
  };
 diff --git a/lib/backends/searxng.js b/lib/backends/searxng.js
-index 499763f..ef7b2aa 100644
+index 499763f..a8530ca 100644
 --- a/lib/backends/searxng.js
 +++ b/lib/backends/searxng.js
 @@ -13,10 +13,12 @@
@@ -703,8 +687,8 @@ index 499763f..ef7b2aa 100644
  /**
 - * One request against one instance. Throws WebError on any failure; abort
 - * semantics are the caller's contract (signal passed through verbatim).
-+ * Query one instance, paginating only when the request asks for breadth
-+ * (deepCoverage or maxResults > 10). Page 1 is authoritative: if a later page
++ * Query one instance, paginating only when the provider sets pageLimit > 1
++ * (deepCoverage without internal multi-query). Page 1 is authoritative: if a later page
 + * fails, the already-collected page-1 sources are returned. The outer
 + * per-instance timer/signal covers every page, so pagination cannot outlive
 + * the backend budget.
@@ -733,7 +717,7 @@ index 499763f..ef7b2aa 100644
 -  url.searchParams.set("safesearch", safeSearchParams("searxng", backendOpts.safeSearch ?? true) ?? "1");
 -  url.searchParams.set("pageno", "1");
 +  base.searchParams.set("safesearch", safeSearchParams("searxng", backendOpts.safeSearch ?? true) ?? "1");
- 
++
 +  const max = Math.max(1, Number(request.maxResults) || 8);
 +  // A page-2 429/5xx must not be repeated on every search: keep the first
 +  // page, skip extra pages for a minute.
@@ -751,12 +735,12 @@ index 499763f..ef7b2aa 100644
 +        baseURL, request, signal, backendOpts, apiKey, hooks, pageUrl, max - out.length,
 +      );
 +    } catch (error) {
++      if (signal?.aborted === true) throw searchAborted(signal, error);
 +      // A failed page after a successful page 1 degrades coverage, not the
-+      // whole result; the caller still gets the sources already found.
++      // whole result; the caller still gets the sources already found. Any
++      // page>1 failure pauses extra pages for a minute (a 5xx flaps too).
 +      if (out.length > 0) {
-+        if (page > 1 && (error?.code === "RATE_LIMIT" || error?.code === "QUOTA")) {
-+          pageCooldowns.set(baseURL, Date.now() + 60_000);
-+        }
++        if (page > 1) pageCooldowns.set(baseURL, Date.now() + 60_000);
 +        break;
 +      }
 +      throw error;
@@ -767,12 +751,12 @@ index 499763f..ef7b2aa 100644
 +        out.push(src);
 +      }
 +    }
-+    if (page === 1) pageCooldowns.delete(baseURL);
++    if (page > 1) pageCooldowns.delete(baseURL);
 +    if (pageSources.length === 0 || out.length >= max) break;
 +  }
 +  return out.slice(0, max);
 +}
-+
+ 
 +/**
 + * One page against one instance. Throws WebError on any failure; abort
 + * semantics are the caller's contract (signal passed through verbatim).
@@ -804,7 +788,7 @@ index 499763f..ef7b2aa 100644
    return sources;
  }
 diff --git a/lib/backends/serper.js b/lib/backends/serper.js
-index 5913502..f8c16a6 100644
+index 5913502..7132cbb 100644
 --- a/lib/backends/serper.js
 +++ b/lib/backends/serper.js
 @@ -6,9 +6,11 @@
@@ -819,15 +803,6 @@ index 5913502..f8c16a6 100644
  
  const SERPER_ENDPOINT = "https://google.serper.dev/search";
  
-@@ -18,7 +20,7 @@ export const serperBackend = {
-   requiresCredential: true,
- 
-   available(options) {
--    return typeof options?.resolveApiKey === "function";
-+    return typeof options?.resolveApiKey === "function" && options?.credentialPresent !== false;
-   },
- 
-   async search(request, signal, options, hooks) {
 @@ -27,7 +29,7 @@ export const serperBackend = {
  
      const apiKey = await backendOpts.resolveApiKey?.();
@@ -865,7 +840,7 @@ index 5913502..f8c16a6 100644
    }
    
 diff --git a/lib/backends/tavily.js b/lib/backends/tavily.js
-index 23f0219..e58e432 100644
+index 23f0219..d2515a2 100644
 --- a/lib/backends/tavily.js
 +++ b/lib/backends/tavily.js
 @@ -6,9 +6,11 @@
@@ -880,15 +855,6 @@ index 23f0219..e58e432 100644
  
  const TAVILY_ENDPOINT = "https://api.tavily.com/search";
  
-@@ -18,7 +20,7 @@ export const tavilyBackend = {
-   requiresCredential: true,
- 
-   available(options) {
--    return typeof options?.resolveApiKey === "function";
-+    return typeof options?.resolveApiKey === "function" && options?.credentialPresent !== false;
-   },
- 
-   async search(request, signal, options, hooks) {
 @@ -27,7 +29,7 @@ export const tavilyBackend = {
  
      const apiKey = await backendOpts.resolveApiKey?.();
@@ -1098,10 +1064,28 @@ index 7218312..8c9caa1 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..f8fb55b 100644
+index 88dc8c3..25cec9e 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
-@@ -29,18 +29,27 @@ export const CACHE_DEFAULTS = {
+@@ -1,7 +1,7 @@
+ // cache.js — v2.7.0 disk cache for unified search results (zero dependencies).
+ //
+-// Cache key: sha256 over the canonical JSON of {query (already shaped),
+-// filters, maxResults} — exactly the dimensions that change a search outcome.
++// Cache key: sha256 over the canonical JSON of the shaped query, filters,
++// effective maxResults, ordered backend set, cache mode and result options.
+ // Entries live as one JSON file per key under <dir>, written atomically
+ // (tmp file + rename) so a crash mid-write never leaves a corrupt cache.
+ // Eviction: when the entry count exceeds maxEntries, the oldest-by-mtime
+@@ -10,6 +10,7 @@
+ 
+ import { createHash } from "node:crypto";
+ import {
++  chmodSync,
+   existsSync,
+   mkdirSync,
+   readdirSync,
+@@ -29,18 +30,27 @@ export const CACHE_DEFAULTS = {
  
  /**
   * Compute the deterministic cache key for a search.
@@ -1134,7 +1118,7 @@ index 88dc8c3..f8fb55b 100644
    });
    return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
  }
-@@ -62,12 +71,18 @@ function ageSeconds(record, nowMs) {
+@@ -62,12 +72,18 @@ function ageSeconds(record, nowMs) {
  export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntries = CACHE_DEFAULTS.maxEntries }) {
    // ttlMs may be a number or () => number (settings can change at runtime).
    const ttlOf = typeof ttlMs === "function" ? ttlMs : () => Number(ttlMs) || 0;
@@ -1154,7 +1138,7 @@ index 88dc8c3..f8fb55b 100644
    }
  
    /**
-@@ -77,8 +92,14 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -77,8 +93,14 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
     */
    function atomicWrite(file, data) {
      const tmp = `${file}.${process.pid}.tmp`;
@@ -1171,7 +1155,7 @@ index 88dc8c3..f8fb55b 100644
    }
  
    /** List current entries as [{key, file, mtime}] sorted oldest first. */
-@@ -97,9 +118,40 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -97,9 +119,40 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
      return out.sort((a, b) => a.mtime - b.mtime);
    }
  
@@ -1213,7 +1197,7 @@ index 88dc8c3..f8fb55b 100644
        try { unlinkSync(entries[i].file); } catch { /* raced */ }
      }
    }
-@@ -110,25 +162,32 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -110,25 +163,32 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
       * @returns {{ value: object, age: number } | null} age in seconds; null on miss/expiry
       */
      get(key, nowMs = Date.now()) {
@@ -1256,7 +1240,7 @@ index 88dc8c3..f8fb55b 100644
        try {
          ensureDir();
          atomicWrite(fileFor(key), JSON.stringify({ key, time: nowMs, value }));
-@@ -141,6 +200,7 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
+@@ -141,6 +201,7 @@ export function createSearchCache({ dir, ttlMs = CACHE_DEFAULTS.ttlMs, maxEntrie
      /** Drop every cached entry (best-effort). */
      clear() {
        try {
@@ -1265,7 +1249,7 @@ index 88dc8c3..f8fb55b 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..d1ea557 100644
+index 783cbe6..9a9213b 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,29 @@ window.__ModuleLoader__.load({
@@ -1358,7 +1342,7 @@ index 783cbe6..d1ea557 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +128,52 @@ window.__ModuleLoader__.load({
+@@ -90,22 +128,54 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1366,6 +1350,8 @@ index 783cbe6..d1ea557 100644
  			telemetryLabel: "结果健康遥测",
 -			fallbackHint: "全部后端已关闭：搜索将回退到默认免 Key 后端",
 +			resultHeaderLabel: "结果引用提示头",
++			cacheLabel: "结果缓存",
++			cacheTtlLabel: "缓存有效期（秒）",
 +			fallbackHint: "全部后端已关闭：搜索将回退到默认免 Key 后端（计量型仍保持关闭）",
  			invalidFields: "以下字段未通过校验：",
  			readOnlyScope: "当前配置只读（可能由宿主锁定）",
@@ -1414,7 +1400,7 @@ index 783cbe6..d1ea557 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +184,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +186,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1435,7 +1421,7 @@ index 783cbe6..d1ea557 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +216,26 @@ window.__ModuleLoader__.load({
+@@ -142,15 +218,28 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1443,6 +1429,8 @@ index 783cbe6..d1ea557 100644
  			telemetryLabel: "Result health telemetry",
 -			fallbackHint: "All backends off: search falls back to the default keyless four.",
 +			resultHeaderLabel: "Citation header",
++			cacheLabel: "Result cache",
++			cacheTtlLabel: "Cache TTL (s)",
 +			fallbackHint: "All backends off: search falls back to the default keyless four (metered backends stay off).",
  			invalidFields: "Fields failed validation:",
  			readOnlyScope: "Configuration is read-only (locked by host?)",
@@ -1465,7 +1453,7 @@ index 783cbe6..d1ea557 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +273,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +277,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1524,7 +1512,7 @@ index 783cbe6..d1ea557 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +331,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +335,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1561,7 +1549,7 @@ index 783cbe6..d1ea557 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +369,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +373,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1589,7 +1577,7 @@ index 783cbe6..d1ea557 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +401,23 @@ window.__ModuleLoader__.load({
+@@ -258,11 +405,23 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1614,7 +1602,7 @@ index 783cbe6..d1ea557 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +431,19 @@ window.__ModuleLoader__.load({
+@@ -276,11 +435,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1634,7 +1622,7 @@ index 783cbe6..d1ea557 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +455,170 @@ window.__ModuleLoader__.load({
+@@ -292,59 +459,170 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1825,7 +1813,7 @@ index 783cbe6..d1ea557 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +628,80 @@ window.__ModuleLoader__.load({
+@@ -354,47 +632,80 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -1919,7 +1907,7 @@ index 783cbe6..d1ea557 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +712,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +716,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -1970,7 +1958,7 @@ index 783cbe6..d1ea557 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +762,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +766,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -1986,7 +1974,7 @@ index 783cbe6..d1ea557 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +776,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +780,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2059,7 +2047,7 @@ index 783cbe6..d1ea557 100644
  			] });
  		}
  
-@@ -463,6 +848,7 @@ window.__ModuleLoader__.load({
+@@ -463,6 +852,7 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2067,7 +2055,7 @@ index 783cbe6..d1ea557 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -473,169 +859,255 @@ window.__ModuleLoader__.load({
+@@ -473,169 +863,260 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -2233,18 +2221,22 @@ index 783cbe6..d1ea557 100644
 -						react_jsx_runtime.jsx("input", { className: "wsc-input", value: state.stagedText("numResults") ?? String(state.value.numResults ?? ""), onChange: e => card.edit("numResults", e.target.value), inputMode: "numeric" }),
 +						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("numResultsLabel") }) }),
 +						react_jsx_runtime.jsx("input", { className: "wsc-input", "aria-label": t("numResultsLabel"), value: state.stagedText("numResults") ?? String(state.value.numResults ?? ""), onChange: (e) => card.edit("numResults", e.target.value), inputMode: "numeric" }),
- 					] }),
- 					react_jsx_runtime.jsxs("div", { children: [
--						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: "concurrency" }) }),
--						react_jsx_runtime.jsx("input", { className: "wsc-input", value: state.stagedText("concurrency") ?? String(state.value.concurrency ?? ""), onChange: e => card.edit("concurrency", e.target.value), inputMode: "numeric" }),
++					] }),
++					react_jsx_runtime.jsxs("div", { children: [
 +						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("concurrencyLabel") }) }),
 +						react_jsx_runtime.jsx("input", { className: "wsc-input", "aria-label": t("concurrencyLabel"), value: state.stagedText("concurrency") ?? String(state.value.concurrency ?? ""), onChange: (e) => card.edit("concurrency", e.target.value), inputMode: "numeric" }),
  					] }),
  					react_jsx_runtime.jsxs("div", { children: [
--						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: "backendTimeoutMs" }) }),
--						react_jsx_runtime.jsx("input", { className: "wsc-input", value: state.stagedText("backendTimeoutMs") ?? String(state.value.backendTimeoutMs ?? ""), onChange: e => card.edit("backendTimeoutMs", e.target.value), inputMode: "numeric" }),
+-						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: "concurrency" }) }),
+-						react_jsx_runtime.jsx("input", { className: "wsc-input", value: state.stagedText("concurrency") ?? String(state.value.concurrency ?? ""), onChange: e => card.edit("concurrency", e.target.value), inputMode: "numeric" }),
 +						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("timeoutLabel") }) }),
 +						react_jsx_runtime.jsx("input", { className: "wsc-input", "aria-label": t("timeoutLabel"), value: state.stagedText("backendTimeoutMs") ?? String(state.value.backendTimeoutMs ?? ""), onChange: (e) => card.edit("backendTimeoutMs", e.target.value), inputMode: "numeric" }),
+ 					] }),
+ 					react_jsx_runtime.jsxs("div", { children: [
+-						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: "backendTimeoutMs" }) }),
+-						react_jsx_runtime.jsx("input", { className: "wsc-input", value: state.stagedText("backendTimeoutMs") ?? String(state.value.backendTimeoutMs ?? ""), onChange: e => card.edit("backendTimeoutMs", e.target.value), inputMode: "numeric" }),
++						react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("cacheTtlLabel") }) }),
++						react_jsx_runtime.jsx("input", { className: "wsc-input", "aria-label": t("cacheTtlLabel"), value: state.stagedText("cacheTtl") ?? String(state.value.cacheTtl ?? ""), onChange: (e) => card.edit("cacheTtl", e.target.value), inputMode: "numeric" }),
  					] }),
  				] }),
 -				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("shapingTitle") }),
@@ -2301,6 +2293,7 @@ index 783cbe6..d1ea557 100644
 +					react_jsx_runtime.jsx(SelectField, { label: t("safeSearchLabel"), value: selVal("safeSearch", "true"), options: boolOptions, onChange: (v) => card.edit("safeSearch", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("telemetryLabel"), value: selVal("resultTelemetry", "true"), options: boolOptions, onChange: (v) => card.edit("resultTelemetry", v) }),
 +					react_jsx_runtime.jsx(SelectField, { label: t("resultHeaderLabel"), value: selVal("resultHeader", "true"), options: boolOptions, onChange: (v) => card.edit("resultHeader", v) }),
++					react_jsx_runtime.jsx(SelectField, { label: t("cacheLabel"), value: selVal("cacheEnabled", "true"), options: boolOptions, onChange: (v) => card.edit("cacheEnabled", v) }),
  				] }),
 -				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("keysTitle") }),
 -				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: BACKENDS.filter((b) => b.keyEnv && !b.optionalKey).map((b) =>
@@ -2340,12 +2333,9 @@ index 783cbe6..d1ea557 100644
  							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							disabled: state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false,
 -							placeholder: (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false) ? props.t("readOnly") : b.keyEnv,
-+							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
-+							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
-+							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
- 							value: state.stagedKeys[b.keyEnv] ?? "",
- 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
- 						}),
+-							value: state.stagedKeys[b.keyEnv] ?? "",
+-							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+-						}),
 -						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keyHint") }),
 -						state.failedKeys.includes(b.keyEnv) && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") }),
 -					] }, b.id)
@@ -2357,9 +2347,12 @@ index 783cbe6..d1ea557 100644
 -						react_jsx_runtime.jsx("input", {
 -							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							placeholder: b.keyEnv,
--							value: state.stagedKeys[b.keyEnv] ?? "",
--							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
--						}),
++							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
++							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
++							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
+ 							value: state.stagedKeys[b.keyEnv] ?? "",
+ 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+ 						}),
 -					] }, b.id),
 -				) }),
 -				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .6 }, children: props.t("unsavedHint") }),
@@ -2449,7 +2442,7 @@ index 783cbe6..d1ea557 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1118,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1127,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2463,7 +2456,7 @@ index 783cbe6..d1ea557 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1149,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1158,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2480,7 +2473,7 @@ index 783cbe6..d1ea557 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1185,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1194,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -2517,7 +2510,7 @@ index 783cbe6..d1ea557 100644
  		}
  
 diff --git a/lib/health.js b/lib/health.js
-index 4e54f1a..6f2dc0f 100644
+index 4e54f1a..c1f7b9b 100644
 --- a/lib/health.js
 +++ b/lib/health.js
 @@ -7,28 +7,18 @@
@@ -2561,7 +2554,7 @@ index 4e54f1a..6f2dc0f 100644
  
    const enabledSet = new Set(
      (opts.enabledBackends ?? []).filter((id) => backends[id] !== undefined),
-@@ -60,6 +51,14 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+@@ -60,8 +51,17 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
        id,
        enabled,
        keyless,
@@ -2575,8 +2568,11 @@ index 4e54f1a..6f2dc0f 100644
 +      cooledUntilMs: Number.isFinite(t?.cooledUntil) && t.cooledUntil > nowMs ? t.cooledUntil : null,
        // reachable: true/false from the latest search telemetry; null = never probed.
        reachable: t ? t.ok === true : null,
++      credentialMissing: t?.credentialMissing === true,
        lastOk: t && typeof t.lastOkAt === "number" ? t.lastOkAt : null,
-@@ -72,6 +71,10 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+       lastError: t && t.ok !== true ? sanitizeError(t.error) || "unknown error" : null,
+     };
+@@ -72,6 +72,10 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
      ok: true,
      enabled: enabledList.length,
      keyless: enabledList.filter((b) => b.keyless).length,
@@ -2587,7 +2583,7 @@ index 4e54f1a..6f2dc0f 100644
      backends: list,
      updatedAt: Date.now(),
    };
-@@ -82,8 +85,8 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+@@ -82,8 +86,8 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
   * GET only; never probes backends; response is JSON with no credentials.
   */
  export function registerHealthRoute(ws, deps) {
@@ -2598,7 +2594,7 @@ index 4e54f1a..6f2dc0f 100644
      kind: "exact",
      path: "/api/unified-search/health",
      handler: (req, res) => {
-@@ -93,7 +96,7 @@ export function registerHealthRoute(ws, deps) {
+@@ -93,7 +97,7 @@ export function registerHealthRoute(ws, deps) {
        };
        const rejection = rejectionFor(req, typeof deps.getConnection === "function" ? deps.getConnection() : undefined);
        if (rejection !== undefined) {
@@ -2607,31 +2603,35 @@ index 4e54f1a..6f2dc0f 100644
          return;
        }
        if (req.method !== "GET" && req.method !== "HEAD") {
-@@ -107,4 +110,5 @@ export function registerHealthRoute(ws, deps) {
+@@ -107,4 +111,5 @@ export function registerHealthRoute(ws, deps) {
        }
      },
    });
 +  return typeof disposer === "function" ? [disposer] : [];
  }
 diff --git a/lib/history.js b/lib/history.js
-index dd15b37..edd3de4 100644
+index dd15b37..b614d1a 100644
 --- a/lib/history.js
 +++ b/lib/history.js
-@@ -8,7 +8,7 @@
+@@ -6,9 +6,9 @@
+ // oldest entry beyond the cap is dropped. Exposure is strictly read-only via
+ // GET /api/websearch/history; POST /api/websearch/history/clear empties it.
  
- import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
++import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
  import path from "node:path";
 -import { rejectionFor } from "./trust.js";
 +import { rejectionFor, rejectionBody } from "./trust.js";
  
  /** Ring-buffer cap (spec: 50). */
  export const HISTORY_MAX_ENTRIES = 50;
-@@ -54,10 +54,10 @@ export function createHistoryStore({ dir, maxEntries = HISTORY_MAX_ENTRIES }) {
+@@ -54,10 +54,11 @@ export function createHistoryStore({ dir, maxEntries = HISTORY_MAX_ENTRIES }) {
    }
  
    function atomicWriteAll(list) {
 -    mkdirSync(dir, { recursive: true });
 +    mkdirSync(dir, { recursive: true, mode: 0o700 });
++    try { chmodSync(dir, 0o700); } catch { /* existing dir owned by another mode */ }
      const f = file();
      const tmp = `${f}.${process.pid}.tmp`;
 -    writeFileSync(tmp, JSON.stringify(list, null, 2), "utf8");
@@ -2639,7 +2639,7 @@ index dd15b37..edd3de4 100644
      renameSync(tmp, f);
    }
  
-@@ -82,40 +82,21 @@ export function createHistoryStore({ dir, maxEntries = HISTORY_MAX_ENTRIES }) {
+@@ -82,40 +83,21 @@ export function createHistoryStore({ dir, maxEntries = HISTORY_MAX_ENTRIES }) {
        return readAll().slice(0, cap).map(toPublicEntry);
      },
  
@@ -2690,7 +2690,7 @@ index dd15b37..edd3de4 100644
  /**
   * Project the module-level backend health map into a small observability
   * payload (v2.8.0 P2): per-backend last real success/failure, latency and
-@@ -132,6 +113,9 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
+@@ -132,6 +114,9 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
          at: Number.isFinite(e?.at) ? e.at : null,
          failCount: Number.isFinite(e?.failCount) ? e.failCount : 0,
          cooled: Number.isFinite(e?.cooledUntil) && e.cooledUntil > nowMs,
@@ -2700,7 +2700,7 @@ index dd15b37..edd3de4 100644
        });
      }
    }
-@@ -148,7 +132,7 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
+@@ -148,7 +133,7 @@ export function toBackendObservability(healthMap, nowMs = Date.now()) {
   * decision the kernel applies to its own /api routes).
   */
  export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConnection }) {
@@ -2709,7 +2709,7 @@ index dd15b37..edd3de4 100644
    const send = (res, code, body) => {
      res.writeHead(code, { "content-type": "application/json" });
      res.end(JSON.stringify(body));
-@@ -156,12 +140,12 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -156,12 +141,12 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
    const guarded = (handler) => (req, res) => {
      const rejection = rejectionFor(req, typeof getConnection === "function" ? getConnection() : undefined);
      if (rejection !== undefined) {
@@ -2724,7 +2724,7 @@ index dd15b37..edd3de4 100644
      kind: "exact",
      path: "/api/websearch/history",
      handler: guarded((req, res) => {
-@@ -177,7 +161,7 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -177,7 +162,7 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
        });
      }),
    });
@@ -2733,7 +2733,7 @@ index dd15b37..edd3de4 100644
      kind: "exact",
      path: "/api/websearch/history/clear",
      handler: guarded((req, res) => {
-@@ -186,8 +170,14 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
+@@ -186,8 +171,14 @@ export function registerHistoryRoutes(ws, { getStore, getBackendHealth, getConne
          return;
        }
        const store = getStore();
@@ -2751,31 +2751,19 @@ index dd15b37..edd3de4 100644
 +  return [disposerA, disposerB].filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 99230ce..31c1995 100644
+index 99230ce..256feaf 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -18,6 +18,20 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
+@@ -18,6 +18,8 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
  // plain string "unified-search". No import needed anymore.
  import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
  import { WebError } from "@deepseek-ai/dsh-web";
 +import { findPluginRow } from "./util/namespace.js";
 +
-+// Credential presence observed by the last resolveApiKey() call. The seam asks
-+// available() before any search, so a cold/unknown ref must stay optimistic;
-+// once a resolve returns empty (or a key), key-gated backends stop/start
-+// advertising themselves without a restart.
-+const keyPresence = new Map(); // ref -> { present, at }
-+const PRESENCE_TTL_MS = 60_000;
-+
-+/** Test/support hook: forget observed key presence for one ref or all refs. */
-+export function resetKeyPresence(ref) {
-+  if (ref === undefined) keyPresence.clear();
-+  else keyPresence.delete(ref);
-+}
  
  // Import all backends
  import { exaBackend } from "./backends/exa.js";
-@@ -33,6 +47,9 @@ import { tavilyBackend } from "./backends/tavily.js";
+@@ -33,6 +35,9 @@ import { tavilyBackend } from "./backends/tavily.js";
  import { serperBackend } from "./backends/serper.js";
  import { searxngBackend } from "./backends/searxng.js";
  import { mojeekBackend } from "./backends/mojeek.js";
@@ -2785,7 +2773,7 @@ index 99230ce..31c1995 100644
  import { createUnifiedSearchProvider, getLatestBackendHealth } from "./provider.js";
  import { registerHealthRoute } from "./health.js";
  import { createSearchCache, CACHE_DEFAULTS } from "./cache.js";
-@@ -63,12 +80,19 @@ const BACKENDS = {
+@@ -63,12 +68,19 @@ const BACKENDS = {
    deepseek: deepseekBackend,
    anthropic: anthropicBackend,
    openai: openaiBackend,
@@ -2805,7 +2793,7 @@ index 99230ce..31c1995 100644
  const DEFAULT_ENABLED = ["exa", "parallel", "ddg", "searxng"];
  
  /** Environment-variable names each key-gated backend reads. */
-@@ -80,8 +104,16 @@ const DEFAULT_KEY_ENV = {
+@@ -80,8 +92,16 @@ const DEFAULT_KEY_ENV = {
    tavily: "TAVILY_API_KEY",
    serper: "SERPER_API_KEY",
    mojeek: "MOJEEK_API_KEY",
@@ -2822,7 +2810,7 @@ index 99230ce..31c1995 100644
  /** Default base URLs. */
  const DEFAULT_BASE_URLS = {
    exa: "https://mcp.exa.ai/mcp",
-@@ -95,6 +127,10 @@ const DEFAULT_BASE_URLS = {
+@@ -95,6 +115,10 @@ const DEFAULT_BASE_URLS = {
    deepseek: "https://api.deepseek.com/anthropic/v1",
    anthropic: "https://api.anthropic.com/v1",
    openai: "https://api.openai.com/v1",
@@ -2833,7 +2821,7 @@ index 99230ce..31c1995 100644
  };
  
  /** Env var that overrides the default backend sweep order / enabled set. */
-@@ -122,6 +158,10 @@ const DEFAULT_LABELS = {
+@@ -122,6 +146,10 @@ const DEFAULT_LABELS = {
    deepseek: "DeepSeek (原生 web_search, 需 Key)",
    anthropic: "Anthropic (Claude 原生 web_search, 需 Key)",
    openai: "OpenAI (Responses API web_search, 需 Key)",
@@ -2844,7 +2832,7 @@ index 99230ce..31c1995 100644
  };
  
  /**
-@@ -132,12 +172,14 @@ const DEFAULT_LABELS = {
+@@ -132,12 +160,14 @@ const DEFAULT_LABELS = {
   */
  export const Config = z.object({
    // Global
@@ -2863,7 +2851,7 @@ index 99230ce..31c1995 100644
  
    // v2.1 result shaping
    recency: z.union(["any", "day", "week", "month", "year"]).default("any")
-@@ -146,12 +188,18 @@ export const Config = z.object({
+@@ -146,12 +176,18 @@ export const Config = z.object({
      .description("搜索语言（如 en、zh-CN；留空用各后端默认）"),
    safeSearch: z.boolean().default(true)
      .description("安全搜索（SearXNG / Brave 支持开关，其余后端忽略）"),
@@ -2882,13 +2870,14 @@ index 99230ce..31c1995 100644
  
    // v2.7.0 disk cache / circuit breaker / search history
    // W1 (fe-ui review): labels speak user language with a group prefix
-@@ -159,14 +207,14 @@ export const Config = z.object({
+@@ -159,14 +195,14 @@ export const Config = z.object({
    // spelled out (秒 / 毫秒) and grouping follows the field order below.
    cacheEnabled: z.boolean().default(true)
      .description("启用搜索结果缓存【缓存】：相同查询+过滤+条数在有效期内直接命中，不再请求后端"),
 -  cacheTtl: z.number().step(30).min(30).max(86400).default(900)
+-    .description("缓存有效期【缓存】（单位：秒）：默认 900 秒；不想用缓存请直接关闭上一项"),
 +  cacheTtl: z.number().step(30).min(0).max(86400).default(900)
-     .description("缓存有效期【缓存】（单位：秒）：默认 900 秒；不想用缓存请直接关闭上一项"),
++    .description("缓存有效期【缓存】（单位：秒）：默认 900；0 = 不缓存（no-store）"),
    breakerEnabled: z.boolean().default(true)
      .description("后端熔断器【熔断】：连续失败达阈值后暂停该后端一段时间；全部暂停时自动放行，不会让搜索更差"),
    breakerThreshold: z.number().step(1).min(1).max(20).default(BREAKER_DEFAULTS.threshold)
@@ -2899,7 +2888,7 @@ index 99230ce..31c1995 100644
    historyEnabled: z.boolean().default(true)
      .description("记录搜索历史【历史】：只追加，最多 50 条；可在设置 → 搜索 中查看与清空"),
  
-@@ -188,24 +236,33 @@ export const Config = z.object({
+@@ -188,24 +224,33 @@ export const Config = z.object({
    enableDeepseek: z.boolean().default(false).description(DEFAULT_LABELS.deepseek),
    enableAnthropic: z.boolean().default(false).description(DEFAULT_LABELS.anthropic),
    enableOpenai: z.boolean().default(false).description(DEFAULT_LABELS.openai),
@@ -2941,7 +2930,7 @@ index 99230ce..31c1995 100644
  
    // Base URLs (defaults from built-in registry)
    braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
-@@ -226,6 +283,12 @@ export const Config = z.object({
+@@ -226,6 +271,12 @@ export const Config = z.object({
      .description("Anthropic API 端点（默认官方；自托管/代理实例改此项）"),
    openaiBaseURL: z.string().default(DEFAULT_BASE_URLS.openai)
      .description("OpenAI API 端点（默认官方；自托管/代理实例改此项）"),
@@ -2954,7 +2943,7 @@ index 99230ce..31c1995 100644
  
    // Models
    deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
-@@ -260,8 +323,9 @@ Config.meta = { ...Config.meta, volatile: true };
+@@ -260,8 +311,9 @@ Config.meta = { ...Config.meta, volatile: true };
   * provides the field regardless.
   */
  const FIELD_LABELS = {
@@ -2965,7 +2954,7 @@ index 99230ce..31c1995 100644
    breakerEnabled: "后端熔断器",
    breakerThreshold: "熔断阈值（连续失败次数）",
    breakerCooldownMs: "熔断冷却时长（毫秒）",
-@@ -280,8 +344,35 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+@@ -280,8 +332,35 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
   * serves its NEXT search with. Key resolution: credentialRef -> credentials
   * service -> env.
   */
@@ -2984,10 +2973,10 @@ index 99230ce..31c1995 100644
 +      const u = new URL(item.includes("://") ? item : "https://" + host);
 +      host = u.hostname;
 +    } catch { /* keep the raw token and validate below */ }
-+    host = host.replace(/^\[|\]$/g, "").replace(/\.$/, "");
++    host = host.replace(/^\[|\]$/g, "").replace(/^\*\./, "").replace(/\.$/, "");
 +    // Hostname only: at least one dot, no empty labels, no bare IPv4/IPv6
 +    // literals (OpenAI/Anthropic domain filters expect DNS names).
-+    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) continue;
++    if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})$/.test(host)) continue;
 +    if (!out.includes(host)) out.push(host);
 +    if (out.length >= 20) break;
 +  }
@@ -3002,7 +2991,7 @@ index 99230ce..31c1995 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -289,20 +380,9 @@ export function resolveOptions(ctx, config) {
+@@ -289,20 +368,9 @@ export function resolveOptions(ctx, config) {
    }
  
    if (enabledBackends.length === 0) {
@@ -3026,7 +3015,7 @@ index 99230ce..31c1995 100644
    }
  
    if (enabledBackends.length === 0) {
-@@ -318,8 +398,19 @@ export function resolveOptions(ctx, config) {
+@@ -318,8 +386,20 @@ export function resolveOptions(ctx, config) {
    if (enabledBackends.length === 0) {
      enabledBackends = [...DEFAULT_ENABLED];
    }
@@ -3039,14 +3028,15 @@ index 99230ce..31c1995 100644
 +  const excludeDomains = normalizeDomainList(config?.excludeDomains);
 +  // A non-empty setting that normalizes to nothing must not silently disable
 +  // the restriction; the provider turns this into a clear search error.
-+  const domainFilterError = (
++  const domainConsumers = enabledBackends.some((id) => id === "openai" || id === "anthropic");
++  const domainFilterError = domainConsumers && (
 +    (typeof config?.includeDomains === "string" && config.includeDomains.trim() !== "" && includeDomains.length === 0)
 +    || (typeof config?.excludeDomains === "string" && config.excludeDomains.trim() !== "" && excludeDomains.length === 0)
 +  ) ? "domain filter contains no valid hostname" : undefined;
    const backends = {};
    for (const id of ALL_BACKENDS) {
      const keyEnvName = config?.[`${id}ApiKeyEnv`] ?? DEFAULT_KEY_ENV[id];
-@@ -336,31 +427,68 @@ export function resolveOptions(ctx, config) {
+@@ -336,8 +416,12 @@ export function resolveOptions(ctx, config) {
            : [],
        } : {}),
        safeSearch: config?.safeSearch !== false,
@@ -3057,35 +3047,10 @@ index 99230ce..31c1995 100644
 +      requiresKey: DEFAULT_KEY_ENV[id] !== undefined && !OPTIONAL_KEY_IDS.has(id),
 +      optionalKey: OPTIONAL_KEY_IDS.has(id),
 +      metered: METERED_IDS.has(id),
-+      credentialPresent: (() => {
-+        const seen = keyPresence.get(ref);
-+        if (seen === undefined) return undefined;
-+        // A stale "absent" hint may hide a key added without an event; fall
-+        // back to unknown so the next search can probe again.
-+        return !seen.present && Date.now() - seen.at > PRESENCE_TTL_MS ? undefined : seen.present;
-+      })(),
        resolveApiKey: async () => {
--        const credentials = ctx.get("credentials");
--        if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
--        const ambient = launchEnvironmentOf(ctx).get(ref);
--        return ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined;
-+        try {
-+          let value;
-+          const credentials = ctx.get("credentials");
-+          if (credentials !== undefined) {
-+            value = (await credentials.resolve(ref))?.value;
-+          } else {
-+            const ambient = launchEnvironmentOf(ctx).get(ref);
-+            value = ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined;
-+          }
-+          keyPresence.set(ref, { present: typeof value === "string" && value.length > 0, at: Date.now() });
-+          return value;
-+        } catch (error) {
-+          keyPresence.delete(ref); // unknown, not absent
-+          throw error;
-+        }
-       },
-     };
+         const credentials = ctx.get("credentials");
+         if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
+@@ -348,19 +432,34 @@ export function resolveOptions(ctx, config) {
    }
  
    const language = typeof config?.language === "string" ? config.language.trim() : "";
@@ -3126,7 +3091,7 @@ index 99230ce..31c1995 100644
      breakerEnabled: config?.breakerEnabled !== false,
      breakerThreshold: Math.max(1, Math.floor(Number(config?.breakerThreshold) || BREAKER_DEFAULTS.threshold)),
      breakerCooldownMs: config?.breakerCooldownMs != null
-@@ -368,8 +496,15 @@ export function resolveOptions(ctx, config) {
+@@ -368,8 +467,15 @@ export function resolveOptions(ctx, config) {
        : BREAKER_DEFAULTS.cooldownMs,
      historyEnabled: config?.historyEnabled !== false,
      // v2.8.0 coverage / multiQuery
@@ -3144,22 +3109,7 @@ index 99230ce..31c1995 100644
      filters: {
        recency: typeof config?.recency === "string" && config.recency !== "any" ? config.recency : undefined,
        lang: language.length > 0 ? language : undefined,
-@@ -398,6 +533,14 @@ export function resolveStoreDir(env = process.env, fallbackHome = os.homedir())
-  * model names / credential references in the DSH Settings panel.
-  */
- export function apply(ctx, config) {
-+  for (const event of ["credentials/reference-updated", "credentials/updated"]) {
-+    try {
-+      ctx.on(event, (ref) => {
-+        if (typeof ref === "string") keyPresence.delete(ref);
-+        else keyPresence.clear();
-+      });
-+    } catch { /* this host does not forward the event */ }
-+  }
-   let current = () => config;
-   /** 0.2.x SettingsForms instance, captured for the browser settings bridge. */
-   let settingsForms;
-@@ -414,11 +557,28 @@ export function apply(ctx, config) {
+@@ -414,11 +520,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -3193,7 +3143,7 @@ index 99230ce..31c1995 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -440,10 +600,9 @@ export function apply(ctx, config) {
+@@ -440,10 +563,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -3207,7 +3157,7 @@ index 99230ce..31c1995 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -467,26 +626,48 @@ export function apply(ctx, config) {
+@@ -467,26 +589,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
@@ -3334,7 +3284,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..1fd82cc 100644
+index 7242a56..86a09bb 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3379,7 +3329,7 @@ index 7242a56..1fd82cc 100644
  };
  
  /** Effective per-backend timeout = min(override ?? ∞, global). Exported for tests. */
-@@ -70,14 +72,32 @@ export function getLatestBackendHealth() {
+@@ -70,14 +72,37 @@ export function getLatestBackendHealth() {
    return latestBackendHealth;
  }
  
@@ -3398,9 +3348,13 @@ index 7242a56..1fd82cc 100644
 +  // failures for diagnostics, but never publish a cooldown the provider does
 +  // not honour (health/history used to show `cooled: true` while the backend
 +  // kept being called).
-+  const breaker = breakerCfg === null
-+    ? { failCount: entry.ok === true ? 0 : (Number(prev?.failCount) || 0) + 1, cooledUntil: 0 }
-+    : foldBreaker(prev, entry.ok === true, entry.at, breakerCfg, opts);
++  const breaker = entry.credentialMissing === true
++    // A missing key is a configuration state, not an outage: keep the current
++    // breaker counters and only publish the diagnostic entry.
++    ? { failCount: Number(prev?.failCount) || 0, cooledUntil: Number(prev?.cooledUntil) || 0 }
++    : breakerCfg === null
++      ? { failCount: entry.ok === true ? 0 : (Number(prev?.failCount) || 0) + 1, cooledUntil: 0 }
++      : foldBreaker(prev, entry.ok === true, entry.at, breakerCfg, opts);
    latestBackendHealth.set(id, {
      ...entry,
      lastOkAt: entry.ok === true ? entry.at : (prev && prev.lastOkAt) || null,
@@ -3411,10 +3365,11 @@ index 7242a56..1fd82cc 100644
 +    // permission refusal (which cannot be fixed by retrying after a wait).
 +    rateLimited: opts.rateLimited === true,
 +    keylessRejected: opts.keylessRejected === true,
++    credentialMissing: entry.credentialMissing === true,
    });
  }
  
-@@ -95,6 +115,10 @@ export function getBackendBreaker(id) {
+@@ -95,6 +120,10 @@ export function getBackendBreaker(id) {
   */
  // 2.8.2: exported for P1 regression tests (limiter sync-throw deadlock)
  export function createLimiter(concurrency) {
@@ -3425,7 +3380,7 @@ index 7242a56..1fd82cc 100644
    const queue = [];
    let running = 0;
    
-@@ -104,7 +128,7 @@ export function createLimiter(concurrency) {
+@@ -104,7 +133,7 @@ export function createLimiter(concurrency) {
        process();
        
        function process() {
@@ -3434,7 +3389,7 @@ index 7242a56..1fd82cc 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -131,7 +155,7 @@ export function createLimiter(concurrency) {
+@@ -131,7 +160,7 @@ export function createLimiter(concurrency) {
   * compromised or poisoned backends never reach model/GUI consumers.
   */
  function collectFanoutResults(results, eligible, signal) {
@@ -3443,7 +3398,7 @@ index 7242a56..1fd82cc 100644
    let mergedContent;
    let hardAborted = false;
    let hardError = null;
-@@ -145,11 +169,15 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -145,11 +174,15 @@ function collectFanoutResults(results, eligible, signal) {
        if (mergedContent === undefined && typeof settled.value?.content === "string" && settled.value.content.length > 0) {
          mergedContent = settled.value.content;
        }
@@ -3461,7 +3416,7 @@ index 7242a56..1fd82cc 100644
        if (err instanceof WebError && err.code === "WEB_ABORTED") {
          // Per-backend abort -> soft unless the caller signal fired.
          if (signal?.aborted === true) hardAborted = true;
-@@ -160,6 +188,16 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -160,6 +193,16 @@ function collectFanoutResults(results, eligible, signal) {
        }
      }
    }
@@ -3478,7 +3433,7 @@ index 7242a56..1fd82cc 100644
    return { collected, mergedContent, hardAborted, hardError, failures };
  }
  
-@@ -198,39 +236,73 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -198,39 +241,73 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
      async search(request, signal) {
        throwIfSearchAborted(signal);
        const opts = resolveOptions();
@@ -3569,7 +3524,7 @@ index 7242a56..1fd82cc 100644
  
        // v2.7.0 disk cache: keyed on (shaped query + filters + maxResults +
        // backends + mode). A hit short-circuits the fan-out entirely; sources
-@@ -239,7 +311,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -239,7 +316,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const cacheEnabled = opts.cacheEnabled === true && cache;
        let cacheKey = null;
        if (cacheEnabled) {
@@ -3608,7 +3563,7 @@ index 7242a56..1fd82cc 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -252,15 +354,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -252,15 +359,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
              cacheKey = null;
            } else {
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
@@ -3636,7 +3591,7 @@ index 7242a56..1fd82cc 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -290,22 +395,63 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -290,22 +400,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -3699,18 +3654,21 @@ index 7242a56..1fd82cc 100644
  
        if (eligible.length === 0) {
 +        recordHistory(history, request?.query, 0, 0, candidates.length);
++        const registered = (opts.enabledBackends ?? []).filter((id) => backends[id] !== undefined).length;
          throw new WebError(
 -          "unified search: no enabled backend is available (configure a backend or set an API key)",
-+          "unified search: none of the enabled backend ids is registered",
++          registered === 0
++            ? "unified search: none of the enabled backend ids is registered"
++            : "unified search: no enabled backend is available (missing API key or unsupported config)",
            "WEB_PROVIDER_UNAVAILABLE",
          );
        }
-@@ -313,8 +459,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -313,8 +467,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // Run ONE query variant through the full fan-out: breaker-aware backend
        // execution under the per-variant limiter, then PHASE 1 collect. The
        // internal abort/timeout semantics are unchanged from v2.7.
 -      const fanoutVariant = async (variantReq) => {
-+      const fanoutVariant = async (variantReq, variantBudgetMs = Number.POSITIVE_INFINITY, deadline = Number.POSITIVE_INFINITY) => {
++      const fanoutVariant = async (variantReq, variantBudgetMs = Number.POSITIVE_INFINITY, deadline = Number.POSITIVE_INFINITY, eligibleList = eligible) => {
          const telemetry = [];
 +        // Health is folded once per backend per SEARCH, after every variant
 +        // finished: recording per variant let one multi-query search trip the
@@ -3719,7 +3677,7 @@ index 7242a56..1fd82cc 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -322,29 +472,81 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -322,29 +480,81 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -3812,9 +3770,15 @@ index 7242a56..1fd82cc 100644
                  // Timeout classification happens BEFORE telemetry/health are
                  // recorded (route6 P6): backends surface an internal timeout
                  // as their own abort-flavored error ("unified search aborted",
-@@ -354,17 +556,27 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -353,22 +563,38 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+                 // thrown error said "timed out after Nms" — the two disagreed
                  // and "(unified search aborted)" read as if the USER cancelled.
                  const timedOut = controller.signal.aborted && !(signal && signal.aborted);
++                // Only a timeout caused by the shared/variant budget is
++                // exempt from the breaker; a 429/500 on a clipped attempt is
++                // still a real backend failure.
++                const budgetClipped = timedOut
++                  && (remainingNow < configuredTimeoutMs - 10 || variantBudgetMs < configuredTimeoutMs - 10);
                  const reason = timedOut
 -                  ? `backend "${id}" timed out after ${effectiveTimeoutMs}ms`
 +                  ? budgetClipped
@@ -3826,11 +3790,12 @@ index 7242a56..1fd82cc 100644
                  telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: msg });
 -                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg);
 +                // A missing API key is a configuration state, not an outage:
-+                // folding it would cool the breaker and paint /health red for
-+                // a backend the operator can fix in Settings.
-+                if (!budgetClipped && !(err instanceof WebError && err.code === "WEB_PROVIDER_CREDENTIAL_MISSING")) {
++                // publish it for /health but keep it out of the breaker.
++                if (!budgetClipped) {
++                  const credentialMissing = err instanceof WebError && err.code === "WEB_PROVIDER_CREDENTIAL_MISSING";
 +                  health.push({
 +                    id, ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg,
++                    ...(credentialMissing ? { credentialMissing: true } : {}),
 +                    rateLimited: rateLimited(err), keylessRejected: keylessRejected(err), retryAfterMs: retryAfterMsFrom(err),
 +                  });
 +                }
@@ -3844,16 +3809,23 @@ index 7242a56..1fd82cc 100644
          };
  
          const results = await Promise.allSettled(
-@@ -378,7 +590,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+-          eligible.map(({ id, backend, beOpts }) => {
++          eligibleList.map(({ id, backend, beOpts }) => {
+             const hooks = {
+               recordRequest: (req) => recordBackendRequest(ctx, id, req),
+               recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
+@@ -377,8 +603,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           }),
          );
          throwIfSearchAborted(signal);
-         const fold = collectFanoutResults(results, eligible, signal);
+-        const fold = collectFanoutResults(results, eligible, signal);
 -        return { ...fold, telemetry };
++        const fold = collectFanoutResults(results, eligibleList, signal);
 +        return { ...fold, telemetry, health };
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -386,15 +598,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -386,15 +612,61 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -3879,17 +3851,28 @@ index 7242a56..1fd82cc 100644
 +        // slow variant cannot starve the rest (the old code gave each variant
 +        // the full budget, and each backend inside it).
 +        const share = Math.max(1, Math.floor(remaining / Math.max(1, variants.length - variantIndex)));
++        // Parallel can merge the derived facets into one request; give it the
++        // plan on the primary variant and skip it for later variants. Other
++        // backends must not opt into handlesAllVariants (they cannot merge
++        // facets without changing semantics).
++        const searchPlan = useMulti && variantIndex === 0
++          ? { objective: effReq.query, queries: variants.slice(0, 3) }
++          : undefined;
++        const variantEligible = variantIndex === 0
++          ? eligible
++          : eligible.filter(({ backend }) => backend.handlesAllVariants !== true);
          const variantReq = {
            ...effReq,
            query: variantQuery,
            maxResults: backendMaxResults,
++          ...(searchPlan !== undefined ? { searchPlan } : {}),
            ...(coverage ? { deepCoverage: true } : {}),
 +          // SearXNG paging is opt-in and never combines with internal
 +          // multi-query (each variant already costs one request).
 +          pageLimit: coverage && !useMulti ? 2 : 1,
          };
 -        const fold = await fanoutVariant(variantReq);
-+        const fold = await fanoutVariant(variantReq, share, searchDeadline);
++        const fold = await fanoutVariant(variantReq, share, searchDeadline, variantEligible);
 +        for (const outcome of fold.health) {
 +          const prev = searchHealth.get(outcome.id);
 +          if (prev === undefined || outcome.ok === true) {
@@ -3906,7 +3889,7 @@ index 7242a56..1fd82cc 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -409,43 +656,102 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -409,43 +681,102 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4026,7 +4009,7 @@ index 7242a56..1fd82cc 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,7 +759,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +784,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
@@ -4034,8 +4017,10 @@ index 7242a56..1fd82cc 100644
 +          const parts = foldedTelemetry
              .slice(0, 12)
              .map((t) => {
++              if (t.skipped === true) return t.id + " ⏭budget";
                if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
-@@ -462,14 +768,14 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+               const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
+               const cooledNow = cooledAnnotation(latestBackendHealth.get(t.id), Date.now());
                return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "") + (cooledNow ? " " + cooledNow : "");
              })
              .concat(cooledParts);
@@ -4052,7 +4037,7 @@ index 7242a56..1fd82cc 100644
          };
        }
  
-@@ -477,20 +783,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +809,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4093,7 +4078,7 @@ index 7242a56..1fd82cc 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +817,45 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +843,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.
@@ -4110,6 +4095,8 @@ index 7242a56..1fd82cc 100644
 +      // allFailures holds one entry per attempt (multi-query fans out once per
 +      // variant); fold to one entry per backend before counting/reporting.
 +      const uniqueFailures = [...new Map(allFailures.map((f) => [f.id, f])).values()];
++      const skippedIds = new Set(allTelemetry.filter((t) => t.skipped === true).map((t) => t.id));
++      const attemptedFailures = uniqueFailures.filter((f) => !skippedIds.has(f.id));
 +      const detail = uniqueFailures.slice(0, MAX_FAILURE_DETAILS)
 +        .map((f) => f.id + ": " + sanitizeError(f.err instanceof Error ? f.err.message : f.err, 120))
 +        .join("; ") + (uniqueFailures.length > MAX_FAILURE_DETAILS ? `; +${uniqueFailures.length - MAX_FAILURE_DETAILS} more` : "");
@@ -4138,7 +4125,9 @@ index 7242a56..1fd82cc 100644
          : "";
        throw new WebError(
 -        `unified search: all enabled backends failed (${allFailures.length}) - ${detail}` + cooledNote + hint,
-+        `unified search: all attempted backends failed (${uniqueFailures.length} of ${candidates.length} enabled) - ${detail}` + cooledNote + hint,
++        (skippedIds.size > 0
++          ? `unified search: all attempted backends failed (${attemptedFailures.length} of ${candidates.length} enabled; ${skippedIds.size} skipped for budget) - ${detail}`
++          : `unified search: all attempted backends failed (${uniqueFailures.length} of ${candidates.length} enabled) - ${detail}`) + cooledNote + hint,
          "WEB_PROVIDER_ERROR",
 -        { cause: hardError ?? undefined },
 +        {

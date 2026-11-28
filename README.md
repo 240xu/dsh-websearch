@@ -92,7 +92,7 @@ pnpm install
 > 每个 API Key 字段旁有 **「获取 Key ↗」** 直达对应平台控制台；保存即写入凭证库并立即生效。
 
 
-插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 24 个开关/参数（共 60 个配置字段）；缓存、熔断、历史、多查询、域名过滤、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 Config 表单 / profile patch 配置：
+插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 26 个开关/参数（共 60 个配置字段）；缓存、熔断、历史、多查询、域名过滤、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 Config 表单 / profile patch 配置：
 
 **全局**
 
