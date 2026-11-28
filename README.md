@@ -17,7 +17,7 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 
 | id | key | endpoint | how it returns | notes |
 |---|---|---|---|---|
-| `exa` | none | `https://mcp.exa.ai/mcp` | streamable-http MCP, tool `web_search_exa { query, numResults }`, text blocks "Title:/URL:/Published:/Highlights:" | opencode 同源,无 key |
+| `exa` | none | `https://mcp.exa.ai/mcp` | streamable-http MCP, tool `web_search_exa { query, numResults, objective? }`, text blocks "Title:/URL:/Published:/Highlights:|Text:"; snippet = first highlight | opencode 同源,无 key |
 | `parallel` | none | `https://search.parallel.ai/mcp` | streamable-http MCP, tool `web_search { objective, search_queries[], session_id?, model_name? }` returns JSON-string `{ search_id, results: [{ url, title, publish_date, excerpts[] }] }` | opencode 同源,无 key |
 | `ddg` | none | `https://html.duckduckgo.com/html/` | HTML scrape, decode `uddg=` redirect param for real URL + `result__snippet` | 兜底,零依赖 |
 | `searxng` | none/optional | `https://searx.be/search` (default) | REST JSON `/search?q=`, public instances unlimited | 元搜索,隐私友好 |
@@ -103,7 +103,7 @@ pnpm install
 | `includeDomains` | 空 | 仅约束 OpenAI/Anthropic 原生后端（最多 20；其余后端不支持，合并结果仍可能来自其他域名） |
 | `excludeDomains` | 空 | 排除这些域名（最多 20；OpenAI/Anthropic 均只发一个列表，include 优先） |
 | `concurrency` | 6 | 并发后端数（1-10） |
-| `backendTimeoutMs` | 24000 | 单后端超时毫秒，同时是整次搜索总预算（多查询变体共享；为宿主 30s 工具超时预留余量） |
+| `backendTimeoutMs` | 24000 | 单后端超时毫秒，同时是整次搜索总预算（多查询变体共享；必须小于宿主 `searchTimeoutMs`，默认 30s） |
 | `recency` | any | 时间范围过滤：day / week / month / year（映射到各后端原生参数） |
 | `language` | 空 | 搜索语言，如 en、zh-CN（SearXNG/Brave/Serper 支持） |
 | `safeSearch` | true | 安全搜索开关（SearXNG/Brave 支持） |
@@ -270,7 +270,7 @@ tests/
 node --test tests/
 ```
 
-当前 267/267 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 281/281 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 

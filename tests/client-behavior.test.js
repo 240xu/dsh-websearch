@@ -1279,13 +1279,73 @@ test("a failed credential read stays unknown and a later save clears it", async 
   const failed = store.getSnapshot();
   assert.equal(failed.keyState.BRAVE_API_KEY.configured, undefined, "a read failure is not 'not configured'");
   assert.ok(failed.readErrors.some((f) => f.ref === "BRAVE_API_KEY"));
-  const badge = flatten(component, props).find((n) =>
+  const badges = flatten(component, props).filter((n) =>
     n.type === "span" && n.props.className === "wsc-badge" && n.props.children === "keyReadFailedBadge"
   );
-  assert.ok(badge, "the badge explains the read failure");
+  assert.equal(badges.length, 10, "all keyed and optional badges say read failed");
+  const checking = flatten(component, props).filter((n) =>
+    n.type === "span" && n.props.className === "wsc-badge" && n.props.children === "keyChecking"
+  );
+  assert.equal(checking.length, 0, "a failed read must not render as still checking");
   props.editKey("BRAVE_API_KEY", "sk-test");
   await props.save();
   const saved = store.getSnapshot();
   assert.equal(saved.keyState.BRAVE_API_KEY.configured, true);
   assert.equal(saved.readErrors.some((f) => f.ref === "BRAVE_API_KEY"), false);
+});
+
+test("an explicit enabledBackends override replaces and disables the switches", async () => {
+  const seen = [];
+  const { props, store, component } = bootCard({
+    settings: {
+      ok: true, writable: true,
+      value: { enabledBackends: ["exa"], enableExa: false, enableBrave: true },
+      base: {}, user: { enabledBackends: ["exa"] }, revision: 1,
+    },
+    onWrite: async ({ body }) => {
+      seen.push(JSON.parse(body));
+      return { ok: true, writable: true, value: { enableExa: false, enableBrave: true }, base: {}, user: {}, revision: 2 };
+    },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(store.getSnapshot().overrideSource, "user");
+  let nodes = flatten(component, props);
+  assert.ok(nodes.find((n) => n.props.id === "wsc-override-hint"), "the override banner is visible");
+  let toggles = nodes.filter((n) => n.type === "input" && n.props.type === "checkbox");
+  assert.equal(toggles.length, 13);
+  assert.ok(toggles.every((n) => n.props.disabled === true), "all backend switches are disabled");
+  assert.equal(toggles.filter((n) => n.props.checked === true).length, 1, "only the override list is enabled");
+  const clear = nodes.find((n) => n.type === "button" && n.props.children === "clearOverride");
+  assert.ok(clear, "the user override offers a clear action");
+  clear.props.onClick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(seen.at(-1).ops, [{ op: "unset", path: ["enabledBackends"] }]);
+  nodes = flatten(component, props);
+  assert.equal(nodes.some((n) => n.props.id === "wsc-override-hint"), false);
+  toggles = nodes.filter((n) => n.type === "input" && n.props.type === "checkbox");
+  assert.ok(toggles.every((n) => n.props.disabled === false));
+});
+
+test("an empty or unknown enabledBackends list does not disable the switches", async () => {
+  for (const list of [[], ["bogus"]]) {
+    const { props, store, component } = bootCard({
+      settings: { ok: true, writable: true, value: { enabledBackends: list, enableExa: true }, base: {}, user: { enabledBackends: list }, revision: 1 },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(store.getSnapshot().overrideSource, "user");
+    const nodes = flatten(component, props);
+    assert.equal(nodes.some((n) => n.props.id === "wsc-override-hint"), false, "no banner for an ineffective list");
+    assert.ok(nodes.filter((n) => n.type === "input" && n.props.type === "checkbox").every((n) => n.props.disabled === false));
+  }
+});
+
+test("a base-level override is fixed and has no clear button", async () => {
+  const { props, component } = bootCard({
+    settings: { ok: true, writable: true, value: { enabledBackends: ["exa"] }, base: { enabledBackends: ["exa"] }, user: {}, revision: 1 },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  const nodes = flatten(component, props);
+  assert.ok(nodes.find((n) => n.props.id === "wsc-override-hint"));
+  assert.equal(nodes.some((n) => n.type === "button" && n.props.children === "clearOverride"), false);
+  assert.ok(nodes.filter((n) => n.type === "input" && n.props.type === "checkbox").every((n) => n.props.disabled === true));
 });

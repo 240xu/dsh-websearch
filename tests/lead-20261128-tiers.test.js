@@ -716,3 +716,14 @@ test("official overrides the whole documented set, including multi-query and dee
   assert.equal(o.multiQueryEnabled, false, "official must not multiply provider calls");
   assert.equal(o.deepCoverage, false);
 });
+
+test("the registered provider carries picker metadata", () => {
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined, backends: {},
+    resolveOptions: () => resolveOptions(CTX, {}),
+  });
+  assert.equal(provider.id, "unified");
+  assert.equal(provider.title, "Unified Search");
+  assert.equal(typeof provider.description?.en, "string");
+  assert.equal(typeof provider.description?.zh, "string");
+});

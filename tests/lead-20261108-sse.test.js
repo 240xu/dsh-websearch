@@ -82,15 +82,17 @@ test("plain JSON rejects a foreign id but tolerates a missing one", () => {
 // R2 P0-1: collect() must reject (not crash the process) when constructing a
 // Response throws inside the "end" event callback. Assert the guard exists
 // at source level; a full socket repro lives in 60-review-network.md.
-test("egress-fetch collect() guards Response construction", async () => {
+test("egress-fetch streams proxy/forwarder responses and guards the cap", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../lib/util/egress-fetch.js", import.meta.url), "utf8");
-  const start = src.indexOf("function collect(res)");
+  const start = src.indexOf("function streamResponse(res, request)");
   const end = src.indexOf("\nfunction headersFromRaw", start);
   const body = src.slice(start, end);
-  assert.match(body, /res\.on\("end", \(\) => \{/);
-  assert.match(body, /try \{/);
-  assert.match(body, /catch \(err\) \{\s*reject\(err\);/);
+  assert.match(body, /new ReadableStream/);
+  assert.match(body, /MAX_RESPONSE_BYTES/);
+  assert.match(body, /controller\.error/);
+  assert.match(body, /cancel\(\)/);
+  assert.match(body, /res\.destroy\(\)/);
 });
 
 // 65 号 N3 (partial): tools/call ids must never collide with initialize's

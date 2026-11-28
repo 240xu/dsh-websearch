@@ -212,10 +212,18 @@ index 3d122f8..8950c96 100644
  
      const source = { url };
 diff --git a/lib/backends/exa.js b/lib/backends/exa.js
-index 3b80319..9f73da3 100644
+index 3b80319..c2891d0 100644
 --- a/lib/backends/exa.js
 +++ b/lib/backends/exa.js
-@@ -14,22 +14,6 @@ import { describeError } from "../util/describe-error.js";
+@@ -7,29 +7,13 @@
+ // .../Highlights: .../  ..." separated by "\n\n---\n\n"; we split into source objects.
+ // Exa is keyless — its public MCP endpoint requires no API key.
+ 
+-import { mcpCall } from "../util/mcp-client.js";
++import { mcpCall, mcpText } from "../util/mcp-client.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
+ import { describeError } from "../util/describe-error.js";
+ 
  const EXA_ENDPOINT = "https://mcp.exa.ai/mcp";
  const EXA_TOOL = "web_search_exa";
  
@@ -238,12 +246,13 @@ index 3b80319..9f73da3 100644
  export const exaBackend = {
    id: "exa",
    requiresCredential: false,
-@@ -41,16 +25,8 @@ export const exaBackend = {
+@@ -41,16 +25,9 @@ export const exaBackend = {
    async search(request, signal, options, hooks = {}) {
      const args = {
        query: request.query,
 -      numResults: request.maxResults ?? 8,
 +      numResults: Math.max(1, Math.min(Number(request.maxResults) || 10, 100)),
++      ...(request.searchPlan?.objective ? { objective: String(request.searchPlan.objective).slice(0, 400) } : {}),
      };
 -    // v2.8.0: category inference — deepCoverage-gated like tavily (searchDepth
 -    // advanced) and searxng (category sweep): 2.8.1 审计发现此处漏了门控，
@@ -256,7 +265,7 @@ index 3b80319..9f73da3 100644
      hooks.recordRequest?.({
        endpoint: EXA_ENDPOINT,
        toolName: EXA_TOOL,
-@@ -60,7 +36,9 @@ export const exaBackend = {
+@@ -60,7 +37,9 @@ export const exaBackend = {
  
      let result;
      try {
@@ -267,7 +276,13 @@ index 3b80319..9f73da3 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
-@@ -76,7 +54,7 @@ export const exaBackend = {
+@@ -71,12 +50,12 @@ export const exaBackend = {
+     }
+ 
+     if (result?.isError === true) {
+-      const message = String(result.content?.[0]?.text ?? "unknown");
++      const message = mcpText(result) || "unknown";
+       hooks.recordOutcome?.({ status: "error", message });
        throw new WebError(`exa returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
      }
  
@@ -276,22 +291,55 @@ index 3b80319..9f73da3 100644
      hooks.recordOutcome?.({ status: "ok", count: sources.length });
  
      return { sources, content: undefined, truncated: false };
-@@ -115,7 +93,8 @@ function joinHighlights(block) {
+@@ -84,7 +63,7 @@ export const exaBackend = {
+ };
+ 
+ export function parseExaResult(result, maxResults) {
+-  const text = result?.content?.[0]?.text;
++  const text = mcpText(result, "\n\n---\n\n");
+   if (typeof text !== "string" || text.length === 0) return [];
+   const blocks = text.split("\n\n---\n\n");
+   const sources = [];
+@@ -96,8 +75,9 @@ export function parseExaResult(result, maxResults) {
+     if (title) source.title = title.trim();
+     const published = matchField(block, /^Published:\s*(.+)$/m);
+     if (published) source.publishedAt = published.trim();
+-    const snippet = joinHighlights(block);
+-    if (snippet) source.snippet = snippet;
++    const textBlock = /^Text:\s*([\s\S]*)$/m.exec(block);
++    const snippet = firstHighlight(block) ?? (textBlock ? textBlock[1].trim() : undefined);
++    if (snippet) source.snippet = snippet.slice(0, 800);
+     sources.push(source);
+     if (sources.length >= maxResults) break;
+   }
+@@ -109,13 +89,17 @@ function matchField(block, re) {
+   return m ? m[1].trim() : undefined;
+ }
+ 
+-function joinHighlights(block) {
++/**
++ * Exa's snippet is the first non-empty highlight, matching the official
++ * provider; concatenating every highlight made one provider quote look like a
++ * multi-source summary. `Text:` is the compatible single-block form.
++ */
++function firstHighlight(block) {
+   const m = /^Highlights:\s*$/m.exec(block);
+   if (!m) return undefined;
    const tail = block.slice(m.index + m[0].length);
-   const bullets = [...tail.matchAll(/^\s+-\s+(.+)$/gm)].map((b) => b[1].trim());
-   if (bullets.length === 0) return undefined;
+-  const bullets = [...tail.matchAll(/^\s+-\s+(.+)$/gm)].map((b) => b[1].trim());
+-  if (bullets.length === 0) return undefined;
 -  return bullets.join(" … ");
-+  // Bound what reaches the model: highlights are excerpts, not full text.
-+  return bullets.join(" … ").slice(0, 400);
++  const bullets = [...tail.matchAll(/^\s+-\s+(.+)$/gm)].map((b) => b[1].trim()).filter(Boolean);
++  return bullets[0];
  }
  
  export default exaBackend;
 diff --git a/lib/backends/firecrawl.js b/lib/backends/firecrawl.js
 new file mode 100644
-index 0000000..c83d6a1
+index 0000000..6be357e
 --- /dev/null
 +++ b/lib/backends/firecrawl.js
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,145 @@
 +// firecrawl.js — Firecrawl search backend (streamable-http MCP, v2).
 +//
 +// Requests the official Firecrawl MCP endpoint through the shared MCP client.
@@ -316,7 +364,7 @@ index 0000000..c83d6a1
 +// Registration is intentionally opt-in (DEFAULT_ENABLED does not contain this
 +// id) because the keyless tier is metered and its exact ceiling is unknown.
 +
-+import { mcpCall } from "../util/mcp-client.js";
++import { mcpCall, mcpText } from "../util/mcp-client.js";
 +import { WebError } from "@deepseek-ai/dsh-web";
 +
 +const FIRECRAWL_ENDPOINT = "https://mcp.firecrawl.dev/v2/mcp";
@@ -383,11 +431,28 @@ index 0000000..c83d6a1
 +    }
 +
 +    if (result?.isError === true) {
-+      const message = String(result.content?.[0]?.text ?? "unknown");
++      const message = mcpText(result) || "unknown";
 +      hooks.recordOutcome?.({ status: "error", message });
 +      throw new WebError(`firecrawl returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
 +    }
 +
++    const text = mcpText(result);
++    let envelope;
++    try {
++      envelope = text.length === 0 ? undefined : JSON.parse(text);
++    } catch {
++      hooks.recordOutcome?.({ status: "error", message: "firecrawl returned non-JSON text" });
++      throw new WebError("firecrawl returned a non-JSON MCP result", "WEB_PROVIDER_ERROR");
++    }
++    if (envelope?.success === false) {
++      const message = String(envelope.error ?? "firecrawl reported failure");
++      hooks.recordOutcome?.({ status: "error", message });
++      throw new WebError(`firecrawl returned an error: ${message}`, "WEB_PROVIDER_ERROR");
++    }
++    if (text.length > 0 && !Array.isArray(envelope?.data?.web)) {
++      hooks.recordOutcome?.({ status: "error", message: "firecrawl response missing data.web[]" });
++      throw new WebError("firecrawl returned an unprocessable MCP result", "WEB_PROVIDER_ERROR");
++    }
 +    const sources = parseFirecrawlResult(result, request.maxResults ?? 8);
 +    hooks.recordOutcome?.({ status: "ok", count: sources.length });
 +    return { sources, content: undefined, truncated: false };
@@ -396,7 +461,7 @@ index 0000000..c83d6a1
 +
 +/** Parse the JSON string embedded in content[0].text into DSH sources. */
 +export function parseFirecrawlResult(result, maxResults) {
-+  const text = result?.content?.[0]?.text;
++  const text = mcpText(result);
 +  if (typeof text !== "string" || text.length === 0) return [];
 +  let parsed;
 +  try {
@@ -540,9 +605,18 @@ index 037ea85..4cb3495 100644
          { cause: err },
        );
 diff --git a/lib/backends/parallel.js b/lib/backends/parallel.js
-index 37a439d..8d9f7f2 100644
+index 37a439d..5e7c3be 100644
 --- a/lib/backends/parallel.js
 +++ b/lib/backends/parallel.js
+@@ -14,7 +14,7 @@
+ // Parallel is keyless — its public MCP endpoint requires no API key.
+ 
+ import { randomUUID } from "node:crypto";
+-import { mcpCall } from "../util/mcp-client.js";
++import { mcpCall, mcpText } from "../util/mcp-client.js";
+ import { WebError } from "@deepseek-ai/dsh-web";
+ import { describeError } from "../util/describe-error.js";
+ 
 @@ -27,6 +27,9 @@ const SESSION_ID = "dsh-websearch-" + randomUUID().slice(0, 8);
  export const parallelBackend = {
    id: "parallel",
@@ -574,15 +648,16 @@ index 37a439d..8d9f7f2 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
-@@ -59,36 +63,30 @@ export const parallelBackend = {
+@@ -59,38 +63,32 @@ export const parallelBackend = {
      }
  
      if (result?.isError === true) {
 -
 -
-       const message = String(result.content?.[0]?.text ?? "unknown");
+-      const message = String(result.content?.[0]?.text ?? "unknown");
 -
 -
++      const message = mcpText(result) || "unknown";
        hooks.recordOutcome?.({ status: "error", message });
 -
 -
@@ -623,10 +698,13 @@ index 37a439d..8d9f7f2 100644
 +}
 +
  export function parseParallelResult(result, maxResults) {
-   const text = result?.content?.[0]?.text;
+-  const text = result?.content?.[0]?.text;
++  const text = mcpText(result);
    if (typeof text !== "string" || text.length === 0) return [];
+   let parsed;
+   try {
 diff --git a/lib/backends/searxng.js b/lib/backends/searxng.js
-index 499763f..a8530ca 100644
+index 499763f..be33378 100644
 --- a/lib/backends/searxng.js
 +++ b/lib/backends/searxng.js
 @@ -13,10 +13,12 @@
@@ -655,7 +733,20 @@ index 499763f..a8530ca 100644
  }
  
  /** @type {import("../provider.js").Backend} */
-@@ -62,6 +66,14 @@ export const searxngBackend = {
+@@ -56,16 +60,31 @@ export const searxngBackend = {
+     const backendOpts = options ?? {};
+     const baseURL = backendOpts.baseURL ?? DEFAULT_SEARXNG_URL;
+     const apiKey = await backendOpts.resolveApiKey?.(); // Optional for private instances
++    // A key configured for the primary private instance must never travel to
++    // a fallback (public instances are the common case) or to the default
++    // public instance. Fallback instances are unauthenticated by design; put
++    // the key-bearing private instance in baseURL.
++    const primary = baseURL.replace(/\/$/, "");
++    const keyFor = (candidate) => (candidate.replace(/\/$/, "") === primary
++      && primary !== DEFAULT_SEARXNG_URL ? apiKey : undefined);
+ 
+     const candidates = [];
+     for (const candidate of [baseURL, ...(Array.isArray(backendOpts.baseURLs) ? backendOpts.baseURLs : [])]) {
        const trimmed = typeof candidate === "string" ? candidate.trim() : "";
        if (trimmed !== "" && !candidates.includes(trimmed)) candidates.push(trimmed);
      }
@@ -670,7 +761,12 @@ index 499763f..a8530ca 100644
  
      // Single instance (the default): legacy path, unchanged semantics.
      if (candidates.length === 1) {
-@@ -75,62 +87,127 @@ export const searxngBackend = {
+-      const sources = await queryInstance(candidates[0], request, signal, backendOpts, apiKey, hooks);
++      const sources = await queryInstance(candidates[0], request, signal, backendOpts, keyFor(candidates[0]), hooks);
+       return { sources };
+     }
+ 
+@@ -75,62 +94,127 @@ export const searxngBackend = {
      const fresh = candidates.filter((u) => (instanceCooldowns.get(u) ?? 0) <= now);
      const order = fresh.length > 0 ? fresh : candidates; // all cooled -> fail-open
      let lastErr = null;
@@ -698,7 +794,7 @@ index 499763f..a8530ca 100644
 +      const timer = setTimeout(() => attemptController.abort(), attemptMs);
        try {
 -        const sources = await queryInstance(candidate, request, attemptSignal, backendOpts, apiKey, hooks);
-+        const sources = await queryInstance(candidate, { ...request, pageLimit: 1 }, attemptSignal, backendOpts, apiKey, hooks);
++        const sources = await queryInstance(candidate, { ...request, pageLimit: 1 }, attemptSignal, backendOpts, keyFor(candidate), hooks);
          instanceCooldowns.delete(candidate);
          return { sources };
        } catch (error) {
@@ -816,7 +912,7 @@ index 499763f..a8530ca 100644
    const headers = {
      "Accept": "application/json",
      "User-Agent": "dsh-websearch/2.3",
-@@ -163,9 +240,9 @@ async function queryInstance(baseURL, request, signal, backendOpts, apiKey, hook
+@@ -163,9 +247,9 @@ async function queryInstance(baseURL, request, signal, backendOpts, apiKey, hook
      const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
      hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
      if (response.status === 429 || response.status >= 500) {
@@ -828,7 +924,7 @@ index 499763f..a8530ca 100644
    }
  
    // 200 does not mean JSON (route3: searx.be 200 + HTML anti-bot page). Read
-@@ -195,7 +272,7 @@ async function queryInstance(baseURL, request, signal, backendOpts, apiKey, hook
+@@ -195,7 +279,7 @@ async function queryInstance(baseURL, request, signal, backendOpts, apiKey, hook
      throw new WebError(message, "WEB_PROVIDER_ERROR");
    }
  
@@ -932,7 +1028,7 @@ index 23f0219..d2515a2 100644
      let data;
 diff --git a/lib/backends/tinyfish.js b/lib/backends/tinyfish.js
 new file mode 100644
-index 0000000..230afa2
+index 0000000..5055a0c
 --- /dev/null
 +++ b/lib/backends/tinyfish.js
 @@ -0,0 +1,124 @@
@@ -961,7 +1057,7 @@ index 0000000..230afa2
 +//
 +// Registration is opt-in (DEFAULT_ENABLED does not contain this id).
 +
-+import { mcpCall } from "../util/mcp-client.js";
++import { mcpCall, mcpText } from "../util/mcp-client.js";
 +import { WebError } from "@deepseek-ai/dsh-web";
 +
 +const TINYFISH_ENDPOINT = "https://agent.tinyfish.ai/mcp";
@@ -1025,7 +1121,7 @@ index 0000000..230afa2
 +    }
 +
 +    if (result?.isError === true) {
-+      const message = String(result.content?.[0]?.text ?? "unknown");
++      const message = mcpText(result) || "unknown";
 +      hooks.recordOutcome?.({ status: "error", message });
 +      throw new WebError(`tinyfish returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
 +    }
@@ -1038,7 +1134,7 @@ index 0000000..230afa2
 +
 +/** Parse the JSON string embedded in content[0].text into DSH sources. */
 +export function parseTinyfishResult(result, maxResults) {
-+  const text = result?.content?.[0]?.text;
++  const text = mcpText(result);
 +  if (typeof text !== "string" || text.length === 0) return [];
 +  let parsed;
 +  try {
@@ -1311,7 +1407,7 @@ index 88dc8c3..8ed7fad 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..3762d76 100644
+index 783cbe6..3d43b4d 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,36 @@ window.__ModuleLoader__.load({
@@ -1411,7 +1507,7 @@ index 783cbe6..3762d76 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +135,62 @@ window.__ModuleLoader__.load({
+@@ -90,22 +135,67 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1425,6 +1521,11 @@ index 783cbe6..3762d76 100644
 +			cacheTtlHint: "30 秒的整数倍；0 = 不缓存（no-store）",
 +			cacheOffHint: "结果缓存关闭时此项不生效。",
 +			fallbackHint: "全部后端已关闭：搜索将回退到默认免 Key 后端（计量型仍保持关闭）",
++			overrideHint: "后端选择由显式 enabledBackends 列表固定，下方开关不生效。",
++			overrideBaseHint: "后端选择由 profile 的 enabledBackends 固定；请在原生配置或补丁中修改。",
++			clearOverride: "清除覆盖",
++			overrideClearing: "清除中…",
++			overrideFailed: "清除覆盖失败",
  			invalidFields: "以下字段未通过校验：",
  			readOnlyScope: "当前配置只读（可能由宿主锁定）",
 -			optionalTitle: "私有实例可选 Key",
@@ -1477,7 +1578,7 @@ index 783cbe6..3762d76 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +201,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +206,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1498,7 +1599,7 @@ index 783cbe6..3762d76 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +233,36 @@ window.__ModuleLoader__.load({
+@@ -142,15 +238,41 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1512,6 +1613,11 @@ index 783cbe6..3762d76 100644
 +			cacheTtlHint: "Multiple of 30 s; 0 disables the cache (no-store).",
 +			cacheOffHint: "Ignored while the result cache is off.",
 +			fallbackHint: "All backends off: search falls back to the default keyless four (metered backends stay off).",
++			overrideHint: "Backend selection is pinned by an explicit enabledBackends list; the switches below have no effect.",
++			overrideBaseHint: "Backend selection is pinned by enabledBackends in the profile; edit it in the native config or patch.",
++			clearOverride: "Clear override",
++			overrideClearing: "Clearing…",
++			overrideFailed: "Could not clear override",
  			invalidFields: "Fields failed validation:",
  			readOnlyScope: "Configuration is read-only (locked by host?)",
 -			optionalTitle: "Private instance optional keys",
@@ -1538,7 +1644,7 @@ index 783cbe6..3762d76 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +300,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +310,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1597,7 +1703,7 @@ index 783cbe6..3762d76 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +358,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +368,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1634,7 +1740,7 @@ index 783cbe6..3762d76 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +396,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +406,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1662,7 +1768,7 @@ index 783cbe6..3762d76 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +428,26 @@ window.__ModuleLoader__.load({
+@@ -258,11 +438,28 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1671,6 +1777,8 @@ index 783cbe6..3762d76 100644
 +				this.toggleFailed = false;
 +				this.toggleConflict = false;
 +				this.toggleErrorId = null;
++				this.overrideClearing = false;
++				this.overrideFailed = false;
 +				// Per-backend write sequence: a slow failure must not overwrite
 +				// the result of a newer click for the same toggle.
 +				this.toggleSeq = new Map();
@@ -1690,7 +1798,7 @@ index 783cbe6..3762d76 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +461,19 @@ window.__ModuleLoader__.load({
+@@ -276,12 +473,25 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1701,6 +1809,8 @@ index 783cbe6..3762d76 100644
 +			 */
  			projection() {
  				const snap = this.scope.getSnapshot();
++				const hasOverride = (layer) => layer !== undefined && layer !== null
++					&& Object.hasOwn(layer, "enabledBackends");
  				return {
  					ready: snap.status === "ready",
  					writable: snap.writable,
@@ -1708,9 +1818,13 @@ index 783cbe6..3762d76 100644
 +					reason: snap.reason,
 +					revision: snap.revision,
  					value: snap.value ?? {},
++					overrideSource: hasOverride(snap.user) ? "user" : hasOverride(snap.base) ? "base" : undefined,
++					overrideClearing: this.overrideClearing,
++					overrideFailed: this.overrideFailed,
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +485,230 @@ window.__ModuleLoader__.load({
+ 					stagedCount: this.staged.size + this.stagedKeys.size,
+@@ -292,59 +502,231 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1740,16 +1854,16 @@ index 783cbe6..3762d76 100644
 +				this.dropTierDrafts({ intervention: tier });
 +				this.store.set(this.projection());
 +			}
-+
+ 
+-			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
+-			reset(field) { this.staged.delete(field); this.republish(); }
+-			editKey(envRef, text) { this.savedAt = 0; this.stagedKeys.set(envRef, { text }); this.republish(); }
 +			/** Detach from the host scope; late responses must not publish. */
 +			dispose() {
 +				this.disposed = true;
 +				if (typeof this.unsubscribe === "function") this.unsubscribe();
 +			}
- 
--			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
--			reset(field) { this.staged.delete(field); this.republish(); }
--			editKey(envRef, text) { this.savedAt = 0; this.stagedKeys.set(envRef, { text }); this.republish(); }
++
 +			/** Re-read the settings snapshot (used by the unavailable-state retry). */
 +			reload() {
 +				return typeof this.scope.load === "function" ? this.scope.load() : undefined;
@@ -1901,6 +2015,7 @@ index 783cbe6..3762d76 100644
  						// Older line: the connection controller's credentials API.
  						const res = await this.connection.api.credentials.describe({ refs: [ref] });
  						if (res?.result?.ok) view = res.result.value.credentials[ref];
++						else if (res?.result?.ok === false) { readFailed = true; reason = "credential/read-failed"; }
  					}
 -					if (view === undefined) return;
 -					this.keyState.set(ref, { configured: view.configured === true, writable: view.writable !== false });
@@ -1963,7 +2078,7 @@ index 783cbe6..3762d76 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,73 +718,135 @@ window.__ModuleLoader__.load({
+@@ -354,73 +736,154 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2035,7 +2150,9 @@ index 783cbe6..3762d76 100644
 -							doneFields.push(field);
 +							if (!Number.isInteger(num) || num < lo || num > hi || num % (STEP[field] ?? 1) !== 0) { this.failed = true; this.failedFields.add(field); continue; }
 +							fieldOps.push({ op: "set", path: [field], value: num }); fieldOpNames.push(field);
-+						} else {
+ 						} else {
+-							await this.scope.set(field, staged.text);
+-							doneFields.push(field);
 +							fieldOps.push({ op: "set", path: [field], value: staged.text }); fieldOpNames.push(field);
 +						}
 +					}
@@ -2046,9 +2163,7 @@ index 783cbe6..3762d76 100644
 +					if (fieldOps.length > 0) {
 +						if (typeof this.scope.setMany === "function") {
 +							await this.scope.setMany(fieldOps);
- 						} else {
--							await this.scope.set(field, staged.text);
--							doneFields.push(field);
++						} else {
 +							for (const op of fieldOps) {
 +								if (op.op === "unset") await this.scope.unset(op.path[0]);
 +								else await this.scope.set(op.path[0], op.value);
@@ -2110,6 +2225,25 @@ index 783cbe6..3762d76 100644
  				this.republish();
  			}
  
++			/** Remove a user-level enabledBackends override so the toggles apply again. */
++			async clearOverride() {
++				if (this.overrideClearing) return;
++				this.overrideClearing = true;
++				this.overrideFailed = false;
++				this.republish();
++				try {
++					await this.scope.unset("enabledBackends");
++				} catch {
++					this.overrideFailed = true;
++					if (typeof this.scope.load === "function") {
++						try { await this.scope.load(); } catch { /* keep the error notice */ }
++					}
++				} finally {
++					this.overrideClearing = false;
++					this.republish();
++				}
++			}
++
 +			/**
 +			 * Props handed to the settings section: the store as an observable hook
 +			 * plus the actions the card calls.
@@ -2117,12 +2251,13 @@ index 783cbe6..3762d76 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +857,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +894,14 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
 -					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedKeys.clear(); this.republish(); },
 +					retry: () => this.reload(),
++					clearOverride: () => this.clearOverride(),
 +					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedFields.clear(); this.failedKeys.clear(); this.republish(); },
  				};
  			}
@@ -2133,7 +2268,7 @@ index 783cbe6..3762d76 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +871,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +909,89 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2143,6 +2278,8 @@ index 783cbe6..3762d76 100644
  				react_jsx_runtime.jsx("input", {
  					type: "checkbox",
  					checked,
++					disabled: props.disabled === true,
++					"aria-describedby": props.describedBy,
  					onChange: (e) => props.onChange(e.target.checked),
  				}),
 -				react_jsx_runtime.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, display: "inline-block" } }),
@@ -2152,6 +2289,23 @@ index 783cbe6..3762d76 100644
  				needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
 +				props.toggleError && react_jsx_runtime.jsx("span", { className: "wsc-hint wsc-error", children: props.t("toggleFailed") }),
 +			] });
++		}
++
++		/**
++		 * One credential badge state for both the keyed cards and the optional
++		 * key grid. A failed read is unknown, not "unset": it must not also
++		 * trigger the "key missing" warning or an amber dot.
++		 * @param {object} state card projection
++		 * @param {string} ref credential reference
++		 * @param {Function} t locale lookup
++		 * @returns {{ text: string, on: boolean, unknown: boolean }}
++		 */
++		function keyStatus(state, ref, t) {
++			const entry = state.keyState[ref];
++			const readFailed = (state.readErrors ?? []).some((f) => f && f.ref === ref);
++			if (entry?.configured === true) return { text: t("keySet"), on: true, unknown: false };
++			if (entry?.configured === false) return { text: t("keyUnset"), on: false, unknown: false };
++			return { text: readFailed ? t("keyReadFailedBadge") : t("keyChecking"), on: false, unknown: true };
 +		}
 +
 +		/**
@@ -2167,24 +2321,25 @@ index 783cbe6..3762d76 100644
 +			const b = props.backend;
 +			const state = props.state;
 +			const checked = props.value === true;
-+			const configured = !!state.keyState[b.keyEnv]?.configured;
++			const status = keyStatus(state, b.keyEnv, props.t);
++			const configured = status.on;
 +			const readOnly = configured && state.keyState[b.keyEnv]?.writable === false;
 +			const locked = readOnly || props.locked === true;
 +			// failedKeys is an array of { ref, reason }, NOT an array of strings.
 +			const failure = (state.failedKeys ?? []).find((f) => f && f.ref === b.keyEnv);
 +			const readFailure = (state.readErrors ?? []).find((f) => f && f.ref === b.keyEnv);
-+			const needsKey = !configured;
-+			const dotClass = "wsc-dot " + (needsKey ? (checked ? "wsc-dotWarn" : "wsc-dotOff") : "wsc-dotOn");
++			const needsKey = !status.unknown && !configured;
++			const dotClass = "wsc-dot " + (status.unknown ? "wsc-dotOff" : needsKey ? (checked ? "wsc-dotWarn" : "wsc-dotOff") : "wsc-dotOn");
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-keyCard", style: { display: "flex", flexDirection: "column", gap: 6, padding: "9px 10px" }, children: [
 +				react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: 0, border: "none", borderRadius: "var(--dsw-radius-sm)" }, children: [
-+					react_jsx_runtime.jsx("input", { type: "checkbox", checked, onChange: (e) => props.onToggle(e.target.checked) }),
++					react_jsx_runtime.jsx("input", { type: "checkbox", checked, disabled: props.disabled === true, "aria-describedby": props.describedBy, onChange: (e) => props.onToggle(e.target.checked) }),
 +					react_jsx_runtime.jsx("span", { className: dotClass }),
 +					react_jsx_runtime.jsx("span", { children: props.t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
 +					needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
 +				] }),
 +				props.toggleError && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", children: props.t("toggleFailed") }),
 +				react_jsx_runtime.jsxs("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, children: [
-+					react_jsx_runtime.jsx("span", { className: "wsc-badge" + (configured ? " wsc-badgeOn" : ""), children: state.keyState[b.keyEnv]?.configured === undefined ? props.t("keyChecking") : configured ? props.t("keySet") : props.t("keyUnset") }),
++					react_jsx_runtime.jsx("span", { className: "wsc-badge" + (status.on ? " wsc-badgeOn" : ""), children: status.text }),
 +					readOnly && react_jsx_runtime.jsx("span", { className: "wsc-badge", children: props.t("envProvided") }),
 +					KEY_URLS[b.id] && react_jsx_runtime.jsx("a", {
 +						href: KEY_URLS[b.id], target: "_blank", rel: "noreferrer", className: "wsc-link",
@@ -2206,7 +2361,7 @@ index 783cbe6..3762d76 100644
  			] });
  		}
  
-@@ -463,6 +943,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +1001,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2216,7 +2371,7 @@ index 783cbe6..3762d76 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -472,170 +955,396 @@ window.__ModuleLoader__.load({
+@@ -472,170 +1013,423 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -2395,7 +2550,7 @@ index 783cbe6..3762d76 100644
 +		 * @param {object} props { state, enabledCount, keysReady, t }
 +		 */
 +		function StatusSummary(props) {
-+			const { state, enabledCount, keysReady, hasOverride, t } = props;
++			const { state, enabledCount, keysReady, hasOverride, overrideSource, overrideClearing, overrideFailed, onClearOverride, t } = props;
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
 +				react_jsx_runtime.jsx("div", { className: "wsc-strip", style: { display: "flex", gap: 14, alignItems: "center", padding: "10px 12px" }, children: [
 +					react_jsx_runtime.jsxs("span", { children: [t("statusEnabled"), ": ", react_jsx_runtime.jsx("b", { children: enabledCount + "/" + BACKENDS.length })] }),
@@ -2403,12 +2558,22 @@ index 783cbe6..3762d76 100644
 +					METERED.length > 0 && react_jsx_runtime.jsxs("span", { style: { opacity: .65 }, children: [
 +						t("statusMetered"), ": ", METERED.length, " ", t("statusOffByDefault"),
 +					] }),
++				] }),
++				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: t("description") }),
++				hasOverride && react_jsx_runtime.jsxs("div", { id: "wsc-override-hint", className: "wsc-warn", style: { margin: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }, children: [
++					react_jsx_runtime.jsx("span", { children: overrideSource === "base" ? t("overrideBaseHint") : t("overrideHint") }),
++					overrideSource === "user" && react_jsx_runtime.jsx("button", {
++						type: "button", className: "wsc-btn wsc-btnGhost", style: { height: 26, padding: "0 8px", fontSize: 11 },
++						disabled: state.writable === false || state.saving === true || overrideClearing === true,
++						onClick: () => onClearOverride(),
++						children: overrideClearing ? t("overrideClearing") : t("clearOverride"),
++					}),
++					overrideFailed && react_jsx_runtime.jsx("span", { className: "wsc-error", role: "status", "aria-live": "polite", children: t("overrideFailed") }),
  				] }),
 -				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: props.t("description") }),
 -				(enabledCount === 0) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("fallbackHint") }),
 -				(state.writable === false) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("readOnlyScope") }),
 -				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupFree") }),
-+				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: t("description") }),
 +				(!hasOverride && enabledCount === 0) && react_jsx_runtime.jsx("p", { className: "wsc-warn", style: { margin: 0, fontSize: 12 }, children: t("fallbackHint") }),
 +				(state.writable === false) && react_jsx_runtime.jsx("p", { className: "wsc-warn", style: { margin: 0, fontSize: 12 }, children: t("readOnlyScope") }),
 +			] });
@@ -2421,15 +2586,19 @@ index 783cbe6..3762d76 100644
 +		 * @param {object} props { state, card, toggleField, t }
 +		 */
 +		function BackendToggles(props) {
-+			const { state, card, toggleField, t } = props;
++			const { state, card, toggleField, overridden, overrideIds, t } = props;
++			const toggleValue = (id) => overridden ? overrideIds.includes(id) : state.value[toggleField(id)];
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
 +				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: t("groupFree") }),
  				react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: KEYLESS.map((b) =>
  					react_jsx_runtime.jsx(ToggleRow, {
  						backend: b,
- 						value: state.value[toggleField(b.id)],
+-						value: state.value[toggleField(b.id)],
++						value: toggleValue(b.id),
  						keyConfigured: true,
 -						t: props.t,
++						disabled: overridden,
++						describedBy: overridden ? "wsc-override-hint" : undefined,
 +						toggleError: state.toggleErrorId === b.id,
 +						t,
  						onChange: (checked) => card.setToggle(b.id, checked),
@@ -2443,12 +2612,15 @@ index 783cbe6..3762d76 100644
 +				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: KEYED.map((b) =>
 +					react_jsx_runtime.jsx(KeyedBackendCard, {
  						backend: b,
-+						state,
-+						locked: state.writable === false,
- 						value: state.value[toggleField(b.id)],
+-						value: state.value[toggleField(b.id)],
 -						keyConfigured: !!state.keyState[b.keyEnv]?.configured,
 -						t: props.t,
 -						onChange: (checked) => card.setToggle(b.id, checked),
++						state,
++						locked: state.writable === false,
++						disabled: overridden,
++						describedBy: overridden ? "wsc-override-hint" : undefined,
++						value: toggleValue(b.id),
 +						t,
 +						onToggle: (checked) => card.setToggle(b.id, checked),
 +						onEditKey: (ref, text) => card.editKey(ref, text),
@@ -2461,8 +2633,10 @@ index 783cbe6..3762d76 100644
 +					react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: METERED.map((b) =>
 +						react_jsx_runtime.jsx(ToggleRow, {
 +							backend: b,
-+							value: state.value[toggleField(b.id)],
++							value: toggleValue(b.id),
 +							keyConfigured: true,
++							disabled: overridden,
++							describedBy: overridden ? "wsc-override-hint" : undefined,
 +							toggleError: state.toggleErrorId === b.id,
 +							t,
 +							onChange: (checked) => card.setToggle(b.id, checked),
@@ -2634,20 +2808,15 @@ index 783cbe6..3762d76 100644
 -								state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false && react_jsx_runtime.jsx("span", { className: "wsc-badge", style: { opacity: .75 }, children: props.t("envProvided") }),
 -							] }),
 +							react_jsx_runtime.jsx("span", { className: "wsc-label", children: t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }) }),
-+							react_jsx_runtime.jsx("span", { className: "wsc-badge" + (state.keyState[b.keyEnv]?.configured ? " wsc-badgeOn" : ""), children: (state.readErrors ?? []).some((f) => f && f.ref === b.keyEnv) && state.keyState[b.keyEnv]?.configured === undefined
-+								? t("keyReadFailedBadge")
-+								: state.keyState[b.keyEnv]?.configured === undefined ? t("keyChecking") : state.keyState[b.keyEnv]?.configured ? t("keySet") : t("keyUnset") }),
++							react_jsx_runtime.jsx("span", { className: "wsc-badge" + (keyStatus(state, b.keyEnv, t).on ? " wsc-badgeOn" : ""), children: keyStatus(state, b.keyEnv, t).text }),
  						] }),
  						react_jsx_runtime.jsx("input", {
  							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							disabled: state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false,
 -							placeholder: (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false) ? props.t("readOnly") : b.keyEnv,
-+							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
-+							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
-+							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
- 							value: state.stagedKeys[b.keyEnv] ?? "",
- 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
- 						}),
+-							value: state.stagedKeys[b.keyEnv] ?? "",
+-							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+-						}),
 -						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keyHint") }),
 -						state.failedKeys.includes(b.keyEnv) && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") }),
 -					] }, b.id)
@@ -2659,9 +2828,12 @@ index 783cbe6..3762d76 100644
 -						react_jsx_runtime.jsx("input", {
 -							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							placeholder: b.keyEnv,
--							value: state.stagedKeys[b.keyEnv] ?? "",
--							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
--						}),
++							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
++							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
++							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
+ 							value: state.stagedKeys[b.keyEnv] ?? "",
+ 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+ 						}),
 -					] }, b.id),
 -				) }),
 -				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .6 }, children: props.t("unsavedHint") }),
@@ -2694,7 +2866,7 @@ index 783cbe6..3762d76 100644
 +
 +		function UnifiedSearchSection(props) {
 +			const state = props.useUnifiedSearchCard((snapshot) => snapshot);
-+			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard, retry: props.retry };
++			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard, retry: props.retry, clearOverride: props.clearOverride };
 +			react.useEffect(() => {
 +				if (!state.failedFields || state.failedFields.length === 0) return;
 +				if (typeof document === "undefined") return;
@@ -2727,19 +2899,31 @@ index 783cbe6..3762d76 100644
 +				: BACKENDS.filter((b) => state.value[toggleField(b.id)] === true).length;
 +			const keysReady = KEYED.filter((b) => state.keyState[b.keyEnv]?.configured).length;
 +
++			// Only a non-empty known list overrides the per-backend switches.
++			// `override` is already filtered to known backend ids above.
++			const overrideIds = override;
++			const overridden = overrideIds.length > 0;
++			// A legacy snapshot may expose the effective list without the
++			// user/base layers; treat that as a fixed base override, not as a
++			// user-clearable one.
++			const overrideSource = overridden ? (state.overrideSource ?? "base") : undefined;
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
-+				react_jsx_runtime.jsx(StatusSummary, { state, enabledCount, hasOverride: override.length > 0, keysReady, t: props.t }),
++				react_jsx_runtime.jsx(StatusSummary, {
++					state, enabledCount, hasOverride: overridden, keysReady,
++					overrideSource, overrideClearing: state.overrideClearing,
++					overrideFailed: state.overrideFailed, onClearOverride: () => card.clearOverride(), t: props.t,
++				}),
 +				// A read-only snapshot (scope locked by the host) must not render
 +				// live toggles: fieldset disabled disables every descendant input,
 +				// select and button without relying on each call site.
 +				react_jsx_runtime.jsxs("fieldset", { disabled: state.writable === false, style: { border: 0, margin: 0, padding: 0, minWidth: 0 }, children: [
-+					react_jsx_runtime.jsx(BackendToggles, { state, card, toggleField, t: props.t }),
++					react_jsx_runtime.jsx(BackendToggles, { state, card, toggleField, overridden, overrideIds, t: props.t }),
 +					react_jsx_runtime.jsx(SettingsFields, { state, card, t: props.t }),
 +					react_jsx_runtime.jsx(OptionalKeysAndActions, { state, card, t: props.t }),
  				] }),
  			] });
  		}
-@@ -646,7 +1355,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1440,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2753,7 +2937,7 @@ index 783cbe6..3762d76 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1386,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1471,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2770,7 +2954,7 @@ index 783cbe6..3762d76 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1422,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1507,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -3638,7 +3822,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..c0bc162 100644
+index 7242a56..d95dd3f 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -12,10 +12,11 @@
@@ -3827,7 +4011,21 @@ index 7242a56..c0bc162 100644
    return { collected, mergedContent, hardAborted, hardError, failures };
  }
  
-@@ -198,48 +268,114 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -174,6 +244,13 @@ function collectFanoutResults(results, eligible, signal) {
+ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cache, history }) {
+   return {
+     id: PROVIDER_ID,
++    // Official provider pickers render these; without them a plugin provider
++    // appears as a bare id with no explanation.
++    title: "Unified Search",
++    description: {
++      en: "Aggregates multiple web-search backends with URL dedupe, optional reranking and a local disk cache.",
++      zh: "聚合多个网页搜索后端，按 URL 去重，可选重排与本地磁盘缓存。",
++    },
+ 
+     available() {
+       const opts = resolveOptions();
+@@ -198,48 +275,114 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
      async search(request, signal) {
        throwIfSearchAborted(signal);
        const opts = resolveOptions();
@@ -3964,7 +4162,7 @@ index 7242a56..c0bc162 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -252,15 +388,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -252,15 +395,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
              cacheKey = null;
            } else {
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
@@ -3992,7 +4190,7 @@ index 7242a56..c0bc162 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -290,22 +429,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -290,22 +436,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -4064,7 +4262,7 @@ index 7242a56..c0bc162 100644
            "WEB_PROVIDER_UNAVAILABLE",
          );
        }
-@@ -313,8 +496,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -313,8 +503,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // Run ONE query variant through the full fan-out: breaker-aware backend
        // execution under the per-variant limiter, then PHASE 1 collect. The
        // internal abort/timeout semantics are unchanged from v2.7.
@@ -4078,7 +4276,7 @@ index 7242a56..c0bc162 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -322,29 +509,84 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -322,29 +516,84 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -4174,7 +4372,7 @@ index 7242a56..c0bc162 100644
                  // Timeout classification happens BEFORE telemetry/health are
                  // recorded (route6 P6): backends surface an internal timeout
                  // as their own abort-flavored error ("unified search aborted",
-@@ -353,22 +595,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -353,22 +602,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
                  // thrown error said "timed out after Nms" — the two disagreed
                  // and "(unified search aborted)" read as if the USER cancelled.
                  const timedOut = controller.signal.aborted && !(signal && signal.aborted);
@@ -4233,7 +4431,7 @@ index 7242a56..c0bc162 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -377,8 +647,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -377,8 +654,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -4244,7 +4442,7 @@ index 7242a56..c0bc162 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -386,22 +656,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -386,22 +663,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -4344,7 +4542,7 @@ index 7242a56..c0bc162 100644
          // PHASE 2 dedupe / PHASE 3 rerank (per variant list, pre-fusion).
          const strategy = opts.dedupStrategy === "url+title" ? "url+title" : "url";
          const deduped = dedupeSources(fold.collected, strategy);
-@@ -409,43 +752,119 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -409,43 +759,119 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4482,7 +4680,7 @@ index 7242a56..c0bc162 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,23 +872,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +879,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
@@ -4511,7 +4709,7 @@ index 7242a56..c0bc162 100644
          };
        }
  
-@@ -477,20 +897,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +904,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4552,7 +4750,7 @@ index 7242a56..c0bc162 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +931,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +938,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.
@@ -4862,10 +5060,10 @@ index 7a75fc2..16e2309 100644
    const host = authorityOf(req.headers.host, 'http')
 diff --git a/lib/util/base-url.js b/lib/util/base-url.js
 new file mode 100644
-index 0000000..3b6119b
+index 0000000..c2d77ae
 --- /dev/null
 +++ b/lib/util/base-url.js
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,57 @@
 +/**
 + * Validation for operator-supplied backend base URLs.
 + *
@@ -4884,7 +5082,7 @@ index 0000000..3b6119b
 +const PRIVATE_HOST_RE = /^(localhost|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})$/;
 +
 +/** Always-off-limits hosts: cloud instance metadata and the unspecified address. */
-+const BLOCKED_HOST_RE = /^(0\.0\.0\.0|169\.254\.\d{1,3}\.\d{1,3}|metadata(\.google\.internal)?|instance-data)$/;
++const BLOCKED_HOST_RE = /^(::|0\.0\.0\.0|169\.254\.\d{1,3}\.\d{1,3}|metadata(\.google\.internal)?|instance-data)$/;
 +
 +/**
 + * Why a candidate base URL is unusable, or `undefined` when it is allowed.
@@ -4902,10 +5100,11 @@ index 0000000..3b6119b
 +  }
 +  if (url.username !== "" || url.password !== "") return "credentials in URL rejected";
 +  // URL.hostname keeps brackets on IPv6 literals.
-+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
++  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.+$/, "");
 +  if (BLOCKED_HOST_RE.test(host)
 +      || /^fe[89ab][0-9a-f]:/.test(host)
 +      || host === "fd00:ec2::254"
++      || host === "::ffff:0:0"
 +      || /^::ffff:(a9fe|fe[89ab])/i.test(host)) return "link-local host rejected";
 +  if (url.protocol === "https:") return undefined;
 +  if (url.protocol === "http:" && (PRIVATE_HOST_RE.test(host) || host === "::1")) return undefined;
@@ -4923,7 +5122,7 @@ index 0000000..3b6119b
 +  return invalidBaseURL(raw) === undefined;
 +}
 diff --git a/lib/util/egress-fetch.js b/lib/util/egress-fetch.js
-index 1afbbdc..cc1056f 100644
+index 1afbbdc..b3bf345 100644
 --- a/lib/util/egress-fetch.js
 +++ b/lib/util/egress-fetch.js
 @@ -21,17 +21,141 @@
@@ -5142,7 +5341,23 @@ index 1afbbdc..cc1056f 100644
        port: target.port !== "" ? Number(target.port) : secure ? 443 : 80,
        method: "POST",
        path: target.pathname + target.search,
-@@ -276,7 +417,7 @@ function httpsViaConnect(target, proxyUrl, method, headers, body, signal) {
+@@ -228,11 +369,10 @@ function forwarderExchange(endpoint, spec, body, signal, callerSignal, timeoutSi
+     });
+     request.on("error", fail);
+     request.on("response", (res) => {
+-      collect(res).then((response) => {
+-        if (settled) return;
+-        settled = true;
+-        resolve(response);
+-      }, fail);
++      const response = streamResponse(res, request);
++      if (settled) { response.body?.cancel?.(); return; }
++      settled = true;
++      resolve(response);
+     });
+     request.end(body);
+   });
+@@ -276,7 +416,7 @@ function httpsViaConnect(target, proxyUrl, method, headers, body, signal) {
      const proxyAuth = basicProxyAuth(proxy);
      if (proxyAuth !== undefined) connectHeaders["proxy-authorization"] = proxyAuth;
      const connectReq = http.request({
@@ -5151,7 +5366,7 @@ index 1afbbdc..cc1056f 100644
        port: proxy.port !== "" ? Number(proxy.port) : 80,
        method: "CONNECT",
        path: `${target.hostname}:${port}`,
-@@ -295,13 +436,24 @@ function httpsViaConnect(target, proxyUrl, method, headers, body, signal) {
+@@ -295,18 +435,31 @@ function httpsViaConnect(target, proxyUrl, method, headers, body, signal) {
          fail(new TypeError(`fetch failed: proxy CONNECT rejected with ${connectRes.statusCode}`));
          return;
        }
@@ -5178,7 +5393,15 @@ index 1afbbdc..cc1056f 100644
        });
        open.push(request);
        request.on("error", (error) => fail(new TypeError(`fetch failed: ${sanitize(error)}`, { cause: error })));
-@@ -323,7 +475,7 @@ function httpViaProxy(target, proxyUrl, method, headers, body, signal) {
+       request.on("response", (res) => {
+-        collect(res).then(done, (error) => fail(error));
++        const response = streamResponse(res, request);
++        if (settled) { response.body?.cancel?.(); return; }
++        done(response);
+       });
+       if (signal?.aborted === true) {
+         request.destroy();
+@@ -323,7 +476,7 @@ function httpViaProxy(target, proxyUrl, method, headers, body, signal) {
    const proxy = new URL(proxyUrl);
    return new Promise((resolve, reject) => {
      const request = http.request({
@@ -5187,57 +5410,98 @@ index 1afbbdc..cc1056f 100644
        port: proxy.port !== "" ? Number(proxy.port) : 80,
        method,
        path: target.href,
-@@ -362,17 +514,42 @@ function httpViaProxy(target, proxyUrl, method, headers, body, signal) {
- function collect(res) {
-   return new Promise((resolve, reject) => {
-     const chunks = [];
--    res.on("data", (chunk) => chunks.push(chunk));
-+    let bytes = 0;
-+    let settled = false;
-+    res.on("data", (chunk) => {
-+      if (settled) return;
-+      bytes += chunk.length;
-+      if (bytes > MAX_RESPONSE_BYTES) {
-+        settled = true;
-+        res.destroy();
-+        reject(new TypeError(`fetch failed: response body exceeds ${MAX_RESPONSE_BYTES} bytes`));
-+        return;
-+      }
-+      chunks.push(chunk);
-+    });
-     res.on("end", () => {
-+      if (settled) return;
+@@ -340,11 +493,10 @@ function httpViaProxy(target, proxyUrl, method, headers, body, signal) {
+     if (proxyAuth !== undefined) request.setHeader("proxy-authorization", proxyAuth);
+     request.on("error", (error) => fail(new TypeError(`fetch failed: ${sanitize(error)}`, { cause: error })));
+     request.on("response", (res) => {
+-      collect(res).then((response) => {
+-        if (settled) return;
+-        settled = true;
+-        resolve(response);
+-      }, fail);
++      const response = streamResponse(res, request);
++      if (settled) { response.body?.cancel?.(); return; }
 +      settled = true;
-       // Null-body statuses (204/304) and empty streams must construct a
-       // bodiless Response; an empty Buffer is not null and would throw.
++      resolve(response);
+     });
+     if (signal?.aborted === true) {
+       request.destroy();
+@@ -359,21 +511,60 @@ function httpViaProxy(target, proxyUrl, method, headers, body, signal) {
+ /* plumbing                                                            */
+ /* ------------------------------------------------------------------ */
+ 
+-function collect(res) {
+-  return new Promise((resolve, reject) => {
+-    const chunks = [];
+-    res.on("data", (chunk) => chunks.push(chunk));
+-    res.on("end", () => {
+-      // Null-body statuses (204/304) and empty streams must construct a
+-      // bodiless Response; an empty Buffer is not null and would throw.
 -      const payload = chunks.length === 0 ? null : Buffer.concat(chunks);
 -      resolve(new Response(payload, {
 -        status: res.statusCode ?? 502,
 -        headers: headersFromRaw(res),
 -      }));
-+      // Constructing a Response can throw (invalid status, illegal header
-+      // name, 204 with a body). This runs inside an event callback, so an
-+      // uncaught throw here would bypass reject() and crash the process.
-+      try {
-+        const payload = chunks.length === 0 ? null : Buffer.concat(chunks);
-+        resolve(new Response(payload, {
-+          status: res.statusCode ?? 502,
-+          headers: headersFromRaw(res),
-+        }));
-+      } catch (err) {
-+        reject(err);
-+      }
-+    });
-+    res.on("error", (err) => {
-+      if (settled) return;
-+      settled = true;
-+      reject(err);
++/**
++ * Build a fetch-compatible streaming Response from an http.IncomingMessage.
++ * Proxy and forwarder hops must not buffer the body: an MCP SSE server may
++ * send the matching frame and keep the connection open, and buffering until
++ * EOF made the caller wait for its own timeout. The 10 MiB cap is enforced
++ * while chunks flow; cancel destroys the underlying request.
++ * @param {import("node:http").IncomingMessage} res
++ * @param {import("node:http").ClientRequest} [request]
++ * @returns {Response}
++ */
++function streamResponse(res, request) {
++  // A raw HTTP peer can send any three-digit status, but the Fetch Response
++  // constructor accepts only 200..599. This runs inside a response event;
++  // throwing here would be an uncaught exception and could terminate DSH.
++  const rawStatus = Number.isInteger(res.statusCode) ? res.statusCode : 502;
++  const status = rawStatus >= 200 && rawStatus <= 599 ? rawStatus : 502;
++  try {
++    const headers = headersFromRaw(res);
++    if (status === 204 || status === 304 || res.req?.method === "HEAD") {
++      res.resume();
++      return new Response(null, { status, headers });
++    }
++    const body = new ReadableStream({
++      start(controller) {
++        let bytes = 0;
++        res.on("data", (chunk) => {
++          bytes += chunk.length;
++          if (bytes > MAX_RESPONSE_BYTES) {
++            res.destroy();
++            controller.error(new TypeError(`fetch failed: response body exceeds ${MAX_RESPONSE_BYTES} bytes`));
++            return;
++          }
++          controller.enqueue(new Uint8Array(chunk));
++        });
++        res.on("end", () => {
++          try { controller.close(); } catch { /* already errored/cancelled */ }
++        });
++        res.on("error", (error) => {
++          try { controller.error(error); } catch { /* already closed */ }
++        });
++      },
++      cancel() {
++        res.destroy();
++        request?.destroy?.();
++      },
      });
 -    res.on("error", reject);
-   });
+-  });
++    return new Response(body, { status, headers });
++  } catch {
++    // Invalid header names/values or an impossible status: fail as a normal
++    // gateway error instead of crashing the process from an event handler.
++    res.destroy();
++    request?.destroy?.();
++    return new Response(null, { status: 502 });
++  }
  }
  
-@@ -401,6 +578,12 @@ function normalizeHeaders(raw) {
+ function headersFromRaw(res) {
+@@ -401,6 +592,12 @@ function normalizeHeaders(raw) {
        if (value !== undefined) headers[String(key).toLowerCase()] = String(value);
      }
    }
@@ -5383,10 +5647,10 @@ index ee2a966..3f3d94f 100644
      else if (typeof logger.debug === "function") logger.debug(line);
    } catch {
 diff --git a/lib/util/mcp-client.js b/lib/util/mcp-client.js
-index c864137..a150028 100644
+index c864137..a33f14e 100644
 --- a/lib/util/mcp-client.js
 +++ b/lib/util/mcp-client.js
-@@ -6,6 +6,7 @@
+@@ -6,26 +6,42 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
@@ -5394,9 +5658,10 @@ index c864137..a150028 100644
  import { egressFetch } from "./egress-fetch.js";
  import { describeError } from "./describe-error.js";
  
-@@ -13,19 +14,30 @@ const UA = "dsh-websearch/2.3";
+ const UA = "dsh-websearch/2.3";
  const PROTOCOL_VERSION = "2025-06-18";
  const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
++const SESSION_CACHE_MAX = 64;
  
 -/** Per-URL session cache: { sessionId, initializedAt } */
 +/** Session cache keyed by URL + stable auth-header digest. A session bound to
@@ -5427,10 +5692,13 @@ index c864137..a150028 100644
 +
 +  // A rotated credential must not reuse a session bound to the old key.
 +  if (!options.forceFreshSession && cached && (now - cached.initializedAt) < SESSION_TTL_MS) {
++    // Refresh insertion order so the LRU eviction keeps active endpoints.
++    sessionCache.delete(key);
++    sessionCache.set(key, cached);
      return cached.sessionId;
    }
  
-@@ -49,6 +61,7 @@ async function ensureSession(url, signal) {
+@@ -49,6 +65,7 @@ async function ensureSession(url, signal) {
          "Content-Type": "application/json",
          "Accept": "application/json, text/event-stream",
          "User-Agent": UA,
@@ -5438,16 +5706,29 @@ index c864137..a150028 100644
        },
        body: JSON.stringify(initBody),
        signal,
-@@ -64,7 +77,7 @@ async function ensureSession(url, signal) {
+@@ -64,7 +81,20 @@ async function ensureSession(url, signal) {
  
    if (!initResponse.ok) {
      const text = await initResponse.text().catch(() => "").then((tx) => tx.slice(0, 300));
 -    throw new WebError(`MCP initialize HTTP ${initResponse.status}: ${text}`, "WEB_PROVIDER_ERROR");
 +    throw webErrorFromResponse(initResponse, text, "MCP initialize");
++  }
++  // HTTP 200 is not a successful handshake: the body may carry a JSON-RPC
++  // error or omit protocolVersion. Validate before caching a session.
++  const initEnvelope = await readEnvelope(initResponse, 1);
++  if (initEnvelope === null || typeof initEnvelope !== "object") {
++    throw new WebError("MCP initialize returned an invalid envelope", "WEB_PROVIDER_ERROR");
++  }
++  if (initEnvelope.error !== undefined) {
++    throw new WebError("MCP initialize error " + initEnvelope.error.code + ": " + initEnvelope.error.message, "WEB_PROVIDER_ERROR");
++  }
++  const negotiated = initEnvelope.result?.protocolVersion;
++  if (typeof negotiated !== "string" || negotiated.length === 0) {
++    throw new WebError("MCP initialize did not negotiate a protocol version", "WEB_PROVIDER_ERROR");
    }
  
    // Extract Mcp-Session-Id from response headers. Stateless MCP servers may
-@@ -84,8 +97,10 @@ async function ensureSession(url, signal) {
+@@ -84,8 +114,10 @@ async function ensureSession(url, signal) {
        method: "POST",
        headers: {
          "Content-Type": "application/json",
@@ -5458,18 +5739,32 @@ index c864137..a150028 100644
        },
        body: JSON.stringify(notifyBody),
        signal,
-@@ -100,7 +115,7 @@ async function ensureSession(url, signal) {
+@@ -99,50 +131,165 @@ async function ensureSession(url, signal) {
+     // Ignore other errors for notification
    }
  
-   // Cache the session
+-  // Cache the session
 -  sessionCache.set(url, { sessionId, initializedAt: now });
++  // Cache the session (bounded: a long-lived process may see many endpoints
++  // and rotated credentials; an unbounded Map retained every one).
++  if (sessionCache.has(key)) sessionCache.delete(key);
++  while (sessionCache.size >= SESSION_CACHE_MAX) {
++    const oldest = sessionCache.keys().next().value;
++    if (oldest === undefined) break;
++    sessionCache.delete(oldest);
++  }
 +  sessionCache.set(key, { sessionId, initializedAt: now });
    return sessionId;
  }
  
-@@ -108,41 +123,62 @@ async function ensureSession(url, signal) {
-  * Parse MCP response envelope - handles both SSE and plain JSON.
-  * @returns {object} { id, result?, error? }
+ /**
+- * Parse MCP response envelope - handles both SSE and plain JSON.
+- * @returns {object} { id, result?, error? }
++ * Return the matching SSE frame already present in `body`, or undefined while
++ * the frame is still incomplete. Never parses a partial trailing event.
++ * @param {string} body
++ * @param {string|number} expectedId
++ * @returns {object|undefined}
   */
 -function parseEnvelope(text, expectedId) {
 -  // Try SSE format first: "event: message\ndata: {...}\n\n"
@@ -5477,14 +5772,72 @@ index c864137..a150028 100644
 -    // SSE spec: one JSON payload may span multiple data: lines - join them.
 -    const joined = text
 -      .trim()
--      .split("\n")
++function matchSseFrame(body, expectedId) {
++  if (!body.includes("data:")) return undefined;
++  const events = body.split(/\r?\n\r?\n/);
++  // The final element has no terminating blank line, so it is incomplete.
++  events.pop();
++  for (const event of events) {
++    const joined = event
+       .split("\n")
 -      .filter((l) => l.startsWith("data:"))
 -      .map((l) => l.slice(5).trim())
--      .join("");
++      .filter((line) => line.startsWith("data:"))
++      .map((line) => line.slice(5).trim())
+       .join("");
 -    if (joined) {
 -      try {
 -        return JSON.parse(joined);
 -      } catch {}
++    if (!joined) continue;
++    let frame;
++    try { frame = JSON.parse(joined); } catch { continue; }
++    const candidates = Array.isArray(frame) ? frame : [frame];
++    const match = candidates.find((r) => r && String(r.id) === String(expectedId)
++      && (r.result !== undefined || r.error !== undefined));
++    if (match) return match;
++  }
++  return undefined;
++}
++
++/**
++ * Read an MCP response, returning as soon as a matching SSE frame arrives.
++ * Streamable-HTTP servers may keep the connection open after the response;
++ * awaiting EOF made a successful call look like a timeout.
++ * @param {Response} response
++ * @param {string|number} expectedId
++ * @returns {Promise<object>}
++ */
++async function readEnvelope(response, expectedId) {
++  const reader = response.body?.getReader?.();
++  if (reader === undefined) return parseEnvelope(await response.text(), expectedId);
++  const decoder = new TextDecoder();
++  let buffer = "";
++  try {
++    for (;;) {
++      const { done, value } = await reader.read();
++      if (done) break;
++      buffer += decoder.decode(value, { stream: true });
++      const frame = matchSseFrame(buffer, expectedId);
++      if (frame !== undefined) {
++        await reader.cancel().catch(() => {});
++        return frame;
++      }
+     }
++    buffer += decoder.decode();
++    return parseEnvelope(buffer, expectedId);
++  } catch (error) {
++    await reader.cancel().catch(() => {});
++    throw error;
+   }
+-  
+-  // Try plain JSON (single line or JSON-RPC batch)
++}
++
++/**
++ * Parse MCP response envelope - handles both SSE and plain JSON.
++ * @returns {object} { id, result?, error? }
++ */
 +export function parseEnvelope(text, expectedId) {
 +  // Strip a UTF-8 BOM: some MCP servers prepend it to the first SSE line,
 +  // which would otherwise make the leading `data:` invisible to the split.
@@ -5507,10 +5860,8 @@ index c864137..a150028 100644
 +      const match = candidates.find((r) => r && String(r.id) === String(expectedId)
 +        && (r.result !== undefined || r.error !== undefined));
 +      if (match) return match;
-     }
-   }
--  
--  // Try plain JSON (single line or JSON-RPC batch)
++    }
++  }
 +
 +  // Plain JSON (single line or JSON-RPC batch). An explicit id that differs
 +  // from the request is a different response and must not be handed to this
@@ -5544,6 +5895,32 @@ index c864137..a150028 100644
 +    throw new WebError("MCP: response id does not match the request", "WEB_PROVIDER_ERROR");
 +  }
 +  return parsed;
++}
++
++/**
++ * Project an MCP tool result to the model-visible text. MCP permits several
++ * text blocks and `structuredContent`; reading only content[0].text turned a
++ * spec-compliant multi-block or structured response into a silent empty
++ * success. All text blocks are joined with newlines, with structuredContent
++ * used only when no text block exists.
++ * @param {object} result MCP CallToolResult
++ * @param {string} [separator] join between text blocks
++ * @returns {string}
++ */
++export function mcpText(result, separator = "\n") {
++  const content = result?.content;
++  if (typeof content === "string") return content;
++  const texts = Array.isArray(content)
++    ? content.filter((block) => block && typeof block.text === "string" && (block.type === undefined || block.type === "text"))
++      .map((block) => block.text)
++    : [];
++  if (texts.length > 0) return texts.join(separator);
++  if (result?.structuredContent !== undefined) {
++    return typeof result.structuredContent === "string"
++      ? result.structuredContent
++      : JSON.stringify(result.structuredContent);
++  }
++  return "";
  }
  
  /**
@@ -5556,7 +5933,7 @@ index c864137..a150028 100644
  }
  
  /**
-@@ -152,14 +188,25 @@ export function invalidateSession(url) {
+@@ -152,14 +299,25 @@ export function invalidateSession(url) {
   * @param {object} args - Tool arguments
   * @param {object} extraHeaders - Additional headers
   * @param {AbortSignal} signal - Abort signal
@@ -5585,7 +5962,7 @@ index c864137..a150028 100644
      method: "tools/call",
      params: { name: toolName, arguments: args },
    };
-@@ -171,6 +218,7 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+@@ -171,6 +329,7 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
        headers: {
          "Content-Type": "application/json",
          "Accept": "application/json, text/event-stream",
@@ -5593,7 +5970,7 @@ index c864137..a150028 100644
          ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
          "User-Agent": UA,
          ...extraHeaders,
-@@ -187,15 +235,16 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+@@ -187,15 +346,16 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
    // On 401/403/404 with a sessionful server, invalidate and retry once.
    // Stateless servers (no session id) have no session to invalidate — fail loud.
    if (sessionId && (response.status === 401 || response.status === 403 || response.status === 404)) {
@@ -5613,7 +5990,7 @@ index c864137..a150028 100644
            ...(newSessionId ? { "Mcp-Session-Id": newSessionId } : {}),
            "User-Agent": UA,
            ...extraHeaders,
-@@ -212,7 +261,7 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+@@ -212,12 +372,14 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
  
    if (!response.ok) {
      const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
@@ -5621,7 +5998,16 @@ index c864137..a150028 100644
 +    throw webErrorFromResponse(response, text, "MCP tools/call");
    }
  
-   const text = await response.text();
+-  const text = await response.text();
+-  const envelope = parseEnvelope(text, callBody.id);
++  const envelope = await readEnvelope(response, callBody.id);
+ 
++  if (envelope === null || typeof envelope !== "object") {
++    throw new WebError("MCP: invalid response envelope", "WEB_PROVIDER_ERROR");
++  }
+   if (envelope.error) {
+     throw new WebError(`MCP error ${envelope.error.code}: ${envelope.error.message}`, "WEB_PROVIDER_ERROR");
+   }
 diff --git a/lib/util/namespace.js b/lib/util/namespace.js
 new file mode 100644
 index 0000000..39f42d5
@@ -5724,10 +6110,10 @@ index afbaa0b..bbe3b79 100644
        if (!existing.title && s.title) existing.title = s.title;
 diff --git a/lib/util/redact.js b/lib/util/redact.js
 new file mode 100644
-index 0000000..8e2e3af
+index 0000000..058102d
 --- /dev/null
 +++ b/lib/util/redact.js
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,53 @@
 +/**
 + * Credential redaction for text that leaves the plugin.
 + *
@@ -5751,6 +6137,10 @@ index 0000000..8e2e3af
 +  /cfut_[A-Za-z0-9_-]{16,}/g,
 +  /Bearer\s+[A-Za-z0-9._-]{8,}/gi,
 +  /(api[_-]?key|token|secret|password)\s*[=:]\s*["']?[^\s"',]{6,}/gi,
++  // Vendor-neutral high-entropy fallbacks: upstreams that echo an arbitrary
++  // key (Mojeek/Serper/private gateways) do not use a recognisable prefix.
++  /\b[0-9a-f]{32,}\b/gi,
++  /\b[A-Za-z0-9_-]{32,}\b/g,
 +];
 +
 +/**

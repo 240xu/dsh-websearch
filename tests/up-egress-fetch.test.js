@@ -309,3 +309,20 @@ test("redirect:error rejects on 3xx with location", async () => {
     restoreEnv();
   }
 });
+
+test("an invalid raw proxy status becomes 502 instead of crashing", async () => {
+  const proxy = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(600);
+    res.end("bad status");
+  });
+  const proxyPort = await listen(proxy);
+  setEnv({ HTTP_PROXY: `http://127.0.0.1:${proxyPort}`, NO_PROXY: "" });
+  try {
+    const res = await egressFetch("http://example.test/x");
+    assert.equal(res.status, 502);
+  } finally {
+    proxy.close();
+    restoreEnv();
+  }
+});

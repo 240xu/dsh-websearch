@@ -32,10 +32,21 @@ async function withFakeFetch(fn) {
     // Echo the request id like a JSON-RPC server; stateless calls use 2 and
     // sessionful ones 3, so a hardcoded id would be rejected by parseEnvelope.
     let reqId = 2;
-    try { reqId = JSON.parse(String(init?.body ?? "{}")).id ?? 2; } catch { /* keep 2 */ }
-    const inner = JSON.stringify({ results: [{ url: "https://x.test", title: "X", snippet: "s" }] });
+    let method = "";
+    try {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      reqId = body.id ?? 2;
+      method = body.method ?? "";
+    } catch { /* keep 2 */ }
+    const inner = JSON.stringify({ success: true, data: { web: [{ url: "https://x.test", title: "X", description: "s" }] }, results: [] });
+    const result = method === "initialize"
+      ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "test" } }
+      : { content: [{ type: "text", text: inner }] };
+    const payload = String(url).includes("searx")
+      ? { results: [] }
+      : { jsonrpc: "2.0", id: reqId, result };
     return new Response(
-      JSON.stringify({ jsonrpc: "2.0", id: reqId, result: { content: [{ type: "text", text: inner }] } }),
+      JSON.stringify(payload),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   };
@@ -112,4 +123,20 @@ test("source-level: both backends read resolveApiKey and honour baseURL", async 
   assert.match(idx, /findPluginRow\(settings\.describe\(\)\)/, "current() must use the shared namespace resolver");
   const ns = readFileSync(new URL("../lib/util/namespace.js", HERE), "utf8");
   assert.match(ns, /const PROFILE_ID = "dsh-websearch";/, "shared resolver must declare the live profile id");
+});
+
+test("SearXNG never sends a private API key to the default public instance", async () => {
+  const { searxngBackend } = await import("../lib/backends/searxng.js");
+  await withFakeFetch(async (calls) => {
+    await searxngBackend.search(
+      { query: "q" },
+      undefined,
+      { baseURL: "https://searx.be", resolveApiKey: async () => "PRIVATE-SEARX-KEY" },
+      hooks,
+    );
+    const sx = calls.filter((c) => c.url.includes("searx.be"));
+    assert.ok(sx.length > 0);
+    assert.ok(sx.every((c) => c.headers.Authorization === undefined),
+      "the public fallback must not receive the private-instance key");
+  });
 });

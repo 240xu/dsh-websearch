@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.13.18 - 2026-11-28
+
+- MCP: incremental SSE reads return on the matching frame; initialize validates
+  JSON-RPC errors/protocolVersion; multi-text and structuredContent results are
+  joined; session cache bounded; malformed Firecrawl responses fail loud.
+- Security: prefixless high-entropy keys are redacted; metadata hosts with a
+  trailing dot / `[::]` are rejected; SearXNG private keys stay off the public
+  default instance.
+- UI: enabledBackends override banner, disabled ignored switches and a
+  user-level clear action; keyed and optional key cards share a read-failure
+  badge; legacy credential read errors are no longer "unset".
+- Provider: picker title + zh/en description.
+- Exa: first highlight/Text snippet and objective forwarding.
+- Docs: Exa blocks, host maxResults hard cap, timeout relationship.
+- Tests: 281.
 ## 2.13.17 - 2026-11-28
 
 - Quality: clear stale validation/credential errors when the user reverts a

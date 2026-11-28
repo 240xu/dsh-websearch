@@ -67,9 +67,17 @@ test("parseExaResult: human-readable text blocks → sources", () => {
   assert.equal(got[0].url, "https://nodejs.org");
   assert.equal(got[0].title, "Node.js 24");
   assert.equal(got[0].publishedAt, "2025-04-22");
-  assert.equal(got[0].snippet, "Faster startup … New fetch");
+  assert.equal(got[0].snippet, "Faster startup", "official Exa uses the first highlight");
   assert.equal(got[1].url, "https://deno.com");
   assert.equal(got[1].snippet, "One thing");
+});
+
+test("parseExaResult: accepts the Text single-block form", () => {
+  const got = parseExaResult({ content: [{ text: "Title: A\nURL: https://a.example\nText: one paragraph" }] }, 8);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].snippet, "one paragraph");
+  const multiline = parseExaResult({ content: [{ text: "Title: A\nURL: https://a.example\nText: line one\nline two" }] }, 8);
+  assert.equal(multiline[0].snippet, "line one\nline two");
 });
 
 test("parseExaResult: skips blocks without URL", () => {

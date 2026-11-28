@@ -165,6 +165,11 @@ test("invalidBaseURL allows https and private http only", () => {
   assert.match(String(invalidBaseURL("https://user:pass@search.example.com")), /credentials/);
   assert.match(String(invalidBaseURL("http://169.254.169.254/latest/meta-data/")), /link-local|https required/);
   assert.match(String(invalidBaseURL("ftp://search.example.com")), /https required/);
+  assert.match(String(invalidBaseURL("https://metadata.google.internal./")), /link-local/);
+  assert.match(String(invalidBaseURL("https://instance-data./")), /link-local/);
+  assert.match(String(invalidBaseURL("https://[::]/")), /link-local/);
+  assert.match(String(invalidBaseURL("https://metadata.google.internal../")), /link-local/);
+  assert.match(String(invalidBaseURL("https://[::ffff:0:0]/")), /link-local/);
 });
 
 test("credentials in upstream failures are redacted before log/health/telemetry", () => {
@@ -173,6 +178,10 @@ test("credentials in upstream failures are redacted before log/health/telemetry"
   assert.equal(/SECRET123456|SECRET789/.test(sanitizeError(raw)), false);
   assert.match(sanitizeError(raw), /\[redacted\]/);
   assert.match(sanitizeError("Bearer abcdefghijklmnop"), /\[redacted\]/);
+  const opaque = "key rejected: 0123456789abcdef0123456789abcdef";
+  assert.equal(/0123456789abcdef/.test(sanitizeError(opaque)), false, "prefixless high-entropy keys are redacted");
+  const mixed = "bad key A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0";
+  assert.equal(/A1b2C3d4E5f6/.test(sanitizeError(mixed)), false, "40-char mixed-case keys are redacted");
 });
 
 test("DDG parser accepts class-after-href and never borrows the next result's snippet", () => {
