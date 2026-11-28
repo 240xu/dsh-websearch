@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.13.20 - 2026-11-28
+
+- UX: tier draft-drop notice, 240px wrapping, h4 hierarchy, toggle error outside
+  label, one save-model hint, empty-Save feedback, partial-save live region,
+  refresh-failure preservation, credential-read retry, unavailable discard.
+- Dark slider thumb ring; 0%/100% tick inset; disabled switch affordance.
+- Optimization: shared telemetry renderer, MCP 60s per-RPC deadline, provider
+  ready(), ISO publishedAt normalization.
+- Tests: 296.
 ## 2.13.19 - 2026-11-28
 
 - Cache: resolveOptions now owns the result-affecting key field list

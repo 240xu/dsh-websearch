@@ -1407,7 +1407,7 @@ index 88dc8c3..9f58ec5 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..ed51f7f 100644
+index 783cbe6..e6fc79c 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,36 @@ window.__ModuleLoader__.load({
@@ -1492,7 +1492,7 @@ index 783cbe6..ed51f7f 100644
  			getKey: "获取 Key ↗",
 -			keyHint: "填入后保存到凭证库（对应环境变量引用）；留空表示不修改",
 +			// the switch is immediate, the key needs Save.
-+			keySaveModeHint: "开关即时生效；密钥填写后需点「保存」写入凭证库",
++			saveModelHint: "后端开关即时生效；密钥与其余字段点「保存」后生效",
  			keySet: "已配置",
  			keyUnset: "未配置",
 +			keyChecking: "检查中…",
@@ -1507,7 +1507,7 @@ index 783cbe6..ed51f7f 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +135,69 @@ window.__ModuleLoader__.load({
+@@ -90,22 +135,73 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1526,6 +1526,10 @@ index 783cbe6..ed51f7f 100644
 +			clearOverride: "清除覆盖",
 +			overrideClearing: "清除中…",
 +			overrideFailed: "清除覆盖失败",
++			draftsDropped: "已丢弃 {n} 项在当前档位不生效的修改",
++			credentialsReadFailed: "{n} 个密钥状态读取失败",
++			refreshFailed: "刷新失败，显示的是上次成功加载的设置",
++			retryCredentials: "重新读取",
 +			legacyBatchHint: "此 Host 不支持批量保存：字段逐个写入，中途失败时前面的字段可能已生效。",
 +			savePartial: "已保存 {n} 个字段，其余失败",
  			invalidFields: "以下字段未通过校验：",
@@ -1534,11 +1538,11 @@ index 783cbe6..ed51f7f 100644
 +			interventionLabel: "搜索介入程度",
 +			interventionOfficial: "官方（原样查询，不加结果头/遥测）",
 +			interventionBalanced: "平衡（确定性去噪 + 去重/遥测，默认）",
-+			interventionThorough: "彻底（相关性重排 + 深度覆盖）",
++			interventionThorough: "彻底（相关性重排 + 深度覆盖；延迟与额度消耗更高）",
 +			interventionOfficialShort: "官方",
 +			interventionBalancedShort: "平衡",
 +			interventionThoroughShort: "彻底",
-+			interventionHint: "official 把查询与结果呈现完全交给官方工具；balanced 只剥明确的口语前缀；thorough 会重排并扩大后端请求，延迟与额度消耗更高。内部多查询仍是独立开关。",
++			tierControlled: "受当前介入档控制",
 +			officialHint: "官方档会覆盖：结果条数、相关性重排、结果健康遥测、引用提示头；同时关闭内部多查询与深度覆盖。这些在你离开 official 前不生效。",
 +			thoroughHint: "彻底档会强制开启相关性重排与深度覆盖；这里的“相关性重排”控件不生效。",
 +			unavailable: "设置暂不可用：宿主没有返回配置快照（服务未就绪或路由未挂载）。",
@@ -1580,13 +1584,13 @@ index 783cbe6..ed51f7f 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +208,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +212,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
 -			keyHint: "Stored into the credential store on save; leave blank to keep current",
 +			// the switch is immediate, the key needs Save.
-+			keySaveModeHint: "The switch applies immediately; the key is written to the credential store when you press Save",
++			saveModelHint: "Backend switches apply immediately; keys and every other field apply on Save",
  			keySet: "configured",
  			keyUnset: "not set",
 +			keyChecking: "Checking…",
@@ -1601,7 +1605,7 @@ index 783cbe6..ed51f7f 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +240,43 @@ window.__ModuleLoader__.load({
+@@ -142,15 +244,47 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1620,6 +1624,10 @@ index 783cbe6..ed51f7f 100644
 +			clearOverride: "Clear override",
 +			overrideClearing: "Clearing…",
 +			overrideFailed: "Could not clear override",
++			draftsDropped: "Discarded {n} edit(s) that do not apply in the current tier",
++			credentialsReadFailed: "{n} key status read(s) failed",
++			refreshFailed: "Refresh failed; showing the last successfully loaded settings",
++			retryCredentials: "Read again",
 +			legacyBatchHint: "This host has no batch save: fields are written one by one, so earlier fields may apply if a later write fails.",
 +			savePartial: "{n} field(s) saved before the failure",
  			invalidFields: "Fields failed validation:",
@@ -1628,11 +1636,11 @@ index 783cbe6..ed51f7f 100644
 +			interventionLabel: "Search intervention",
 +			interventionOfficial: "Official (raw query, no header/telemetry)",
 +			interventionBalanced: "Balanced (deterministic cleanup + dedupe/telemetry, default)",
-+			interventionThorough: "Thorough (relevance rerank + deep coverage)",
++			interventionThorough: "Thorough (relevance rerank + deep coverage; higher latency and quota use)",
 +			interventionOfficialShort: "Official",
 +			interventionBalancedShort: "Balanced",
 +			interventionThoroughShort: "Thorough",
-+			interventionHint: "official leaves query construction and presentation to the host tool; balanced strips only explicit conversational prefixes; thorough reranks and widens backend requests, costing more latency and quota. Internal multi-query stays a separate opt-in.",
++			tierControlled: "Controlled by the current intervention tier",
 +			officialHint: "Official also overrides Results, Relevance rerank, Result health telemetry and Citation header, and turns off internal multi-query and deep coverage; none of them take effect until you leave official.",
 +			thoroughHint: "Thorough forces relevance rerank and deep coverage; the Relevance rerank control has no effect in this tier.",
 +			unavailable: "Settings are unavailable: the host returned no configuration snapshot (service not ready or route not mounted).",
@@ -1644,15 +1652,16 @@ index 783cbe6..ed51f7f 100644
  
  		//#region styles
 -		const css = ".wsc-card{display:flex;flex-direction:column;gap:14px}.wsc-sectionTitle{font-size:13px;font-weight:600;opacity:.75;margin:4px 0 0}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-subtle);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0}.wsc-toggle input{accent-color:var(--dsw-alias-accent-primary)}.wsc-input,.wsc-keyInput{box-sizing:border-box;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-subtle);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;font-family:inherit}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:12px;opacity:.8}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-subtle)}.wsc-badgeOn{color:var(--dsw-alias-accent-primary);border-color:var(--dsw-alias-accent-primary)}.wsc-hint{font-size:11px;opacity:.55;margin:3px 0 0}.wsc-actions{display:flex;gap:8px;align-items:center}.wsc-btn{cursor:pointer;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-family:inherit;background:var(--dsw-alias-accent-primary);color:#fff}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-subtle)}.wsc-btn:disabled{opacity:.5;cursor:default}.wsc-status{font-size:12px;opacity:.7}";
-+		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}.wsc-slider{position:relative;grid-column:1/-1;display:flex;flex-direction:column;gap:2px;padding:4px 0 2px;--wsc-progress:50%}.wsc-sliderTrack{position:relative;height:8px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3)}.wsc-sliderFill{position:absolute;inset:0 auto 0 0;width:var(--wsc-progress);border-radius:inherit;background:var(--dsw-alias-state-business-primary);transition:width .12s}.wsc-sliderThumb{position:absolute;top:50%;left:clamp(9px,var(--wsc-progress),calc(100% - 9px));width:18px;height:18px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:50%;corner-shape:round;background:var(--dsw-alias-switch-thumb);transform:translate(-50%,-50%);pointer-events:none;transition:left .12s}.wsc-sliderTicks{position:relative;height:4px;margin-top:3px}.wsc-sliderTick{position:absolute;top:0;width:4px;height:4px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-tertiary);transform:translateX(-50%)}.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(3){background:var(--dsw-alias-state-business-primary)}.wsc-sliderLabels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:3px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.wsc-sliderLabel{border:0;background:0 0;padding:0;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}.wsc-sliderLabel:nth-child(2){text-align:center}.wsc-sliderLabel:nth-child(3){text-align:end}.wsc-slider[data-index=\"0\"] .wsc-sliderLabel:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderLabel:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderLabel:nth-child(3){color:var(--dsw-alias-label-primary);font-weight:500}.wsc-sliderInput{position:absolute;z-index:2;inset:0 0 auto;width:100%;height:24px;margin:0;opacity:0;cursor:pointer}.wsc-sliderInput:disabled{cursor:default}.wsc-slider:has(.wsc-sliderInput:focus-visible){outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:var(--dsw-radius-md)}.wsc-slider:has(.wsc-sliderInput:disabled){opacity:.5}@media (prefers-reduced-motion:reduce){.wsc-sliderFill,.wsc-sliderThumb{transition:none}}";
++		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggleWrap{display:flex;flex-direction:column;gap:2px}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-toggle:has(input:disabled){cursor:default;opacity:.6}@media (hover:hover){.wsc-toggle:has(input:disabled):hover{background:transparent}}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{flex-wrap:wrap;row-gap:6px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px;flex:1 1 200px;min-width:0}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;flex-wrap:wrap;row-gap:8px;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}.wsc-slider{position:relative;grid-column:1/-1;display:flex;flex-direction:column;gap:2px;padding:4px 0 2px;--wsc-progress:50%}.wsc-sliderTrack{position:relative;height:8px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3)}.wsc-sliderFill{position:absolute;inset:0 auto 0 0;width:var(--wsc-progress);border-radius:inherit;background:var(--dsw-alias-state-business-primary);transition:width .12s}.wsc-sliderThumb{position:absolute;top:50%;left:clamp(9px,var(--wsc-progress),calc(100% - 9px));width:18px;height:18px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:50%;corner-shape:round;background:var(--dsw-alias-switch-thumb);transform:translate(-50%,-50%);pointer-events:none;box-shadow:0 0 0 2px var(--dsw-alias-bg-layer-2);transition:left .12s}.wsc-sliderTicks{position:relative;height:4px;margin-top:3px}.wsc-sliderTick{position:absolute;top:0;width:4px;height:4px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-tertiary);transform:translateX(-50%)}.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(3){background:var(--dsw-alias-state-business-primary)}.wsc-slider[data-index=\"0\"] .wsc-sliderTick:nth-child(1){background:var(--dsw-alias-state-business-primary)}.wsc-sliderLabels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:3px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.wsc-sliderLabel{border:0;background:0 0;padding:0;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}.wsc-slider:has(.wsc-sliderInput:disabled) .wsc-sliderLabel{cursor:default}@media (hover:hover){.wsc-sliderLabel:not(:disabled):hover{color:var(--dsw-alias-label-primary)}}.wsc-sliderLabel:nth-child(2){text-align:center}.wsc-sliderLabel:nth-child(3){text-align:end}.wsc-slider[data-index=\"0\"] .wsc-sliderLabel:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderLabel:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderLabel:nth-child(3){color:var(--dsw-alias-label-primary);font-weight:500}.wsc-sliderInput{position:absolute;z-index:2;inset:0 0 auto;width:100%;height:24px;margin:0;opacity:0;cursor:pointer}.wsc-sliderInput:disabled{cursor:default}.wsc-slider:has(.wsc-sliderInput:focus-visible){outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:var(--dsw-radius-md)}.wsc-slider:has(.wsc-sliderInput:disabled){opacity:.5}@media (prefers-reduced-motion:reduce){.wsc-sliderFill,.wsc-sliderThumb{transition:none}}";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +314,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +322,70 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
 +					unavailable: false,
++					refreshFailed: false,
 +					reason: undefined,
  				});
 +				// Serialise writes: a queued write must read the revision only
@@ -1674,8 +1683,21 @@ index 783cbe6..ed51f7f 100644
 -					// explains itself instead of showing an endless loading ellipsis.
 -					this.store.set({ status: "ready", writable: false, value: {}, base: undefined, user: undefined, revision: undefined, mode: "routes" });
 +				if (payload === null || typeof payload !== "object" || payload.ok !== true) {
-+					// Keep the card rendered (status ready) but explain the actual state:
-+					// a 404/503 is "settings unavailable", not "you configured nothing".
++					// A failed refresh after a good snapshot must not blank the
++					// form and hide the user's drafts. Only the first load has no
++					// data to keep, so only it becomes the unavailable state.
++					const prev = this.store.getSnapshot();
++					const hadSnapshot = prev.status === "ready" && prev.unavailable !== true;
++					if (hadSnapshot) {
++						this.store.set({
++							...prev,
++							refreshFailed: true,
++							reason: payload !== null && typeof payload === "object" && typeof payload.reason === "string"
++								? payload.reason
++								: "settings-refresh-failed",
++						});
++						return;
++					}
 +					this.store.set({
 +						status: "ready",
 +						writable: false,
@@ -1685,6 +1707,7 @@ index 783cbe6..ed51f7f 100644
 +						revision: undefined,
 +						mode: "routes",
 +						unavailable: true,
++						refreshFailed: false,
 +						reason: payload !== null && typeof payload === "object" && typeof payload.reason === "string"
 +							? payload.reason
 +							: "settings-unavailable",
@@ -1702,16 +1725,18 @@ index 783cbe6..ed51f7f 100644
 +						revision: payload.revision,
 +						mode: "routes",
 +						unavailable: false,
++						refreshFailed: false,
 +						reason: payload.reason,
 +					});
  					return;
  				}
  				this.store.set({
-@@ -209,20 +372,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +396,32 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
 +					unavailable: false,
++					refreshFailed: false,
 +					reason: undefined,
  				});
  			}
@@ -1744,7 +1769,7 @@ index 783cbe6..ed51f7f 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +410,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +435,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1772,7 +1797,7 @@ index 783cbe6..ed51f7f 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +442,30 @@ window.__ModuleLoader__.load({
+@@ -258,11 +467,32 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1785,6 +1810,8 @@ index 783cbe6..ed51f7f 100644
 +				this.overrideFailed = false;
 +				this.legacyBatch = typeof scope.setMany !== "function";
 +				this.partialApplied = 0;
++				this.droppedDrafts = 0;
++				this.focusRequest = 0;
 +				// Per-backend write sequence: a slow failure must not overwrite
 +				// the result of a newer click for the same toggle.
 +				this.toggleSeq = new Map();
@@ -1804,7 +1831,7 @@ index 783cbe6..ed51f7f 100644
  			}
  
  			sectionValue(field) {
-@@ -276,15 +479,31 @@ window.__ModuleLoader__.load({
+@@ -276,15 +506,34 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1821,6 +1848,7 @@ index 783cbe6..ed51f7f 100644
  					ready: snap.status === "ready",
  					writable: snap.writable,
 +					unavailable: snap.unavailable === true,
++					refreshFailed: snap.refreshFailed === true,
 +					reason: snap.reason,
 +					revision: snap.revision,
  					value: snap.value ?? {},
@@ -1829,6 +1857,8 @@ index 783cbe6..ed51f7f 100644
 +					overrideFailed: this.overrideFailed,
 +					legacyBatch: this.legacyBatch,
 +					partialApplied: this.partialApplied,
++					droppedDrafts: this.droppedDrafts,
++					focusRequest: this.focusRequest,
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
  					stagedCount: this.staged.size + this.stagedKeys.size,
@@ -1836,7 +1866,7 @@ index 783cbe6..ed51f7f 100644
  					savedAt: this.savedAt,
  					stagedText: (field) => {
  						const s = this.staged.get(field);
-@@ -292,59 +511,231 @@ window.__ModuleLoader__.load({
+@@ -292,59 +541,240 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1866,16 +1896,16 @@ index 783cbe6..ed51f7f 100644
 +				this.dropTierDrafts({ intervention: tier });
 +				this.store.set(this.projection());
 +			}
- 
--			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
--			reset(field) { this.staged.delete(field); this.republish(); }
--			editKey(envRef, text) { this.savedAt = 0; this.stagedKeys.set(envRef, { text }); this.republish(); }
++
 +			/** Detach from the host scope; late responses must not publish. */
 +			dispose() {
 +				this.disposed = true;
 +				if (typeof this.unsubscribe === "function") this.unsubscribe();
 +			}
-+
+ 
+-			edit(field, text) { this.savedAt = 0; this.staged.set(field, { text }); this.republish(); }
+-			reset(field) { this.staged.delete(field); this.republish(); }
+-			editKey(envRef, text) { this.savedAt = 0; this.stagedKeys.set(envRef, { text }); this.republish(); }
 +			/** Re-read the settings snapshot (used by the unavailable-state retry). */
 +			reload() {
 +				return typeof this.scope.load === "function" ? this.scope.load() : undefined;
@@ -1894,10 +1924,12 @@ index 783cbe6..ed51f7f 100644
 +					: tier === "thorough" ? THOROUGH_IGNORED_FIELDS : [];
 +				if (ignoredFields.length === 0) return false;
 +				let changed = false;
++				let dropped = 0;
 +				for (const ignored of ignoredFields) {
-+					if (this.staged.delete(ignored)) changed = true;
++					if (this.staged.delete(ignored)) { changed = true; dropped += 1; }
 +					if (this.failedFields.delete(ignored)) changed = true;
 +				}
++				if (dropped > 0) this.droppedDrafts = dropped;
 +				// The status strip must not keep saying "invalid fields" when
 +				// the only invalid drafts were the ones just dropped.
 +				if (changed && this.failedFields.size === 0) this.failed = false;
@@ -1919,6 +1951,7 @@ index 783cbe6..ed51f7f 100644
 +			edit(field, text) {
 +				// A revert to a saved official/thorough value must still drop
 +				// the drafts that tier overrides.
++				if (field !== "intervention") this.droppedDrafts = 0;
 +				const dropped = field === "intervention"
 +					? this.dropTierDrafts({ intervention: String(text) })
 +					: false;
@@ -1926,7 +1959,13 @@ index 783cbe6..ed51f7f 100644
 +				const committed = String(this.sectionValue(field) ?? "");
 +				if (String(text) === committed) {
 +					// Reverting to the stored value is not a pending write.
-+					if (this.staged.delete(field) || dropped || clearedFailure) this.republish();
++					const changed = this.staged.delete(field) || dropped || clearedFailure;
++					if (this.staged.size === 0 && this.stagedKeys.size === 0 && this.conflict) {
++						this.conflict = false;
++						this.republish();
++						return;
++					}
++					if (changed) this.republish();
 +					return;
 +				}
 +				this.savedAt = 0;
@@ -2090,7 +2129,7 @@ index 783cbe6..ed51f7f 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,73 +745,168 @@ window.__ModuleLoader__.load({
+@@ -354,73 +784,179 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2102,10 +2141,19 @@ index 783cbe6..ed51f7f 100644
 +			 * as if it had been saved. A second call while one is running is a no-op.
 +			 */
  			async save() {
--				if (this.saving) return;
-+				if (this.saving || (this.staged.size === 0 && this.stagedKeys.size === 0)) return;
+ 				if (this.saving) return;
++				if (this.staged.size === 0 && this.stagedKeys.size === 0) {
++					// There is nothing to write, but a click on Save must not look
++					// like a dead control. Keep the action bar focusable and show
++					// the same saved acknowledgement.
++					this.savedAt = Date.now();
++					this.conflict = false;
++					if (this.failedFields.size === 0 && this.failedKeys.size === 0) this.failed = false;
++					this.republish();
++					return;
++				}
  				this.saving = true; this.failed = false;
-+				this.partialApplied = 0;
++				this.partialApplied = 0; this.droppedDrafts = 0;
  			this.conflict = false; this.failedFields.clear(); this.republish();
  				const doneFields = [];
  				const doneKeys = [];
@@ -2163,20 +2211,21 @@ index 783cbe6..ed51f7f 100644
 -							doneFields.push(field);
 +							if (!Number.isInteger(num) || num < lo || num > hi || num % (STEP[field] ?? 1) !== 0) { this.failed = true; this.failedFields.add(field); continue; }
 +							fieldOps.push({ op: "set", path: [field], value: num }); fieldOpNames.push(field);
-+						} else {
+ 						} else {
+-							await this.scope.set(field, staged.text);
+-							doneFields.push(field);
 +							fieldOps.push({ op: "set", path: [field], value: staged.text }); fieldOpNames.push(field);
-+						}
-+					}
+ 						}
+ 					}
 +					if (this.failedFields.size > 0) {
 +						// All-or-nothing: never half-commit a Save the card reports as failed.
++						this.focusRequest += 1;
 +						this.saving = false; this.republish(); return;
 +					}
 +					if (fieldOps.length > 0) {
 +						if (typeof this.scope.setMany === "function") {
 +							await this.scope.setMany(fieldOps);
- 						} else {
--							await this.scope.set(field, staged.text);
--							doneFields.push(field);
++						} else {
 +							let applied = 0;
 +							try {
 +								for (const op of fieldOps) {
@@ -2194,9 +2243,9 @@ index 783cbe6..ed51f7f 100644
 +								}
 +								throw err;
 +							}
- 						}
++						}
 +						doneFields.push(...fieldOpNames);
- 					}
++					}
  					for (const [ref, staged] of this.stagedKeys) {
 +						// Snapshot before any await, same reason as the field loop.
 +						savedKeyRefs.set(ref, staged);
@@ -2238,7 +2287,7 @@ index 783cbe6..ed51f7f 100644
 +					// A server-side schema 400 names the field; attribute it so
 +					// the card can mark the offending control.
 +					const named = /(?:invalid value for|unknown settings field) "([^"]+)"/.exec(String(err));
-+					if (named !== null) this.failedFields.add(named[1]);
++					if (named !== null) { this.failedFields.add(named[1]); this.focusRequest += 1; }
  					this.conflict = String(err).includes("SETTINGS_CONFLICT");
 +					// Without a reload the stale expectedRevision makes every
 +					// subsequent Save fail the same way. Staged edits survive, so
@@ -2277,14 +2326,15 @@ index 783cbe6..ed51f7f 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +917,14 @@ window.__ModuleLoader__.load({
+@@ -431,12 +967,15 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
 -					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedKeys.clear(); this.republish(); },
 +					retry: () => this.reload(),
++					retryCredentials: () => this.refreshAllCredentials(),
 +					clearOverride: () => this.clearOverride(),
-+					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedFields.clear(); this.failedKeys.clear(); this.partialApplied = 0; this.republish(); },
++					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedFields.clear(); this.failedKeys.clear(); this.partialApplied = 0; this.droppedDrafts = 0; this.republish(); },
  				};
  			}
  		}
@@ -2294,26 +2344,29 @@ index 783cbe6..ed51f7f 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +932,89 @@ window.__ModuleLoader__.load({
+@@ -444,16 +983,92 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
 -			const dotColor = needsKey ? (checked ? "#e6a700" : "#888") : "#2ea043";
+-			return react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }, children: [
 +			const dotClass = "wsc-dot " + (needsKey ? (checked ? "wsc-dotWarn" : "wsc-dotOff") : "wsc-dotOn");
- 			return react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }, children: [
- 				react_jsx_runtime.jsx("input", {
- 					type: "checkbox",
- 					checked,
-+					disabled: props.disabled === true,
-+					"aria-describedby": props.describedBy,
- 					onChange: (e) => props.onChange(e.target.checked),
- 				}),
--				react_jsx_runtime.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, display: "inline-block" } }),
--				react_jsx_runtime.jsx("span", { children: b.label }),
-+				react_jsx_runtime.jsx("span", { className: dotClass }),
-+				react_jsx_runtime.jsx("span", { children: props.t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
- 				needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
-+				props.toggleError && react_jsx_runtime.jsx("span", { className: "wsc-hint wsc-error", children: props.t("toggleFailed") }),
++			const errorId = "wsc-toggle-error-" + b.id;
++			const describedBy = [props.describedBy, props.toggleError ? errorId : undefined].filter(Boolean).join(" ") || undefined;
++			return react_jsx_runtime.jsxs("div", { className: "wsc-toggleWrap", children: [
++				react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }, children: [
++					react_jsx_runtime.jsx("input", {
++						type: "checkbox",
++						checked,
++						disabled: props.disabled === true,
++						"aria-describedby": describedBy,
++						onChange: (e) => props.onChange(e.target.checked),
++					}),
++					react_jsx_runtime.jsx("span", { className: dotClass }),
++					react_jsx_runtime.jsx("span", { children: props.t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
++					needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
++				] }),
++				props.toggleError && react_jsx_runtime.jsx("span", { id: errorId, role: "status", className: "wsc-hint wsc-error", children: props.t("toggleFailed") }),
 +			] });
 +		}
 +
@@ -2353,17 +2406,16 @@ index 783cbe6..ed51f7f 100644
 +			const locked = readOnly || props.locked === true;
 +			// failedKeys is an array of { ref, reason }, NOT an array of strings.
 +			const failure = (state.failedKeys ?? []).find((f) => f && f.ref === b.keyEnv);
-+			const readFailure = (state.readErrors ?? []).find((f) => f && f.ref === b.keyEnv);
 +			const needsKey = !status.unknown && !configured;
 +			const dotClass = "wsc-dot " + (status.unknown ? "wsc-dotOff" : needsKey ? (checked ? "wsc-dotWarn" : "wsc-dotOff") : "wsc-dotOn");
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-keyCard", style: { display: "flex", flexDirection: "column", gap: 6, padding: "9px 10px" }, children: [
 +				react_jsx_runtime.jsxs("label", { className: "wsc-toggle", style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: 0, border: "none", borderRadius: "var(--dsw-radius-sm)" }, children: [
-+					react_jsx_runtime.jsx("input", { type: "checkbox", checked, disabled: props.disabled === true, "aria-describedby": props.describedBy, onChange: (e) => props.onToggle(e.target.checked) }),
++					react_jsx_runtime.jsx("input", { type: "checkbox", checked, disabled: props.disabled === true, "aria-describedby": [props.describedBy, props.toggleError ? "wsc-toggle-error-" + b.id : undefined].filter(Boolean).join(" ") || undefined, onChange: (e) => props.onToggle(e.target.checked) }),
 +					react_jsx_runtime.jsx("span", { className: dotClass }),
 +					react_jsx_runtime.jsx("span", { children: props.t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
 +					needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
 +				] }),
-+				props.toggleError && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", children: props.t("toggleFailed") }),
++				props.toggleError && react_jsx_runtime.jsx("p", { id: "wsc-toggle-error-" + b.id, role: "status", className: "wsc-hint wsc-error", children: props.t("toggleFailed") }),
 +				react_jsx_runtime.jsxs("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }, children: [
 +					react_jsx_runtime.jsx("span", { className: "wsc-badge" + (status.on ? " wsc-badgeOn" : ""), children: status.text }),
 +					readOnly && react_jsx_runtime.jsx("span", { className: "wsc-badge", children: props.t("envProvided") }),
@@ -2373,21 +2425,27 @@ index 783cbe6..ed51f7f 100644
 +						children: props.t("getKey"),
 +					}),
 +				] }),
-+				react_jsx_runtime.jsx("input", {
+ 				react_jsx_runtime.jsx("input", {
+-					type: "checkbox",
+-					checked,
+-					onChange: (e) => props.onChange(e.target.checked),
 +					className: "wsc-keyInput", type: "password", autoComplete: "off",
 +					"aria-label": props.t("keyLabel", { id: props.t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
++					"aria-describedby": failure ? "wsc-key-error-" + b.keyEnv : undefined,
 +					disabled: locked,
 +					placeholder: locked ? props.t("readOnly") : b.keyEnv,
 +					value: state.stagedKeys[b.keyEnv] ?? "",
 +					onChange: (e) => props.onEditKey(b.keyEnv, e.target.value),
-+				}),
-+				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keySaveModeHint") }),
+ 				}),
+-				react_jsx_runtime.jsx("span", { style: { width: 8, height: 8, borderRadius: "50%", background: dotColor, display: "inline-block" } }),
+-				react_jsx_runtime.jsx("span", { children: b.label }),
+-				needsKey && checked && react_jsx_runtime.jsx("span", { style: { fontSize: 10, opacity: .65 }, children: props.t("keyMissing") }),
++
 +				failure && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", children: props.t("keyFailed") + (failure.reason ? ": " + failure.reason : "") }),
-+				readFailure && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-warn", children: props.t("keyReadFailed") }),
  			] });
  		}
  
-@@ -463,6 +1024,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +1078,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2397,7 +2455,7 @@ index 783cbe6..ed51f7f 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -472,170 +1036,425 @@ window.__ModuleLoader__.load({
+@@ -472,171 +1090,442 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -2545,7 +2603,7 @@ index 783cbe6..ed51f7f 100644
 +						onBlur: (e) => commit(e.currentTarget),
 +					}),
 +					react_jsx_runtime.jsx("div", { className: "wsc-sliderTicks", "aria-hidden": "true", children: tiers.map((tier, i) =>
-+						react_jsx_runtime.jsx("span", { className: "wsc-sliderTick", style: { left: (i / span) * 100 + "%" } }, tier)
++						react_jsx_runtime.jsx("span", { className: "wsc-sliderTick", style: { left: i === 0 ? 2 : i === span ? "calc(100% - 2px)" : (i / span) * 100 + "%" } }, tier)
 +					) }),
 +					react_jsx_runtime.jsx("div", { className: "wsc-sliderLabels", "aria-hidden": "true", children: labels.map((label, i) =>
 +						react_jsx_runtime.jsx("button", {
@@ -2576,7 +2634,7 @@ index 783cbe6..ed51f7f 100644
 +		 * @param {object} props { state, enabledCount, keysReady, t }
 +		 */
 +		function StatusSummary(props) {
-+			const { state, enabledCount, keysReady, hasOverride, overrideSource, overrideClearing, overrideFailed, onClearOverride, t } = props;
++			const { state, enabledCount, keysReady, hasOverride, overrideSource, overrideClearing, overrideFailed, onClearOverride, onRetryCredentials, onRetryLoad, t } = props;
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
 +				react_jsx_runtime.jsx("div", { className: "wsc-strip", style: { display: "flex", gap: 14, alignItems: "center", padding: "10px 12px" }, children: [
 +					react_jsx_runtime.jsxs("span", { children: [t("statusEnabled"), ": ", react_jsx_runtime.jsx("b", { children: enabledCount + "/" + BACKENDS.length })] }),
@@ -2585,7 +2643,20 @@ index 783cbe6..ed51f7f 100644
 +						t("statusMetered"), ": ", METERED.length, " ", t("statusOffByDefault"),
 +					] }),
 +				] }),
++				state.refreshFailed && react_jsx_runtime.jsxs("div", { role: "status", "aria-live": "polite", className: "wsc-warn", style: { margin: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }, children: [
++					react_jsx_runtime.jsx("span", { children: t("refreshFailed") }),
++					react_jsx_runtime.jsx("button", { type: "button", className: "wsc-btn wsc-btnGhost", style: { height: 26, padding: "0 8px", fontSize: 11 }, onClick: () => onRetryLoad(), children: t("retry") }),
++				] }),
 +				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: t("description") }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: t("saveModelHint") }),
++				state.readErrors.length > 0 && react_jsx_runtime.jsxs("div", { role: "status", "aria-live": "polite", className: "wsc-warn", style: { margin: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }, children: [
++					react_jsx_runtime.jsx("span", { children: t("credentialsReadFailed", { n: state.readErrors.length }) }),
++					react_jsx_runtime.jsx("button", { type: "button", className: "wsc-btn wsc-btnGhost", style: { height: 26, padding: "0 8px", fontSize: 11 }, onClick: () => onRetryCredentials(), children: t("retryCredentials") }),
+ 				] }),
+-				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: props.t("description") }),
+-				(enabledCount === 0) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("fallbackHint") }),
+-				(state.writable === false) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("readOnlyScope") }),
+-				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupFree") }),
 +				hasOverride && react_jsx_runtime.jsxs("div", { id: "wsc-override-hint", className: "wsc-warn", style: { margin: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }, children: [
 +					react_jsx_runtime.jsx("span", { children: overrideSource === "base" ? t("overrideBaseHint") : t("overrideHint") }),
 +					overrideSource === "user" && react_jsx_runtime.jsx("button", {
@@ -2595,11 +2666,7 @@ index 783cbe6..ed51f7f 100644
 +						children: overrideClearing ? t("overrideClearing") : t("clearOverride"),
 +					}),
 +					overrideFailed && react_jsx_runtime.jsx("span", { className: "wsc-error", role: "status", "aria-live": "polite", children: t("overrideFailed") }),
- 				] }),
--				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: props.t("description") }),
--				(enabledCount === 0) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("fallbackHint") }),
--				(state.writable === false) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("readOnlyScope") }),
--				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupFree") }),
++				] }),
 +				(!hasOverride && enabledCount === 0) && react_jsx_runtime.jsx("p", { className: "wsc-warn", style: { margin: 0, fontSize: 12 }, children: t("fallbackHint") }),
 +				(state.writable === false) && react_jsx_runtime.jsx("p", { className: "wsc-warn", style: { margin: 0, fontSize: 12 }, children: t("readOnlyScope") }),
 +			] });
@@ -2615,7 +2682,7 @@ index 783cbe6..ed51f7f 100644
 +			const { state, card, toggleField, overridden, overrideIds, t } = props;
 +			const toggleValue = (id) => overridden ? overrideIds.includes(id) : state.value[toggleField(id)];
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
-+				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: t("groupFree") }),
++				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("groupFree") }),
  				react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: KEYLESS.map((b) =>
  					react_jsx_runtime.jsx(ToggleRow, {
  						backend: b,
@@ -2633,7 +2700,7 @@ index 783cbe6..ed51f7f 100644
 -				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupKeyed") }),
 -				react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: KEYED.map((b) =>
 -					react_jsx_runtime.jsx(ToggleRow, {
-+				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: t("groupKeyed") }),
++				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("groupKeyed") }),
 +				// The switch and the credential input are one card per backend.
 +				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: KEYED.map((b) =>
 +					react_jsx_runtime.jsx(KeyedBackendCard, {
@@ -2654,7 +2721,7 @@ index 783cbe6..ed51f7f 100644
  				) }),
 -				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("globalsTitle") }),
 +				METERED.length > 0 && react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
-+					react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: t("groupMetered") }),
++					react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("groupMetered") }),
 +					react_jsx_runtime.jsx("p", { style: { margin: "0 0 6px", fontSize: 11, opacity: .6 }, children: t("meteredHint") }),
 +					react_jsx_runtime.jsx("div", { className: "wsc-toggles", children: METERED.map((b) =>
 +						react_jsx_runtime.jsx(ToggleRow, {
@@ -2704,6 +2771,8 @@ index 783cbe6..ed51f7f 100644
 +				{ value: "false", label: t("off") },
 +			];
 +			const interventionTiers = SELECT_FIELDS.intervention;
++			const activeTier = selVal("intervention", "balanced");
++			const tierDescription = t("intervention" + String(activeTier).charAt(0).toUpperCase() + String(activeTier).slice(1));
 +			// Keep labels derived from the same ordered tier list the save
 +			// validator uses; reordering one must reorder the other.
 +			const interventionLabels = interventionTiers.map((tier) =>
@@ -2719,7 +2788,7 @@ index 783cbe6..ed51f7f 100644
 +					describedBy: "wsc-intervention-hint",
 +					onCommit: (tier) => card.edit("intervention", tier),
 +				}) }),
-+				react_jsx_runtime.jsx("p", { className: "wsc-hint", id: "wsc-intervention-hint", children: t("interventionHint") + (official ? " " + t("officialHint") : thorough ? " " + t("thoroughHint") : "") }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", id: "wsc-intervention-hint", children: tierDescription + (official ? " " + t("officialHint") : thorough ? " " + t("thoroughHint") : "") }),
 +				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("globalsTitle") }),
  				react_jsx_runtime.jsxs("div", { className: "wsc-grid", children: [
  					react_jsx_runtime.jsxs("div", { children: [
@@ -2749,6 +2818,7 @@ index 783cbe6..ed51f7f 100644
  				] }),
 -				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: props.t("shapingTitle") }),
 +				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("shapingTitle") }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: t("tierControlled") }),
  				react_jsx_runtime.jsxs("div", { className: "wsc-grid", children: [
 -					react_jsx_runtime.jsx(SelectField, {
 -						label: props.t("recencyLabel"),
@@ -2815,12 +2885,11 @@ index 783cbe6..ed51f7f 100644
 +		function OptionalKeysAndActions(props) {
 +			const { state, card, t } = props;
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
-+				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: t("optionalTitle") }),
++				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("optionalTitle") }),
 +				react_jsx_runtime.jsx("div", { className: "wsc-grid", children: OPTIONAL_KEYS.map((b) => {
 +					// failedKeys is [{ref, reason}], not a string array: the old
 +					// `.includes(b.keyEnv)` never matched, so failures stayed silent.
 +					const failure = (state.failedKeys ?? []).find((f) => f && f.ref === b.keyEnv);
-+					const readFailure = (state.readErrors ?? []).find((f) => f && f.ref === b.keyEnv);
 +					return react_jsx_runtime.jsxs("div", { children: [
  						react_jsx_runtime.jsxs("div", { className: "wsc-fieldHead", children: [
 -							react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.t("keyLabel", { id: b.id }) }),
@@ -2840,9 +2909,12 @@ index 783cbe6..ed51f7f 100644
  							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							disabled: state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false,
 -							placeholder: (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false) ? props.t("readOnly") : b.keyEnv,
--							value: state.stagedKeys[b.keyEnv] ?? "",
--							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
--						}),
++							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
++							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
++							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
+ 							value: state.stagedKeys[b.keyEnv] ?? "",
+ 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+ 						}),
 -						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keyHint") }),
 -						state.failedKeys.includes(b.keyEnv) && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") }),
 -					] }, b.id)
@@ -2854,23 +2926,18 @@ index 783cbe6..ed51f7f 100644
 -						react_jsx_runtime.jsx("input", {
 -							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							placeholder: b.keyEnv,
-+							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
-+							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
-+							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
- 							value: state.stagedKeys[b.keyEnv] ?? "",
- 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
- 						}),
+-							value: state.stagedKeys[b.keyEnv] ?? "",
+-							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+-						}),
 -					] }, b.id),
 -				) }),
 -				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .6 }, children: props.t("unsavedHint") }),
-+						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: t("keySaveModeHint") }),
-+						failure && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", children: t("keyFailed") + (failure.reason ? ": " + failure.reason : "") }),
-+						readFailure && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-warn", children: t("keyReadFailed") }),
++
++						failure && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", role: "status", "aria-live": "polite", children: t("keyFailed") + (failure.reason ? ": " + failure.reason : "") }),
 +					] }, b.id);
 +				}) }),
 +				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: t("unsavedHint") }),
 +				state.legacyBatch && state.stagedFieldCount > 1 && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-warn", children: t("legacyBatchHint") }),
-+				state.failed && state.partialApplied > 0 && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", children: t("savePartial", { n: state.partialApplied }) }),
  				react_jsx_runtime.jsxs("div", { className: "wsc-actions", children: [
 -					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.stagedCount === 0 || state.writable === false, onClick: () => card.save(), children: state.saving ? props.t("saving") : props.t("save") }),
 -					(state.stagedCount > 0) && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", onClick: () => card.discard(), children: props.t("discard") }),
@@ -2881,7 +2948,9 @@ index 783cbe6..ed51f7f 100644
 +					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.writable === false, onClick: () => card.save(), children: state.saving ? t("saving") : t("save") }),
 +					(state.stagedCount > 0) && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", disabled: state.saving, onClick: () => card.discard(), children: t("discard") }),
 +					react_jsx_runtime.jsxs("span", { className: "wsc-live", role: "status", "aria-live": "polite", children: [
-+						state.failed && !state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-error", children: t("saveFailed") }),
++						state.failed && !state.conflict && state.partialApplied === 0 && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-error", children: t("saveFailed") }),
++						state.partialApplied > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-error", children: t("savePartial", { n: state.partialApplied }) }),
++						state.droppedDrafts > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-warn", children: t("draftsDropped", { n: state.droppedDrafts }) }),
 +						state.toggleFailed && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-error", children: t("toggleFailed") + (state.toggleConflict ? " — " + t("conflict") : "") }),
 +						(state.failedFields.length > 0) && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-warn", children: t("invalidFields") + " " + state.failedFields.map((f) => t({ cacheTtl: "cacheTtlLabel", backendTimeoutMs: "timeoutLabel", numResults: "numResultsLabel", concurrency: "concurrencyLabel" }[f] ?? f)).join(", ") }),
 +						state.conflict && react_jsx_runtime.jsx("span", { className: "wsc-status wsc-warn", children: t("conflictHint") }),
@@ -2894,12 +2963,13 @@ index 783cbe6..ed51f7f 100644
 +
 +		function UnifiedSearchSection(props) {
 +			const state = props.useUnifiedSearchCard((snapshot) => snapshot);
-+			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard, retry: props.retry, clearOverride: props.clearOverride };
++			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard, retry: props.retry, clearOverride: props.clearOverride, retryCredentials: props.retryCredentials };
 +			react.useEffect(() => {
-+				if (!state.failedFields || state.failedFields.length === 0) return;
++				if (state.focusRequest <= 0) return;
++				if (!(state.failedFields?.length > 0)) return;
 +				if (typeof document === "undefined") return;
 +				document.querySelector('.wsc-input[aria-invalid="true"]')?.focus();
-+			}, [state.failedFields.join(",")]);
++			}, [state.focusRequest]);
 +			// Occupants of settings.plugin.item render inside the tab's <ul>; use <li>.
 +			if (!state.ready) {
 +				return react_jsx_runtime.jsx("div", { className: "wsc-card", style: { fontSize: 12, opacity: .6 }, role: "status", "aria-live": "polite", children: props.t("loading") });
@@ -2908,8 +2978,11 @@ index 783cbe6..ed51f7f 100644
 +			// controls would be a fabricated state. Explain it and offer a retry.
 +			if (state.unavailable) {
 +				return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
-+					react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .75 }, children: props.t("unavailable") }),
-+					react_jsx_runtime.jsx("div", { className: "wsc-actions wsc-actionsStatic", children: react_jsx_runtime.jsx("button", { className: "wsc-btn", onClick: () => props.retry(), children: props.t("retry") }) }),
++					react_jsx_runtime.jsx("p", { role: "status", "aria-live": "polite", style: { margin: 0, fontSize: 12, opacity: .75 }, children: props.t("unavailable") }),
++					react_jsx_runtime.jsxs("div", { className: "wsc-actions wsc-actionsStatic", children: [
++						react_jsx_runtime.jsx("button", { className: "wsc-btn", onClick: () => props.retry(), children: props.t("retry") }),
++						state.stagedCount > 0 && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", onClick: () => props.discard(), children: props.t("discard") }),
++					] }),
 +				] });
 +			}
 +
@@ -2939,7 +3012,8 @@ index 783cbe6..ed51f7f 100644
 +				react_jsx_runtime.jsx(StatusSummary, {
 +					state, enabledCount, hasOverride: overridden, keysReady,
 +					overrideSource, overrideClearing: state.overrideClearing,
-+					overrideFailed: state.overrideFailed, onClearOverride: () => card.clearOverride(), t: props.t,
++					overrideFailed: state.overrideFailed, onClearOverride: () => card.clearOverride(),
++					onRetryCredentials: () => card.retryCredentials(), onRetryLoad: () => card.retry(), t: props.t,
 +				}),
 +				// A read-only snapshot (scope locked by the host) must not render
 +				// live toggles: fieldset disabled disables every descendant input,
@@ -2947,11 +3021,12 @@ index 783cbe6..ed51f7f 100644
 +				react_jsx_runtime.jsxs("fieldset", { disabled: state.writable === false, style: { border: 0, margin: 0, padding: 0, minWidth: 0 }, children: [
 +					react_jsx_runtime.jsx(BackendToggles, { state, card, toggleField, overridden, overrideIds, t: props.t }),
 +					react_jsx_runtime.jsx(SettingsFields, { state, card, t: props.t }),
-+					react_jsx_runtime.jsx(OptionalKeysAndActions, { state, card, t: props.t }),
  				] }),
++				react_jsx_runtime.jsx(OptionalKeysAndActions, { state, card, t: props.t }),
  			] });
  		}
-@@ -646,7 +1465,12 @@ window.__ModuleLoader__.load({
+ 
+@@ -646,7 +1535,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2965,7 +3040,7 @@ index 783cbe6..ed51f7f 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1496,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1566,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2982,7 +3057,7 @@ index 783cbe6..ed51f7f 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1532,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1602,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -3886,10 +3961,10 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..e3e9b5c 100644
+index 7242a56..cb7b7ed 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
-@@ -12,10 +12,11 @@
+@@ -12,38 +12,42 @@
  // WEB_PROVIDER_ERROR.
  //
  // Concurrency control: limits simultaneous backend calls to opts.concurrency (default 6).
@@ -3903,7 +3978,10 @@ index 7242a56..e3e9b5c 100644
  import {
    recordBackendRequest,
    recordBackendOutcome,
-@@ -25,25 +26,27 @@ import { normalizeFilters } from "./util/filters.js";
+ } from "./util/log.js";
+ import { dedupeSources, rerankSources } from "./util/rank.js";
++import { isoPublishedAt } from "./util/time.js";
+ import { normalizeFilters } from "./util/filters.js";
  import { shapeQuery, resultHeader, TELEMETRY_TAG } from "./prompting.js";
  import { cacheKeyFor } from "./cache.js";
  import { foldBreaker, isCooled, cooledAnnotation } from "./breaker.js";
@@ -3939,7 +4017,7 @@ index 7242a56..e3e9b5c 100644
  };
  
  /** Effective per-backend timeout = min(override ?? ∞, global). Exported for tests. */
-@@ -70,14 +73,37 @@ export function getLatestBackendHealth() {
+@@ -70,14 +74,37 @@ export function getLatestBackendHealth() {
    return latestBackendHealth;
  }
  
@@ -3979,7 +4057,7 @@ index 7242a56..e3e9b5c 100644
    });
  }
  
-@@ -89,12 +115,42 @@ export function getBackendBreaker(id) {
+@@ -89,12 +116,42 @@ export function getBackendBreaker(id) {
    return e ? { failCount: e.failCount ?? 0, cooledUntil: e.cooledUntil ?? 0 } : { failCount: 0, cooledUntil: 0 };
  }
  
@@ -4022,7 +4100,7 @@ index 7242a56..e3e9b5c 100644
    const queue = [];
    let running = 0;
    
-@@ -104,7 +160,7 @@ export function createLimiter(concurrency) {
+@@ -104,7 +161,7 @@ export function createLimiter(concurrency) {
        process();
        
        function process() {
@@ -4031,7 +4109,7 @@ index 7242a56..e3e9b5c 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -131,7 +187,7 @@ export function createLimiter(concurrency) {
+@@ -131,7 +188,7 @@ export function createLimiter(concurrency) {
   * compromised or poisoned backends never reach model/GUI consumers.
   */
  function collectFanoutResults(results, eligible, signal) {
@@ -4040,7 +4118,7 @@ index 7242a56..e3e9b5c 100644
    let mergedContent;
    let hardAborted = false;
    let hardError = null;
-@@ -145,11 +201,15 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -145,11 +202,15 @@ function collectFanoutResults(results, eligible, signal) {
        if (mergedContent === undefined && typeof settled.value?.content === "string" && settled.value.content.length > 0) {
          mergedContent = settled.value.content;
        }
@@ -4058,7 +4136,7 @@ index 7242a56..e3e9b5c 100644
        if (err instanceof WebError && err.code === "WEB_ABORTED") {
          // Per-backend abort -> soft unless the caller signal fired.
          if (signal?.aborted === true) hardAborted = true;
-@@ -160,6 +220,16 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -160,6 +221,16 @@ function collectFanoutResults(results, eligible, signal) {
        }
      }
    }
@@ -4075,7 +4153,46 @@ index 7242a56..e3e9b5c 100644
    return { collected, mergedContent, hardAborted, hardError, failures };
  }
  
-@@ -174,6 +244,13 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -171,9 +242,52 @@ function collectFanoutResults(results, eligible, signal) {
+  * @param {Function} deps.resolveOptions  () => resolved options snapshot
+  * @param {object} deps.backends     keyed backend registry
+  */
++/**
++ * One diagnostics line for both the result and empty-result paths. The result
++ * path additionally marks a backend that just crossed the breaker threshold
++ * and a backend skipped by the shared budget; the empty path historically did
++ * neither, and both spellings must stay stable because the line is model-visible.
++ * @param {Array<object>} folded folded telemetry rows
++ * @param {{cooledParts?: string[], facetNote?: string, annotateCooled?: boolean, annotateSkipped?: boolean}} options
++ * @returns {string}
++ */
++function telemetryLine(folded, options = {}) {
++  const {
++    cooledParts = [], facetNote = "", annotateCooled = false, annotateSkipped = false,
++  } = options;
++  const parts = folded.slice(0, 12).map((t) => {
++    if (annotateSkipped && t.skipped === true) return t.id + " ⏭budget";
++    if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
++    const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
++    if (!annotateCooled) return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "");
++    const cooledNow = cooledAnnotation(latestBackendHealth.get(t.id), Date.now());
++    return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "") + (cooledNow ? " " + cooledNow : "");
++  }).concat(cooledParts);
++  if (folded.length > 12) parts.push(`… +${folded.length - 12}`);
++  return "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ") + facetNote;
++}
++
++/** Drop non-ISO publisher dates and normalize the rest to UTC ISO-8601. */
++function finalizeSources(sources) {
++  return sources.map((source) => {
++    const iso = isoPublishedAt(source.publishedAt);
++    if (iso !== undefined) return { ...source, publishedAt: iso };
++    if (source.publishedAt === undefined) return source;
++    const { publishedAt: _ignored, ...rest } = source;
++    return rest;
++  });
++}
++
  export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cache, history }) {
    return {
      id: PROVIDER_ID,
@@ -4089,7 +4206,37 @@ index 7242a56..e3e9b5c 100644
  
      available() {
        const opts = resolveOptions();
-@@ -198,48 +275,97 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -182,7 +296,28 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+         const be = backends[id];
+         if (!be) continue;
+         const beOpts = opts.backends?.[id] ?? {};
+-        if (be.available(beOpts)) return true;
++        if (be.available(beOpts) === true) return true;
++      }
++      return false;
++    },
++
++    /**
++     * Whether a search can actually run now (the host's picker readiness).
++     * A key-gated backend counts only when its credential resolves; this never
++     * performs a network request.
++     * @returns {Promise<boolean>}
++     */
++    async ready() {
++      const opts = resolveOptions();
++      for (const id of opts.enabledBackends) {
++        const be = backends[id];
++        if (!be) continue;
++        const beOpts = opts.backends?.[id] ?? {};
++        if (be.available(beOpts) !== true) continue;
++        if (beOpts.requiresKey !== true) return true;
++        try {
++          if (await beOpts.resolveApiKey?.()) return true;
++        } catch { /* an unreadable credential is not ready */ }
+       }
+       return false;
+     },
+@@ -198,69 +333,121 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
      async search(request, signal) {
        throwIfSearchAborted(signal);
        const opts = resolveOptions();
@@ -4209,7 +4356,14 @@ index 7242a56..e3e9b5c 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -252,15 +378,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           // merge; a tampered cache file must not bypass that whitelist.
+-          const safeSources = hit.value.sources.filter(
++          const safeSources = finalizeSources(hit.value.sources.filter(
+             (src) => src && typeof src.url === "string" && /^https?:\/\//i.test(src.url),
+-          );
++          ));
+           if (safeSources.length === 0) {
+             // whole entry poisoned or filtered empty -> treat as a miss
              cacheKey = null;
            } else {
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
@@ -4237,7 +4391,7 @@ index 7242a56..e3e9b5c 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -290,22 +419,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -290,22 +477,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -4309,7 +4463,7 @@ index 7242a56..e3e9b5c 100644
            "WEB_PROVIDER_UNAVAILABLE",
          );
        }
-@@ -313,8 +486,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -313,8 +544,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // Run ONE query variant through the full fan-out: breaker-aware backend
        // execution under the per-variant limiter, then PHASE 1 collect. The
        // internal abort/timeout semantics are unchanged from v2.7.
@@ -4323,7 +4477,7 @@ index 7242a56..e3e9b5c 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -322,29 +499,84 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -322,29 +557,84 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -4419,7 +4573,7 @@ index 7242a56..e3e9b5c 100644
                  // Timeout classification happens BEFORE telemetry/health are
                  // recorded (route6 P6): backends surface an internal timeout
                  // as their own abort-flavored error ("unified search aborted",
-@@ -353,22 +585,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -353,22 +643,50 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
                  // thrown error said "timed out after Nms" — the two disagreed
                  // and "(unified search aborted)" read as if the USER cancelled.
                  const timedOut = controller.signal.aborted && !(signal && signal.aborted);
@@ -4478,7 +4632,7 @@ index 7242a56..e3e9b5c 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -377,8 +637,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -377,8 +695,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -4489,7 +4643,7 @@ index 7242a56..e3e9b5c 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -386,22 +646,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -386,22 +704,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -4589,7 +4743,7 @@ index 7242a56..e3e9b5c 100644
          // PHASE 2 dedupe / PHASE 3 rerank (per variant list, pre-fusion).
          const strategy = opts.dedupStrategy === "url+title" ? "url+title" : "url";
          const deduped = dedupeSources(fold.collected, strategy);
-@@ -409,43 +742,119 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -409,43 +800,119 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4675,7 +4829,8 @@ index 7242a56..e3e9b5c 100644
  
        // If we got ANY sources, return them even if some backends failed.
        if (ordered.length > 0) {
-         const sources = ordered.slice(0, maxResults);
+-        const sources = ordered.slice(0, maxResults);
++        const sources = finalizeSources(ordered.slice(0, maxResults));
          // 结果呈现头（Anthropic web-search / OpenAI grounding 官方指引）：
          // 置于结果块最前，要求逐条引用来源 URL、优先官方/一手与较新来源；
 -        // 语言按查询文本自动选择（含 CJK 用中文头）。可用
@@ -4727,25 +4882,24 @@ index 7242a56..e3e9b5c 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,23 +862,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +920,15 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
 -          const parts = allTelemetry
-+          const parts = foldedTelemetry
-             .slice(0, 12)
-             .map((t) => {
-+              if (t.skipped === true) return t.id + " ⏭budget";
-               if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
-               const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
-               const cooledNow = cooledAnnotation(latestBackendHealth.get(t.id), Date.now());
-               return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "") + (cooledNow ? " " + cooledNow : "");
-             })
-             .concat(cooledParts);
+-            .slice(0, 12)
+-            .map((t) => {
+-              if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
+-              const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
+-              const cooledNow = cooledAnnotation(latestBackendHealth.get(t.id), Date.now());
+-              return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "") + (cooledNow ? " " + cooledNow : "");
+-            })
+-            .concat(cooledParts);
 -          if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
 -          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
-+          if (foldedTelemetry.length > 12) parts.push(`… +${foldedTelemetry.length - 12}`);
-+          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ") + facetNote;
++          const line = telemetryLine(foldedTelemetry, {
++            cooledParts, facetNote, annotateCooled: true, annotateSkipped: true,
++          });
            outContent = outContent === undefined ? line : outContent + "\n\n" + line;
          }
          return {
@@ -4756,7 +4910,7 @@ index 7242a56..e3e9b5c 100644
          };
        }
  
-@@ -477,20 +887,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +936,25 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4781,13 +4935,7 @@ index 7242a56..e3e9b5c 100644
 -        });
 -        if (cacheKey && cache) cache.set(cacheKey, { sources: [], content: emptyContent, truncated: false });
 +        if (opts.resultTelemetry !== false && (allFailures.length > 0 || facetNote !== "")) {
-+          const parts = foldedTelemetry.slice(0, 12).map((t) => {
-+            if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
-+            const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
-+            return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "");
-+          });
-+          if (foldedTelemetry.length > 12) parts.push(`… +${foldedTelemetry.length - 12}`);
-+          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ") + facetNote;
++          const line = telemetryLine(foldedTelemetry, { facetNote });
 +          emptyContent = emptyContent === undefined ? line : emptyContent + "\n\n" + line;
 +        }
 +        recordHistory(history, request?.query, 0, historyOk, historyTotal);
@@ -4797,7 +4945,7 @@ index 7242a56..e3e9b5c 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +921,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +964,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.
@@ -5694,10 +5842,10 @@ index ee2a966..3f3d94f 100644
      else if (typeof logger.debug === "function") logger.debug(line);
    } catch {
 diff --git a/lib/util/mcp-client.js b/lib/util/mcp-client.js
-index c864137..a33f14e 100644
+index c864137..3a6cc8e 100644
 --- a/lib/util/mcp-client.js
 +++ b/lib/util/mcp-client.js
-@@ -6,26 +6,42 @@
+@@ -6,26 +6,44 @@
   */
  
  import { WebError } from "@deepseek-ai/dsh-web";
@@ -5707,6 +5855,8 @@ index c864137..a33f14e 100644
  
  const UA = "dsh-websearch/2.3";
  const PROTOCOL_VERSION = "2025-06-18";
++/** Per-RPC ceiling; the provider's shared backend budget remains the outer bound. */
++const MCP_RPC_TIMEOUT_MS = 60_000;
  const SESSION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 +const SESSION_CACHE_MAX = 64;
  
@@ -5745,7 +5895,7 @@ index c864137..a33f14e 100644
      return cached.sessionId;
    }
  
-@@ -49,6 +65,7 @@ async function ensureSession(url, signal) {
+@@ -49,6 +67,7 @@ async function ensureSession(url, signal) {
          "Content-Type": "application/json",
          "Accept": "application/json, text/event-stream",
          "User-Agent": UA,
@@ -5753,7 +5903,7 @@ index c864137..a33f14e 100644
        },
        body: JSON.stringify(initBody),
        signal,
-@@ -64,7 +81,20 @@ async function ensureSession(url, signal) {
+@@ -64,7 +83,20 @@ async function ensureSession(url, signal) {
  
    if (!initResponse.ok) {
      const text = await initResponse.text().catch(() => "").then((tx) => tx.slice(0, 300));
@@ -5775,7 +5925,7 @@ index c864137..a33f14e 100644
    }
  
    // Extract Mcp-Session-Id from response headers. Stateless MCP servers may
-@@ -84,8 +114,10 @@ async function ensureSession(url, signal) {
+@@ -84,8 +116,10 @@ async function ensureSession(url, signal) {
        method: "POST",
        headers: {
          "Content-Type": "application/json",
@@ -5786,7 +5936,7 @@ index c864137..a33f14e 100644
        },
        body: JSON.stringify(notifyBody),
        signal,
-@@ -99,50 +131,165 @@ async function ensureSession(url, signal) {
+@@ -99,50 +133,165 @@ async function ensureSession(url, signal) {
      // Ignore other errors for notification
    }
  
@@ -5980,7 +6130,7 @@ index c864137..a33f14e 100644
  }
  
  /**
-@@ -152,14 +299,25 @@ export function invalidateSession(url) {
+@@ -152,14 +301,32 @@ export function invalidateSession(url) {
   * @param {object} args - Tool arguments
   * @param {object} extraHeaders - Additional headers
   * @param {AbortSignal} signal - Abort signal
@@ -5995,9 +6145,16 @@ index c864137..a33f14e 100644
 -export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
 -  const sessionId = await ensureSession(url, signal);
 +export async function mcpCall(url, toolName, args, extraHeaders = {}, signal, options = {}) {
++  // The provider timeout is coarse (whole backend race); the MCP hop gets its
++  // own ceiling so a server that accepts the connection and never answers
++  // cannot consume the full backend budget.
++  const deadlineMs = Number.isFinite(options.deadlineMs) && options.deadlineMs > 0
++    ? Math.floor(options.deadlineMs) : MCP_RPC_TIMEOUT_MS;
++  const deadline = AbortSignal.timeout(deadlineMs);
++  const rpcSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
 +  // The session handshake is the default; stateless keyless servers accept a
 +  // direct tools/call and skip it.
-+  const sessionId = options.skipInitialize ? undefined : await ensureSession(url, signal, { forceFreshSession: options.forceFreshSession === true }, extraHeaders);
++  const sessionId = options.skipInitialize ? undefined : await ensureSession(url, rpcSignal, { forceFreshSession: options.forceFreshSession === true }, extraHeaders);
    
    const callBody = {
      jsonrpc: "2.0",
@@ -6009,7 +6166,7 @@ index c864137..a33f14e 100644
      method: "tools/call",
      params: { name: toolName, arguments: args },
    };
-@@ -171,6 +329,7 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+@@ -171,53 +338,63 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
        headers: {
          "Content-Type": "application/json",
          "Accept": "application/json, text/event-stream",
@@ -6017,7 +6174,20 @@ index c864137..a33f14e 100644
          ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
          "User-Agent": UA,
          ...extraHeaders,
-@@ -187,15 +346,16 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+       },
+       body: JSON.stringify(callBody),
+-      signal,
++      signal: rpcSignal,
+       redirect: "error",
+     });
+   } catch (error) {
+     if (signal?.aborted) throw error;
++    if (deadline.aborted) {
++      throw new WebError(`MCP tools/call timed out after ${deadlineMs}ms`, "WEB_PROVIDER_ERROR", { cause: error });
++    }
+     throw new WebError(`MCP tools/call failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+   }
+ 
    // On 401/403/404 with a sessionful server, invalidate and retry once.
    // Stateless servers (no session id) have no session to invalidate — fail loud.
    if (sessionId && (response.status === 401 || response.status === 403 || response.status === 404)) {
@@ -6026,7 +6196,7 @@ index c864137..a33f14e 100644
 -    const newSessionId = await ensureSession(url, signal);
 +    invalidateSession(url, extraHeaders);
 +    // Retry with fresh session, retaining the same credential headers.
-+    const newSessionId = await ensureSession(url, signal, {}, extraHeaders);
++    const newSessionId = await ensureSession(url, rpcSignal, {}, extraHeaders);
      try {
        response = await egressFetch(url, {
          method: "POST",
@@ -6037,7 +6207,20 @@ index c864137..a33f14e 100644
            ...(newSessionId ? { "Mcp-Session-Id": newSessionId } : {}),
            "User-Agent": UA,
            ...extraHeaders,
-@@ -212,12 +372,14 @@ export async function mcpCall(url, toolName, args, extraHeaders = {}, signal) {
+         },
+         body: JSON.stringify(callBody),
+-        signal,
++        signal: rpcSignal,
+         redirect: "error",
+       });
+     } catch (error) {
+       if (signal?.aborted) throw error;
++      if (deadline.aborted) {
++        throw new WebError(`MCP tools/call timed out after ${deadlineMs}ms`, "WEB_PROVIDER_ERROR", { cause: error });
++      }
+       throw new WebError(`MCP tools/call retry failed: ${describeError(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
+     }
+   }
  
    if (!response.ok) {
      const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
@@ -6213,6 +6396,33 @@ index 0000000..058102d
 +  if (value === null || value === undefined) return "";
 +  const text = redact(value).replace(/\s+/g, " ").trim();
 +  return text.length > maxChars ? text.slice(0, maxChars) : text;
++}
+diff --git a/lib/util/time.js b/lib/util/time.js
+new file mode 100644
+index 0000000..6c928f5
+--- /dev/null
++++ b/lib/util/time.js
+@@ -0,0 +1,21 @@
++// util/time.js — normalize publisher dates to the ISO-8601 the web seam declares.
++
++/**
++ * Convert a date-shaped value to an ISO-8601 timestamp. Relative ages ("2 days
++ * ago") and invalid dates are dropped rather than passed through as if they
++ * were ISO; the seam's `publishedAt` is defined as ISO-8601.
++ * @param {unknown} raw
++ * @returns {string | undefined}
++ */
++export function isoPublishedAt(raw) {
++  if (typeof raw !== "string") return undefined;
++  const text = raw.trim();
++  if (!/^\d{4}-\d{2}-\d{2}/.test(text)) return undefined;
++  const ms = Date.parse(text);
++  if (!Number.isFinite(ms)) return undefined;
++  try {
++    return new Date(ms).toISOString();
++  } catch {
++    return undefined;
++  }
 +}
 diff --git a/lib/util/web-error.js b/lib/util/web-error.js
 new file mode 100644

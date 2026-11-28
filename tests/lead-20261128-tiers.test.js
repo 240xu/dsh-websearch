@@ -818,3 +818,37 @@ test("changing concurrency invalidates the cache because it changes the started 
   await provider.search({ query: "concurrency cache", maxResults: 2 }, new AbortController().signal);
   assert.equal(calls, 2);
 });
+
+test("provider ready() reflects a resolvable key, not just availability", async () => {
+  const base = resolveOptions(CTX, {});
+  const backend = (id, requiresKey) => ({ id, available: () => true, async search() { return { sources: [] }; } });
+  const make = (ids, key) => createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { keyed: backend("keyed", true), free: backend("free", false) },
+    resolveOptions: () => ({
+      ...base, enabledBackends: ids, backends: {
+        keyed: { requiresKey: true, resolveApiKey: key },
+        free: { requiresKey: false },
+      },
+    }),
+  });
+  assert.equal(await make(["keyed"], async () => undefined).ready(), false);
+  assert.equal(await make(["keyed"], async () => "k").ready(), true);
+  assert.equal(await make(["keyed", "free"], async () => undefined).ready(), true);
+  assert.equal(await make(["keyed"], async () => { throw new Error("no store"); }).ready(), false);
+});
+
+test("publishedAt is normalized to ISO on the fresh result path", async () => {
+  const base = resolveOptions(CTX, {});
+  const backend = { id: "fake", available: () => true, async search() { return { sources: [
+    { url: "https://example.com/a", publishedAt: "2024-01-02" },
+    { url: "https://example.com/b", publishedAt: "2 days ago" },
+  ] }; } };
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined, backends: { fake: backend },
+    resolveOptions: () => ({ ...base, enabledBackends: ["fake"], backends: { fake: {} }, cacheEnabled: false, historyEnabled: false, breakerEnabled: false }),
+  });
+  const out = await provider.search({ query: "dates", maxResults: 5 }, new AbortController().signal);
+  assert.equal(out.sources[0].publishedAt, "2024-01-02T00:00:00.000Z");
+  assert.equal(Object.hasOwn(out.sources[1], "publishedAt"), false, "a relative age is not ISO");
+});

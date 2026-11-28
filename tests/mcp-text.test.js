@@ -123,3 +123,28 @@ test("mcpCall streams through an HTTP proxy without waiting for EOF", async () =
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
 });
+
+test("mcpCall applies its own per-RPC deadline", async () => {
+  const http = await import("node:http");
+  const saved = { HTTP_PROXY: process.env.HTTP_PROXY, HTTPS_PROXY: process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY, DSH_EGRESS_FORWARDER: process.env.DSH_EGRESS_FORWARDER };
+  const server = http.createServer((req, res) => {
+    req.resume();
+    // Accept the RPC but never answer, like a stalled MCP server.
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  process.env.NO_PROXY = "127.0.0.1";
+  delete process.env.HTTP_PROXY;
+  delete process.env.HTTPS_PROXY;
+  delete process.env.DSH_EGRESS_FORWARDER;
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/mcp`;
+    await assert.rejects(
+      mcpCall(url, "search", { q: "x" }, {}, new AbortController().signal, { skipInitialize: true, deadlineMs: 50 }),
+      /timed out after 50ms/,
+    );
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});

@@ -1390,3 +1390,90 @@ test("a legacy scope reports the fields already applied when a later write fails
   assert.equal(snap.failed, true);
   assert.equal(snap.stagedCount, 2, "staged drafts survive an idempotent retry");
 });
+
+function bootCardComponent({ props }) {
+  const module = loadModule();
+  const sections = [];
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: () => undefined,
+    slots: { inject: (_name, fn) => { sections.push(fn?.()); }, register: (desc, component) => { sections.push({ ...desc, component }); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  return sections.find((entry) => entry && typeof entry.component === "function").component;
+}
+
+test("changing to a tier reports drafts it silently drops", async () => {
+  const { props, store } = bootCard({
+    settings: { ok: true, writable: true, value: { intervention: "balanced", numResults: 8, resultTelemetry: true }, base: {}, user: {}, revision: 1 },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  props.edit("numResults", "40");
+  props.edit("resultTelemetry", "false");
+  assert.equal(store.getSnapshot().stagedCount, 2);
+  props.edit("intervention", "official");
+  const snap = store.getSnapshot();
+  assert.equal(snap.droppedDrafts, 2, "the two tier-ignored drafts must be counted");
+  assert.equal(snap.stagedCount, 1, "only the intervention draft remains");
+  const nodes = flatten(bootCardComponent({ props }), props);
+  assert.ok(nodes.some((n) => n.type === "span" && n.props?.children === "draftsDropped"));
+});
+
+test("Save with no changes acknowledges instead of doing nothing", async () => {
+  const { props, store, requests } = bootCard();
+  const before = requests.length;
+  await props.save();
+  assert.equal(requests.length, before, "an empty save must not write");
+  assert.ok(store.getSnapshot().savedAt > 0, "the live region gets a saved acknowledgement");
+});
+
+test("the card never emits a heading-level regression", async () => {
+  const { props, component } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  const levels = flatten(component, props).filter((n) => typeof n.type === "string" && /^h[1-6]$/.test(n.type)).map((n) => Number(n.type[1]));
+  assert.deepEqual(levels, [...levels].sort((a, b) => a - b));
+});
+
+test("a failed refresh keeps the loaded form and its drafts", async () => {
+  const { props, store } = bootCard({
+    settings: { ok: true, writable: true, value: { numResults: 8 }, base: {}, user: {}, revision: 1 },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  props.edit("numResults", "9");
+  globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({ ok: false, reason: "busy" }) });
+  await props.retry();
+  const snap = store.getSnapshot();
+  assert.equal(snap.unavailable, false, "a failed refresh is not a first-load failure");
+  assert.equal(snap.refreshFailed, true);
+  assert.equal(snap.value.numResults, 8, "the last good values stay visible");
+  assert.equal(snap.stagedCount, 1, "the draft survives the failed refresh");
+  const nodes = flatten(bootCardComponent({ props }), props);
+  assert.ok(nodes.some((n) => n.type === "span" && n.props?.children === "refreshFailed"));
+});
+
+test("compact card CSS wraps actions and disables the switch affordance", () => {
+  const src = readFileSync(CLIENT, "utf8");
+  assert.match(src, /\.wsc-actions\{[^}]*flex-wrap:wrap/);
+  assert.match(src, /\.wsc-strip\{[^}]*flex-wrap:wrap/);
+  assert.match(src, /\.wsc-live\{[^}]*min-width:0/);
+  assert.match(src, /\.wsc-toggle:has\(input:disabled\)\{[^}]*cursor:default/);
+  assert.match(src, /\.wsc-toggleWrap\{/);
+});
+
+test("focus requests are issued by a failed Save, not by every edit", async () => {
+  const { props, store } = bootCard();
+  props.edit("numResults", "999");
+  await props.save();
+  const failed = store.getSnapshot();
+  assert.equal(failed.failedFields.includes("numResults"), true);
+  assert.equal(failed.focusRequest, 1);
+  props.edit("numResults", "7");
+  assert.equal(store.getSnapshot().focusRequest, 1, "editing must not steal focus again");
+});
+
+test("both locales define the tier-controlled label", () => {
+  const src = readFileSync(CLIENT, "utf8");
+  assert.equal((src.match(/^\s*tierControlled:/gm) ?? []).length, 2);
+});

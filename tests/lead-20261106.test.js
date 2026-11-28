@@ -161,10 +161,11 @@ test("client.js UX: key switch merged with key input; failedKeys bug fixed", () 
   const finds = (src.match(/\(state\.failedKeys \?\? \[\]\)\.find\(\(f\) => f && f\.ref === b\.keyEnv\)/g) ?? []).length;
   assert.equal(finds, 2, "KeyedBackendCard and OPTIONAL_KEYS must both resolve failures by ref");
 
-  // 4. The immediate-switch / staged-key distinction is explained in both locales.
-  const defs = (src.match(/^\s*keySaveModeHint:/gm) ?? []).length;
+  // 4. The immediate-switch / staged-key distinction is explained once, in
+  // both locales, instead of repeating the same sentence under every key card.
+  const defs = (src.match(/^\s*saveModelHint:/gm) ?? []).length;
   assert.equal(defs, 2);
-  assert.equal((src.match(/t\("keySaveModeHint"\)/g) ?? []).length, 2);
+  assert.equal((src.match(/t\("saveModelHint"\)/g) ?? []).length, 1);
 
   // 5. Dead copy keys removed (they were only defined, never rendered).
   for (const dead of ["keysTitle", "keyHint"]) {
