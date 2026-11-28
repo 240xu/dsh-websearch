@@ -372,8 +372,9 @@ test("a backend that can merge facets receives one plan and is skipped for later
       cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
     }),
   });
-  await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
   assert.equal(planCalls.length, 1, "the plan backend runs once, not once per variant");
+  assert.ok(out.sources.some((source) => source.url === "https://plan.example/1"), "the plan result enters the fused list");
   assert.ok(Array.isArray(planCalls[0]?.queries) && planCalls[0].queries.length > 1, "all facets travel in one plan");
   assert.ok(plainCalls.length > 1, "backends that cannot merge facets still run per variant");
 });
