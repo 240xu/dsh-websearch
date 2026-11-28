@@ -121,12 +121,12 @@ test("expectedRevision conflict -> 409 SETTINGS_CONFLICT", async () => {
   assert.equal(r2.payload.code, "SETTINGS_CONFLICT");
 });
 
-// ④ non-integer expectedRevision is not forwarded to mutate (settings-api.js:174)
-test("non-integer expectedRevision -> undefined passed to mutate", async () => {
+// ④ non-integer expectedRevision is rejected instead of silently disabling CAS
+test("non-integer expectedRevision -> 400 and mutate is not called", async () => {
   const h = harness();
   const r = await call(h, { ops: [{ op: "unset", path: ["enableExa"] }], expectedRevision: "7" });
-  assert.equal(r.code, 200);
-  assert.equal(h.calls[0][2], undefined);
+  assert.equal(r.code, 400);
+  assert.equal(h.calls.length, 0);
 });
 
 // ⑤ non-conflict mutate failure -> 400 (not swallowed as success)

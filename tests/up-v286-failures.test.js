@@ -72,7 +72,7 @@ test("all-fail error: cooled-skipped backends are named and >4 reasons collapse 
       provider.search({ query: "route6 cooled probe", maxResults: 4 }, undefined),
       (err) => {
         assert.equal(err.code, "WEB_PROVIDER_ERROR");
-        assert.match(err.message, /all enabled backends failed \(5\)/, "5 attempted failures counted");
+        assert.match(err.message, /all attempted backends failed \(5 of 6 enabled\)/, "5 attempted failures counted");
         assert.match(err.message, /cooled-skipped: cooledA ⏸cooled/, "cooled backend named");
         assert.match(err.message, /\+1 more/, "5th failure collapsed into a marker");
         assert.match(err.message, /boom1: reason for boom1/, "first reasons still enumerated");

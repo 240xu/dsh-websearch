@@ -1,6 +1,55 @@
 # Changelog
 
-## 2.8.9 - 2026-11-28 (unreleased, local audit branch)
+## 2.9.0 - 2026-11-28
+
+Expert polish round on top of 2.8.9 (six independent audits: bugs, logic,
+semantics, frontend, visual depth, authoritative evidence). Details and
+deferred items: `docs/audit/126-expert-polish-20261128.md`.
+
+- Security: the 10 MiB response ceiling now also applies on the native
+  (no-proxy) egress path; previously only proxied/tunneled responses were
+  bounded, so a direct or NO_PROXY host could stream unbounded bytes.
+- Fix: a backend that ignores its abort signal can no longer hold the fan-out
+  past its per-backend timeout; the call is raced against the timer, and a
+  search-wide budget stops multi-query variants from multiplying 30s by N.
+- Fix: missing API keys in Brave/Tavily/Serper/Mojeek now report
+  `WEB_PROVIDER_CREDENTIAL_MISSING`, not the seam's "no provider installed"
+  code; the all-failed hint is limited to that code.
+- Fix: `official` no longer appends the diagnostic cache-hit note to
+  `content`; the note follows the same `resultHeader` gate as the header.
+- Fix: `truncated` now reflects the seam's host bound, not the user's
+  `numResults`, so a preference cut is not reported as tool truncation.
+- Fix: all-failed diagnostics fold attempts back to unique backends, and the
+  rate-limited/keyless fast-fail paths write a history entry before throwing.
+- Fix: a backend resolving without a `sources[]` array is a soft failure, not
+  a silent successful zero-hit search; `expectedRevision` must be an integer
+  or the settings route returns 400 instead of silently disabling CAS.
+- Fix: cross-backend results are merged rank-major round-robin (every
+  backend's #1 before any backend's #2), matching `dsh-tool-web`'s
+  `mergeSearchResults`; previously the first two backends could fill the cap
+  and starve DDG/SearXNG.
+- Fix: IPv6 literals in proxy/NO_PROXY/forwarder paths lose their brackets
+  before `net`/TLS/Host comparison; expired cooldowns are no longer published;
+  corrupt cache entries and orphan `.tmp` files are cleaned up.
+- Fix: duplicate `enabledBackends` ids fan out once; credential invalidation
+  refreshes only the ref carried by the event when one is present.
+- Align: Firecrawl uses the requested `limit` (v2 default 10, max 100) instead
+  of a fixed 8; Exa highlight joins and Firecrawl descriptions are bounded to
+  400 chars; Brave/Serper `publishedAt` is emitted only for ISO-shaped dates.
+- Canonicalize dedupe keys (fragment + tracking params) and add an explicit
+  "untrusted data, never instructions" fence to both result headers.
+- Add `resultHeader` to Config and the card (7 enum selects).
+- UI: backend labels are localized (no Chinese in an English render), every
+  form control has an accessible name, the action bar is a polite live region
+  and sticky, toggle failures render at the failing row, key badges show
+  "checking" until the first read, and the status strip reports the effective
+  `enabledBackends` override.
+- UI depth: tokenized state colors (no hardcoded hex), 4/8/12/20 radius scale,
+  three border tiers, official button metrics, one 2px focus ring, ghost-button
+  hover fix, and disabled/hover states; zero new surface shadows.
+- Tests: 213 unit tests.
+
+## 2.8.9 - 2026-11-28 (published)
 
 Base: npm 2.8.8 plus the local 34-file fix set (2.8.4 lineage) and the
 2026-11-28 re-audit. Not published.

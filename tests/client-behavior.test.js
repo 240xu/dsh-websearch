@@ -603,7 +603,7 @@ test("R3-1 the language field stays free text, not a select", async () => {
   assert.ok(langInput, "language must render as an input with the langPlaceholder hint");
   assert.equal(String(langInput.props.value), "zh-CN", "the input shows the stored language");
   const selects = nodes.filter((n) => n.type === "select");
-  assert.equal(selects.length, 6, "six enum selects (intervention/recency/dedup/rerank/safeSearch/telemetry)");
+  assert.equal(selects.length, 7, "seven enum selects (intervention/recency/dedup/rerank/safeSearch/telemetry/header)");
 });
 
 test("R3-2 the save button is disabled while the scope is read-only", async () => {
@@ -805,6 +805,19 @@ test("the card CSS uses only theme tokens the DSH design system defines", async 
     "button-primary-hover",
     "link",
     "state-success-primary",
+    "border-l3",
+    "border-l4",
+    "interactive-bg-hover",
+    "interactive-bg-hover-solid",
+    "state-business-primary",
+    "label-secondary",
+    "label-tertiary",
+    "state-error-primary",
+    "state-warn-label",
+    "state-warn-primary",
+    "settings-card-stroke",
+    "settings-card-fill",
+    "bg-layer-2",
   ]);
   const styles = [];
   globalThis.document = {

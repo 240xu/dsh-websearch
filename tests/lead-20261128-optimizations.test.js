@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createSearchCache } from "../lib/cache.js";
 import { createUnifiedSearchProvider } from "../lib/provider.js";
+import { egressFetch } from "../lib/util/egress-fetch.js";
+import http from "node:http";
 
 test("cache keeps a hard entry bound while trimming only when over the cap", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "dsh-cache-cap-"));
@@ -46,4 +48,37 @@ test("the effective per-backend timeout is passed to backends that split it", as
   });
   await provider.search({ query: "q", maxResults: 8 }, new AbortController().signal);
   assert.equal(seen[0], 8_000, "searxng's 8s ceiling must reach the backend budget splitter");
+});
+
+test("native egress path enforces the 10 MiB response cap", async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    const chunk = Buffer.alloc(1024 * 1024, 0x61);
+    let sent = 0;
+    const pump = () => {
+      while (sent < 20) {
+        sent += 1;
+        if (!res.write(chunk)) { res.once("drain", pump); return; }
+      }
+      res.end();
+    };
+    pump();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const saved = { HTTP_PROXY: process.env.HTTP_PROXY, HTTPS_PROXY: process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY };
+  delete process.env.HTTP_PROXY;
+  delete process.env.HTTPS_PROXY;
+  process.env.NO_PROXY = "*";
+  try {
+    const { port } = server.address();
+    await assert.rejects(
+      egressFetch(`http://127.0.0.1:${port}/`, {}).then((res) => res.text()),
+      /exceeds 10485760/,
+    );
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

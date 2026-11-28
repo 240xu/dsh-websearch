@@ -198,3 +198,28 @@ test("one multi-query search folds the breaker once per backend, not once per va
   assert.equal(entries.at(-1)?.backendsTotal, 1, "history counts the backend once, not once per variant");
   getLatestBackendHealth().clear();
 });
+
+test("a backend that ignores its abort signal still obeys the per-backend timeout", async () => {
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: {
+      hung: {
+        id: "hung", available: () => true,
+        search() { return new Promise(() => {}); },
+      },
+    },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}),
+      enabledBackends: ["hung"], backends: { hung: {} }, filters: {},
+      safeSearch: true, dedupStrategy: "url", concurrency: 2,
+      backendTimeoutMs: 120, language: "", recency: "any",
+      cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const started = Date.now();
+  await assert.rejects(
+    provider.search({ query: "hang", maxResults: 5 }, new AbortController().signal),
+    /timed out after 120ms/,
+  );
+  assert.ok(Date.now() - started < 1000, "the race must not wait for the hung promise");
+});
