@@ -1349,3 +1349,44 @@ test("a base-level override is fixed and has no clear button", async () => {
   assert.equal(nodes.some((n) => n.type === "button" && n.props.children === "clearOverride"), false);
   assert.ok(nodes.filter((n) => n.type === "input" && n.props.type === "checkbox").every((n) => n.props.disabled === true));
 });
+
+test("a legacy scope reports the fields already applied when a later write fails", async () => {
+  const module = loadModule();
+  const registrations = [];
+  let writes = 0;
+  let loads = 0;
+  const settingsScope = {
+    bind: () => ({
+      getSnapshot: () => ({ status: "ready", writable: true, value: { numResults: 8, concurrency: 6 }, base: {}, user: {}, revision: 1, mode: "scope" }),
+      subscribe: () => () => {},
+      accept: () => {},
+      load: async () => { loads += 1; return undefined; },
+      set: async () => {
+        writes += 1;
+        if (writes === 2) throw new Error("second write failed");
+        return { ok: true };
+      },
+      unset: async () => ({ ok: true }),
+    }),
+  };
+  const ctx = {
+    effect: (fn) => { fn(); return () => {}; },
+    locale: { register() {}, bind: () => (key) => key },
+    get: (name) => (name === "settingsScope" ? settingsScope : undefined),
+    slots: { inject: (_name, fn) => { fn(); }, register: (desc) => { registrations.push(desc); return () => {}; } },
+    remote: { $on: () => () => {} },
+  };
+  module.apply(ctx);
+  const desc = registrations.find((r) => r && typeof r.inject === "function");
+  const props = desc.inject();
+  loads = 0;
+  props.edit("numResults", "9");
+  props.edit("concurrency", "5");
+  await props.save();
+  const snap = props.hooks.unifiedSearchCard.getSnapshot();
+  assert.equal(writes, 2);
+  assert.equal(loads, 1, "the controller resyncs after a partial legacy save");
+  assert.equal(snap.partialApplied, 1);
+  assert.equal(snap.failed, true);
+  assert.equal(snap.stagedCount, 2, "staged drafts survive an idempotent retry");
+});

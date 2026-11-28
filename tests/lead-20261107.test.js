@@ -147,6 +147,14 @@ test("N2: changing a backend's baseURL invalidates the cache", async () => {
     cacheEnabled: true, resultTelemetry: false, breakerEnabled: false,
     multiQueryEnabled: false, deepCoverage: false, backendTimeoutMs: 30000,
     language: "", recency: "any", resultHeader: false, historyEnabled: false,
+    cacheKeyFields: {
+      intervention: "balanced", queryShaping: true, numResults: 8, backendTimeoutMs: 30000,
+      dedupStrategy: "url", rerank: false, resultHeader: false, resultTelemetry: false,
+      multiQueryEnabled: false, deepCoverage: false, includeDomains: [], excludeDomains: [],
+    },
+    backendCacheKeyFields: {
+      brave: { apiKeyEnv: "BRAVE_API_KEY", baseURL, model: "m1", searchDepth: "basic", safeSearch: true, includeDomains: [], excludeDomains: [] },
+    },
   });
   let opts = mkOpts("https://a.example");
   const provider = createUnifiedSearchProvider({

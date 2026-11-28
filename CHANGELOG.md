@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.13.19 - 2026-11-28
+
+- Cache: resolveOptions now owns the result-affecting key field list
+  (`cacheKeyFields` / `backendCacheKeyFields`); provider flattens it instead of
+  a regex + duplicated per-backend list. `concurrency` is keyed because the
+  shared deadline can change which backends start. CACHE_SEMANTICS_VERSION 3.
+- Legacy hosts: Save without setMany reports `partialApplied`, reloads, and
+  keeps staged drafts; UI warns before multi-field best-effort saves.
+- Tests: 285.
 ## 2.13.18 - 2026-11-28
 
 - MCP: incremental SSE reads return on the matching frame; initialize validates

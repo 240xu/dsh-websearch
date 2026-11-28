@@ -310,12 +310,17 @@ test("changing a domain filter cannot be served from the prior cache entry", asy
   const provider = createUnifiedSearchProvider({
     ctx: {}, cache, history: undefined,
     backends: { fake: { id: "fake", available: () => true, async search() { calls.push(1); return { sources: [{ url: "https://none.example/1" }] }; } } },
-    resolveOptions: () => ({
-      ...resolveOptions(CTX, {}), enabledBackends: ["fake"], backends: { fake: {} }, includeDomains,
-      excludeDomains: [], filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1,
-      backendTimeoutMs: 5000, language: "", recency: "any", cacheEnabled: true,
-      breakerEnabled: false, historyEnabled: false,
-    }),
+    resolveOptions: () => {
+      const base = resolveOptions(CTX, {});
+      return {
+        ...base, enabledBackends: ["fake"], backends: { fake: {} }, includeDomains,
+        excludeDomains: [], filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1,
+        backendTimeoutMs: 5000, language: "", recency: "any", cacheEnabled: true,
+        breakerEnabled: false, historyEnabled: false,
+        cacheKeyFields: { ...base.cacheKeyFields, includeDomains },
+        backendCacheKeyFields: { fake: { apiKeyEnv: "FAKE_API_KEY", baseURL: undefined, model: "m", safeSearch: true, includeDomains, excludeDomains: [] } },
+      };
+    },
   });
   await provider.search({ query: "domain cache", maxResults: 5 }, new AbortController().signal);
   includeDomains = ["arxiv.org"];
@@ -726,4 +731,90 @@ test("the registered provider carries picker metadata", () => {
   assert.equal(provider.title, "Unified Search");
   assert.equal(typeof provider.description?.en, "string");
   assert.equal(typeof provider.description?.zh, "string");
+});
+
+test("resolveOptions classifies every option as result-affecting or explicitly not", () => {
+  const opts = resolveOptions(CTX, {});
+  const nonResult = new Set([
+    "enabledBackends", "cacheEnabled", "cacheTtlS", "breakerEnabled",
+    "breakerThreshold", "breakerCooldownMs", "historyEnabled", "domainFilterError",
+    "filters", "cacheKeyFields", "backendCacheKeyFields", "backends", "ctx",
+  ]);
+  for (const key of Object.keys(opts)) {
+    assert.ok(Object.hasOwn(opts.cacheKeyFields, key) || nonResult.has(key), `${key} is unclassified`);
+    if (Object.hasOwn(opts.cacheKeyFields, key)) {
+      assert.deepEqual(opts.cacheKeyFields[key], opts[key], `${key} cache field drifted from the value`);
+    }
+  }
+  for (const [id, fields] of Object.entries(opts.backendCacheKeyFields)) {
+    assert.ok(opts.backends[id], `${id} cache fields have no backend`);
+    for (const key of Object.keys(fields)) {
+      assert.ok(Object.hasOwn(opts.backends[id], key), `${id}.${key} missing`);
+      assert.deepEqual(fields[key], opts.backends[id][key], `${id}.${key} drifted`);
+    }
+    const beNonResult = new Set(["label", "requiresKey", "optionalKey", "metered", "resolveApiKey"]);
+    for (const key of Object.keys(opts.backends[id])) {
+      assert.ok(Object.hasOwn(fields, key) || beNonResult.has(key), `${id}.${key} is unclassified`);
+    }
+  }
+  assert.equal(opts.cacheKeyFields.concurrency, opts.concurrency, "concurrency changes the shared-deadline result set");
+});
+
+test("provider flattens every per-backend cache field into the key", async () => {
+  const base = resolveOptions(CTX, {});
+  for (const [field, next] of [
+    ["model", "m2"], ["searchDepth", "advanced"], ["safeSearch", false],
+    ["apiKeyEnv", "OTHER_KEY"], ["baseURLs", ["https://b.example"]],
+  ]) {
+    let calls = 0;
+    const backend = { id: "fake", available: () => true, async search() {
+      calls += 1;
+      return { sources: [{ url: `https://example.com/${calls}` }] };
+    } };
+    const fields = {
+      apiKeyEnv: "FAKE_KEY", baseURL: "https://a.example", model: "m1",
+      searchDepth: "basic", safeSearch: true, includeDomains: [], excludeDomains: [],
+    };
+    const mk = () => ({
+      ...base, enabledBackends: ["fake"], backends: { fake: {} },
+      cacheEnabled: true, historyEnabled: false, breakerEnabled: false,
+      cacheKeyFields: { ...base.cacheKeyFields }, backendCacheKeyFields: { fake: { ...fields } },
+    });
+    let opts = mk();
+    const cache = new Map();
+    const provider = createUnifiedSearchProvider({
+      ctx: {}, cache: { get: (k) => cache.get(k) ?? null, set: (k, v) => cache.set(k, { value: v, age: 0 }) },
+      history: undefined, backends: { fake: backend }, resolveOptions: () => opts,
+    });
+    await provider.search({ query: "cache fields", maxResults: 2 }, new AbortController().signal);
+    opts = mk();
+    opts.backendCacheKeyFields.fake[field] = next;
+    await provider.search({ query: "cache fields", maxResults: 2 }, new AbortController().signal);
+    assert.equal(calls, 2, `changing backend ${field} must miss the cache`);
+  }
+});
+
+test("changing concurrency invalidates the cache because it changes the started set", async () => {
+  const base = resolveOptions(CTX, {});
+  let calls = 0;
+  const backend = { id: "fake", available: () => true, async search() {
+    calls += 1;
+    return { sources: [{ url: `https://example.com/${calls}` }] };
+  } };
+  const mk = (concurrency) => ({
+    ...base, enabledBackends: ["fake"], backends: { fake: {} }, concurrency,
+    cacheEnabled: true, historyEnabled: false, breakerEnabled: false,
+    cacheKeyFields: { ...base.cacheKeyFields, concurrency },
+    backendCacheKeyFields: { fake: { apiKeyEnv: "FAKE_KEY", baseURL: "https://a.example", model: "m1", safeSearch: true, includeDomains: [], excludeDomains: [] } },
+  });
+  let opts = mk(6);
+  const cache = new Map();
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: { get: (k) => cache.get(k) ?? null, set: (k, v) => cache.set(k, { value: v, age: 0 }) },
+    history: undefined, backends: { fake: backend }, resolveOptions: () => opts,
+  });
+  await provider.search({ query: "concurrency cache", maxResults: 2 }, new AbortController().signal);
+  opts = mk(1);
+  await provider.search({ query: "concurrency cache", maxResults: 2 }, new AbortController().signal);
+  assert.equal(calls, 2);
 });

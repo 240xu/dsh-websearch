@@ -1362,7 +1362,7 @@ index 7218312..8c9caa1 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..8ed7fad 100644
+index 88dc8c3..9f58ec5 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
 @@ -1,7 +1,7 @@
@@ -1423,7 +1423,7 @@ index 88dc8c3..8ed7fad 100644
 + * existing key fields (e.g. multi-query truncation, plan parsing). Old
 + * entries then miss instead of replaying results produced by the old code.
 + */
-+export const CACHE_SEMANTICS_VERSION = 2;
++export const CACHE_SEMANTICS_VERSION = 3;
 +
  /** Age of a record in whole seconds (bounded >= 0). */
  function ageSeconds(record, nowMs) {
@@ -1559,7 +1559,7 @@ index 88dc8c3..8ed7fad 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..3d43b4d 100644
+index 783cbe6..ed51f7f 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,36 @@ window.__ModuleLoader__.load({
@@ -1659,7 +1659,7 @@ index 783cbe6..3d43b4d 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +135,67 @@ window.__ModuleLoader__.load({
+@@ -90,22 +135,69 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1678,6 +1678,8 @@ index 783cbe6..3d43b4d 100644
 +			clearOverride: "清除覆盖",
 +			overrideClearing: "清除中…",
 +			overrideFailed: "清除覆盖失败",
++			legacyBatchHint: "此 Host 不支持批量保存：字段逐个写入，中途失败时前面的字段可能已生效。",
++			savePartial: "已保存 {n} 个字段，其余失败",
  			invalidFields: "以下字段未通过校验：",
  			readOnlyScope: "当前配置只读（可能由宿主锁定）",
 -			optionalTitle: "私有实例可选 Key",
@@ -1730,7 +1732,7 @@ index 783cbe6..3d43b4d 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +206,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +208,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1751,7 +1753,7 @@ index 783cbe6..3d43b4d 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +238,41 @@ window.__ModuleLoader__.load({
+@@ -142,15 +240,43 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1770,6 +1772,8 @@ index 783cbe6..3d43b4d 100644
 +			clearOverride: "Clear override",
 +			overrideClearing: "Clearing…",
 +			overrideFailed: "Could not clear override",
++			legacyBatchHint: "This host has no batch save: fields are written one by one, so earlier fields may apply if a later write fails.",
++			savePartial: "{n} field(s) saved before the failure",
  			invalidFields: "Fields failed validation:",
  			readOnlyScope: "Configuration is read-only (locked by host?)",
 -			optionalTitle: "Private instance optional keys",
@@ -1796,7 +1800,7 @@ index 783cbe6..3d43b4d 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +310,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +314,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1855,7 +1859,7 @@ index 783cbe6..3d43b4d 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +368,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +372,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1892,7 +1896,7 @@ index 783cbe6..3d43b4d 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +406,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +410,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1920,7 +1924,7 @@ index 783cbe6..3d43b4d 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +438,28 @@ window.__ModuleLoader__.load({
+@@ -258,11 +442,30 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1931,6 +1935,8 @@ index 783cbe6..3d43b4d 100644
 +				this.toggleErrorId = null;
 +				this.overrideClearing = false;
 +				this.overrideFailed = false;
++				this.legacyBatch = typeof scope.setMany !== "function";
++				this.partialApplied = 0;
 +				// Per-backend write sequence: a slow failure must not overwrite
 +				// the result of a newer click for the same toggle.
 +				this.toggleSeq = new Map();
@@ -1950,7 +1956,7 @@ index 783cbe6..3d43b4d 100644
  			}
  
  			sectionValue(field) {
-@@ -276,12 +473,25 @@ window.__ModuleLoader__.load({
+@@ -276,15 +479,31 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1973,10 +1979,16 @@ index 783cbe6..3d43b4d 100644
 +					overrideSource: hasOverride(snap.user) ? "user" : hasOverride(snap.base) ? "base" : undefined,
 +					overrideClearing: this.overrideClearing,
 +					overrideFailed: this.overrideFailed,
++					legacyBatch: this.legacyBatch,
++					partialApplied: this.partialApplied,
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
  					stagedCount: this.staged.size + this.stagedKeys.size,
-@@ -292,59 +502,231 @@ window.__ModuleLoader__.load({
++					stagedFieldCount: this.staged.size,
+ 					savedAt: this.savedAt,
+ 					stagedText: (field) => {
+ 						const s = this.staged.get(field);
+@@ -292,59 +511,231 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -2230,7 +2242,7 @@ index 783cbe6..3d43b4d 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,73 +736,154 @@ window.__ModuleLoader__.load({
+@@ -354,73 +745,168 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2245,6 +2257,7 @@ index 783cbe6..3d43b4d 100644
 -				if (this.saving) return;
 +				if (this.saving || (this.staged.size === 0 && this.stagedKeys.size === 0)) return;
  				this.saving = true; this.failed = false;
++				this.partialApplied = 0;
  			this.conflict = false; this.failedFields.clear(); this.republish();
  				const doneFields = [];
  				const doneKeys = [];
@@ -2302,9 +2315,7 @@ index 783cbe6..3d43b4d 100644
 -							doneFields.push(field);
 +							if (!Number.isInteger(num) || num < lo || num > hi || num % (STEP[field] ?? 1) !== 0) { this.failed = true; this.failedFields.add(field); continue; }
 +							fieldOps.push({ op: "set", path: [field], value: num }); fieldOpNames.push(field);
- 						} else {
--							await this.scope.set(field, staged.text);
--							doneFields.push(field);
++						} else {
 +							fieldOps.push({ op: "set", path: [field], value: staged.text }); fieldOpNames.push(field);
 +						}
 +					}
@@ -2315,10 +2326,25 @@ index 783cbe6..3d43b4d 100644
 +					if (fieldOps.length > 0) {
 +						if (typeof this.scope.setMany === "function") {
 +							await this.scope.setMany(fieldOps);
-+						} else {
-+							for (const op of fieldOps) {
-+								if (op.op === "unset") await this.scope.unset(op.path[0]);
-+								else await this.scope.set(op.path[0], op.value);
+ 						} else {
+-							await this.scope.set(field, staged.text);
+-							doneFields.push(field);
++							let applied = 0;
++							try {
++								for (const op of fieldOps) {
++									if (op.op === "unset") await this.scope.unset(op.path[0]);
++									else await this.scope.set(op.path[0], op.value);
++									applied += 1;
++								}
++							} catch (err) {
++								// A legacy scope has no atomic batch API. Report how
++								// many writes landed and resync instead of claiming
++								// the whole Save failed; retrying is idempotent.
++								this.partialApplied = applied;
++								if (typeof this.scope.load === "function") {
++									try { await this.scope.load(); } catch { /* keep the partial count */ }
++								}
++								throw err;
 +							}
  						}
 +						doneFields.push(...fieldOpNames);
@@ -2403,14 +2429,14 @@ index 783cbe6..3d43b4d 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +894,14 @@ window.__ModuleLoader__.load({
+@@ -431,12 +917,14 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
 -					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedKeys.clear(); this.republish(); },
 +					retry: () => this.reload(),
 +					clearOverride: () => this.clearOverride(),
-+					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedFields.clear(); this.failedKeys.clear(); this.republish(); },
++					discard: () => { this.staged.clear(); this.stagedKeys.clear(); this.failed = false; this.conflict = false; this.failedFields.clear(); this.failedKeys.clear(); this.partialApplied = 0; this.republish(); },
  				};
  			}
  		}
@@ -2420,7 +2446,7 @@ index 783cbe6..3d43b4d 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +909,89 @@ window.__ModuleLoader__.load({
+@@ -444,16 +932,89 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2513,7 +2539,7 @@ index 783cbe6..3d43b4d 100644
  			] });
  		}
  
-@@ -463,6 +1001,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +1024,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2523,7 +2549,7 @@ index 783cbe6..3d43b4d 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -472,170 +1013,423 @@ window.__ModuleLoader__.load({
+@@ -472,170 +1036,425 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -2995,6 +3021,8 @@ index 783cbe6..3d43b4d 100644
 +					] }, b.id);
 +				}) }),
 +				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: t("unsavedHint") }),
++				state.legacyBatch && state.stagedFieldCount > 1 && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-warn", children: t("legacyBatchHint") }),
++				state.failed && state.partialApplied > 0 && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", children: t("savePartial", { n: state.partialApplied }) }),
  				react_jsx_runtime.jsxs("div", { className: "wsc-actions", children: [
 -					react_jsx_runtime.jsx("button", { className: "wsc-btn", disabled: state.saving || state.stagedCount === 0 || state.writable === false, onClick: () => card.save(), children: state.saving ? props.t("saving") : props.t("save") }),
 -					(state.stagedCount > 0) && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", onClick: () => card.discard(), children: props.t("discard") }),
@@ -3075,7 +3103,7 @@ index 783cbe6..3d43b4d 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1440,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1465,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -3089,7 +3117,7 @@ index 783cbe6..3d43b4d 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1471,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1496,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -3106,7 +3134,7 @@ index 783cbe6..3d43b4d 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1507,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1532,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -3429,7 +3457,7 @@ index dd15b37..fb23fee 100644
 +  return disposers.filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 549b13b..14713a8 100644
+index 549b13b..6d40e2a 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,8 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -3754,10 +3782,14 @@ index 549b13b..14713a8 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -341,19 +432,34 @@ export function resolveOptions(ctx, config) {
+@@ -341,32 +432,77 @@ export function resolveOptions(ctx, config) {
    }
  
    const language = typeof config?.language === "string" ? config.language.trim() : "";
+-
+-  return {
+-    enabledBackends,
+-    numResults: config?.numResults ?? 8,
 +  // Coarse intervention preset. `balanced` is the historical default and keeps
 +  // every field independently configurable; `official` removes provider-level
 +  // rewriting/presentation so the consumer (dsh-tool-web) owns them; `thorough`
@@ -3768,25 +3800,58 @@ index 549b13b..14713a8 100644
 +    : "balanced";
 +  const official = intervention === "official";
 +  const thorough = intervention === "thorough";
- 
-   return {
-     enabledBackends,
--    numResults: config?.numResults ?? 8,
++  const filters = {
++    recency: typeof config?.recency === "string" && config.recency !== "any" ? config.recency : undefined,
++    lang: language.length > 0 ? language : undefined,
++  };
++  // The one list of values that affect cached results. provider.js flattens
++  // this object instead of maintaining a second regex/list of field names.
++  const cacheKeyFields = {
 +    intervention,
 +    queryShaping: !official,
 +    // official follows the consumer's maxResults bound; the other tiers keep
 +    // the user's explicit count (and still never exceed the host cap).
 +    numResults: official ? undefined : (config?.numResults ?? 10),
++    // concurrency changes which backends start before the shared deadline,
++    // so two concurrency settings can produce different result sets.
      concurrency: config?.concurrency ?? 6,
 -    backendTimeoutMs: config?.backendTimeoutMs ?? 30000,
+-    // v2.1 shaping options consumed by the provider merge pipeline.
 +    backendTimeoutMs: config?.backendTimeoutMs ?? 24000,
-     // v2.1 shaping options consumed by the provider merge pipeline.
      dedupStrategy: config?.dedupStrategy === "url+title" ? "url+title" : "url",
 -    rerank: config?.rerank === true,
 -    resultTelemetry: config?.resultTelemetry !== false,
 +    rerank: thorough || (!official && config?.rerank === true),
 +    resultHeader: official ? false : config?.resultHeader !== false,
 +    resultTelemetry: official ? false : config?.resultTelemetry !== false,
++    // v2.8.0 coverage / multiQuery. Internal multi-query stays an explicit
++    // opt-in in every tier: the official consumer already lets the model send
++    // 1-10 queries per call and merges them round-robin, so a "thorough"
++    // preset must not multiply calls invisibly.
++    multiQueryEnabled: !official && config?.multiQueryEnabled === true,
++    deepCoverage: thorough || (!official && config?.deepCoverage === true),
++    includeDomains,
++    excludeDomains,
++  };
++  // Per-backend result-affecting values. Keep this beside backends[] so a new
++  // backend option is added once, not in provider.js as well.
++  const backendCacheKeyFields = {};
++  for (const id of ALL_BACKENDS) {
++    const be = backends[id];
++    backendCacheKeyFields[id] = {
++      apiKeyEnv: be.apiKeyEnv,
++      baseURL: be.baseURL,
++      model: be.model,
++      ...(be.baseURLs !== undefined ? { baseURLs: be.baseURLs } : {}),
++      ...(be.searchDepth !== undefined ? { searchDepth: be.searchDepth } : {}),
++      safeSearch: be.safeSearch,
++      includeDomains: be.includeDomains,
++      excludeDomains: be.excludeDomains,
++    };
++  }
++  return {
++    ...cacheKeyFields,
++    enabledBackends,
      // v2.7.0 cache / breaker / history
 -    cacheEnabled: config?.cacheEnabled === true,
 -    cacheTtlS: Math.max(30, Math.floor(Number(config?.cacheTtl) || CACHE_DEFAULTS.ttlMs / 1000)),
@@ -3795,25 +3860,24 @@ index 549b13b..14713a8 100644
      breakerEnabled: config?.breakerEnabled !== false,
      breakerThreshold: Math.max(1, Math.floor(Number(config?.breakerThreshold) || BREAKER_DEFAULTS.threshold)),
      breakerCooldownMs: config?.breakerCooldownMs != null
-@@ -361,8 +467,15 @@ export function resolveOptions(ctx, config) {
+       ? Math.max(0, Math.floor(Number(config?.breakerCooldownMs) || 0))  // 0 = disabled
        : BREAKER_DEFAULTS.cooldownMs,
      historyEnabled: config?.historyEnabled !== false,
-     // v2.8.0 coverage / multiQuery
+-    // v2.8.0 coverage / multiQuery
 -    multiQueryEnabled: config?.multiQueryEnabled === true,
 -    deepCoverage: config?.deepCoverage === true,
-+    // Internal multi-query stays an explicit opt-in in every tier: the
-+    // official consumer already lets the model send 1-10 queries per call and
-+    // merges them round-robin, so a "thorough" preset must not multiply calls
-+    // invisibly.
-+    multiQueryEnabled: !official && config?.multiQueryEnabled === true,
-+    deepCoverage: thorough || (!official && config?.deepCoverage === true),
-+    includeDomains,
-+    excludeDomains,
+-    filters: {
+-      recency: typeof config?.recency === "string" && config.recency !== "any" ? config.recency : undefined,
+-      lang: language.length > 0 ? language : undefined,
+-    },
 +    domainFilterError,
-     filters: {
-       recency: typeof config?.recency === "string" && config.recency !== "any" ? config.recency : undefined,
-       lang: language.length > 0 ? language : undefined,
-@@ -407,11 +520,28 @@ export function apply(ctx, config) {
++    filters,
++    cacheKeyFields,
++    backendCacheKeyFields,
+     backends,
+     ctx,
+   };
+@@ -407,11 +543,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -3847,7 +3911,7 @@ index 549b13b..14713a8 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -433,10 +563,9 @@ export function apply(ctx, config) {
+@@ -433,10 +586,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -3861,7 +3925,7 @@ index 549b13b..14713a8 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -460,26 +589,48 @@ export function apply(ctx, config) {
+@@ -460,26 +612,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
@@ -3988,7 +4052,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..d95dd3f 100644
+index 744917e..e3e9b5c 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -12,10 +12,11 @@
@@ -4199,7 +4263,7 @@ index 744917e..d95dd3f 100644
  
      available() {
        const opts = resolveOptions();
-@@ -187,48 +275,114 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -187,48 +275,97 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
      async search(request, signal) {
        throwIfSearchAborted(signal);
        const opts = resolveOptions();
@@ -4303,29 +4367,12 @@ index 744917e..d95dd3f 100644
        if (cacheEnabled) {
 -        cacheKey = cacheKeyFor({ query: effReq.query, filters, maxResults, backends: opts.enabledBackends, mode: cacheMode });
 +        // Result-affecting options belong in the key; otherwise a settings
-+        // change is masked by a hit within the cache TTL.
-+        const resultOptions = {};
-+        for (const [k, v] of Object.entries(opts)) {
-+          if (typeof v === "function") continue;
-+          if (/^(safeSearch|rerank|dedupStrategy|language|recency|numResults|resultHeader|resultTelemetry|backendTimeoutMs|concurrency|multiQueryEnabled|deepCoverage|intervention|queryShaping|includeDomains|excludeDomains)$/.test(k)
-+              || /BaseURL$|^.*Model$|^.*ApiKeyEnv$|^enable[A-Z]/.test(k)) resultOptions[k] = v;
-+        }
-+        // resolveOptions() keeps per-backend settings under opts.backends[id],
-+        // not as top-level opts keys. Flatten the result-affecting ones with
-+        // an id prefix so editing a backend's baseURL/model/searchDepth does
-+        // not get masked by a cache hit within the TTL (65 号 N2).
++        // change is masked by a hit within the cache TTL. resolveOptions()
++        // owns the field list; this layer only flattens it.
++        const resultOptions = { ...opts.cacheKeyFields };
 +        for (const id of opts.enabledBackends ?? []) {
-+          const be = opts.backends?.[id];
-+          if (!be || typeof be !== "object") continue;
-+          // Domain filters live in backend options as well; keying the
-+          // top-level lists alone would miss a per-backend edit.
-+          if (Array.isArray(be.includeDomains)) resultOptions[`${id}.includeDomains`] = be.includeDomains;
-+          if (Array.isArray(be.excludeDomains)) resultOptions[`${id}.excludeDomains`] = be.excludeDomains;
-+          // Every per-backend option that changes results must appear here, or
-+          // a cache hit inside the TTL masks the edit. baseURLs (plural) is the
-+          // SearXNG failover list; leaving it out made instance changes inert.
-+          for (const k of ["baseURL", "baseURLs", "model", "searchDepth", "safeSearch", "apiKeyEnv"]) {
-+            if (be[k] !== undefined) resultOptions[`${id}.${k}`] = be[k];
++          for (const [k, v] of Object.entries(opts.backendCacheKeyFields?.[id] ?? {})) {
++            resultOptions[`${id}.${k}`] = v;
 +          }
 +        }
 +        resultOptions.queryLanguage = queryLanguage;
@@ -4336,7 +4383,7 @@ index 744917e..d95dd3f 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -241,15 +395,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -241,15 +378,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
              cacheKey = null;
            } else {
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
@@ -4364,7 +4411,7 @@ index 744917e..d95dd3f 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -279,22 +436,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -279,22 +419,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -4436,7 +4483,7 @@ index 744917e..d95dd3f 100644
            "WEB_PROVIDER_UNAVAILABLE",
          );
        }
-@@ -302,8 +503,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -302,8 +486,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // Run ONE query variant through the full fan-out: breaker-aware backend
        // execution under the per-variant limiter, then PHASE 1 collect. The
        // internal abort/timeout semantics are unchanged from v2.7.
@@ -4450,7 +4497,7 @@ index 744917e..d95dd3f 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -311,50 +516,136 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -311,50 +499,136 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -4612,7 +4659,7 @@ index 744917e..d95dd3f 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -363,8 +654,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -363,8 +637,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -4623,7 +4670,7 @@ index 744917e..d95dd3f 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -372,22 +663,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -372,22 +646,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -4723,7 +4770,7 @@ index 744917e..d95dd3f 100644
          // PHASE 2 dedupe / PHASE 3 rerank (per variant list, pre-fusion).
          const strategy = opts.dedupStrategy === "url+title" ? "url+title" : "url";
          const deduped = dedupeSources(fold.collected, strategy);
-@@ -395,58 +759,144 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -395,58 +742,144 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4891,7 +4938,7 @@ index 744917e..d95dd3f 100644
          };
        }
  
-@@ -454,20 +904,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -454,20 +887,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4932,7 +4979,7 @@ index 744917e..d95dd3f 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -475,21 +936,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -475,21 +919,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          };
        }
  
