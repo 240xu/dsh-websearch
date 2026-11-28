@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.14.0 - 2026-11-29
+
+- Add Perplexity Search backend: official POST /search, Bearer key, ranked
+  pages (no generated answer), 1-20 results, recency/language/domain filters.
+  Key-gated and off by default; config key/env/base URL and Settings card.
+- Tests: 299 (no live Perplexity key; mocked request/parser coverage).
 ## 2.13.20 - 2026-11-28
 
 - UX: tier draft-drop notice, 240px wrapping, h4 hierarchy, toggle error outside

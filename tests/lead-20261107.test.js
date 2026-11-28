@@ -189,7 +189,7 @@ test("all non-2xx throws use webErrorFromResponse (structured error contract)", 
     // No backend may hand-write a generic WebError for an HTTP failure.
     assert.doesNotMatch(src, /throw new WebError\([^)]*WEB_PROVIDER_ERROR[^)]*HTTP/);
   }
-  assert.equal(calls, 11, "expected 11 structured non-2xx throw sites");
+  assert.equal(calls, 12, "expected 12 structured non-2xx throw sites");
 });
 
 // opts.resultHeader === false must actually suppress the model-facing header.

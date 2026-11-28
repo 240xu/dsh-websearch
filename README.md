@@ -5,13 +5,13 @@
 
 > Aggregated web search provider for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) — one plugin id `unified` that fans out to thirteen backends concurrently, merges + URL-dedups results, and stays usable even when some backends go down.
 
-A pure-Cordis drop-in: registers one provider id at `ctx.web`; with `searchProvider: unified` pinned (see Install), the `dsh-web` selection rule never has to choose between it and the host's DeepSeek search providers. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek) auto-activate once their key is supplied via the credentials service or env.
+A pure-Cordis drop-in: registers one provider id at `ctx.web`; with `searchProvider: unified` pinned (see Install), the `dsh-web` selection rule never has to choose between it and the host's DeepSeek search providers. Zero-config search out of the box (Exa + Parallel + DuckDuckGo + SearXNG are keyless); API-key backends (DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek / Perplexity) auto-activate once their key is supplied via the credentials service or env.
 
 ---
 
-DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十三后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
+DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：向 `ctx.web` 注册**唯一**的聚合搜索 provider `unified`，内置十四后端并发 fan-out，合并 + URL 去重后返回——即使部分后端宕机仍可用。
 
-纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek 在提供 API key 后自动激活。
+纯 Cordis 直插：只注册一个 provider，所以 `dsh-web` 的选择规则永远不会触发 `WEB_PROVIDER_AMBIGUOUS`。**零配置即可搜索**——Exa + Parallel + DuckDuckGo + SearXNG 四者皆无 key、开箱即用；DeepSeek / Anthropic / OpenAI / Brave / Tavily / Serper / Mojeek / Perplexity 在提供 API key 后自动激活。
 
 ## Backends | 后端
 
@@ -30,6 +30,7 @@ DSH（[DeepSeek Harness](https://github.com/deepseek-ai/dsh)）原生插件：�
 | `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1/responses` | Responses API native `web_search` tool, parse `url_citation` annotations | Codex 同机制 |
 | `firecrawl` | none/optional | `https://mcp.firecrawl.dev/v2/mcp` | streamable-http MCP, hosted keyless tier (metered), optional key raises limits | 默认关,计量型 |
 | `tinyfish` | none/optional | `https://agent.tinyfish.ai/mcp` | streamable-http MCP, keyless 30/min · 50/day, optional key raises limits | 默认关,计量型 |
+| `perplexity` | `PERPLEXITY_API_KEY` | `https://api.perplexity.ai/search` | REST JSON `results[] {title,url,snippet,date,last_updated}`, ranked pages (no generated answer), 1-20 web results | 默认关;官方 Search API |
 
 > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
 
@@ -125,7 +126,7 @@ pnpm install
 **结果健康遥测（默认开）**：每次搜索的 `content` 尾部附一行 `[websearch backends] exa ✓5ms/3 · ddg ✗30000ms`，
 模型可据此自诊断并建议用户调整设置；设置面板「结果策略」可关闭（`resultTelemetry`），`official` 档始终关闭。
 
-**13 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai` / `enableFirecrawl` / `enableTinyfish`（默认关，后两者为计量型免 Key 后端）
+**14 个后端开关**：`enableExa` / `enableParallel` / `enableDdg` / `enableSearxng`（默认开）；`enableBrave` / `enableTavily` / `enableSerper` / `enableMojeek` / `enableDeepseek` / `enableAnthropic` / `enableOpenai` / `enableFirecrawl` / `enableTinyfish` / `enablePerplexity`（默认关，Firecrawl/TinyFish 为计量型免 Key 后端）
 
 **API Key 授权**（credential-ref，填环境变量名，实际 key 存于 credentials 服务或环境变量）：
 
@@ -270,7 +271,7 @@ tests/
 node --test tests/
 ```
 
-当前 296/296 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 299/299 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 

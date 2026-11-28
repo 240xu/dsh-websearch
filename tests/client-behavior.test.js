@@ -236,7 +236,7 @@ test("the card renders one row per enabled keyed backend and no optional title w
   // enabled), so a render that silently drops them (children: [].map(...))
   // must fail here.
   const keyCards = seen.filter((n) => n.props?.className === "wsc-keyCard");
-  assert.equal(keyCards.length, 7, "one card per keyed backend in KEYED");
+  assert.equal(keyCards.length, 8, "one card per keyed backend in KEYED");
   // The optional-key group (searxng / firecrawl / tinyfish) has its own header
   // and must not be collapsed into the keyed grid.
   const titles = seen.filter((n) => n.props?.className === "wsc-sectionTitle");
@@ -1282,7 +1282,7 @@ test("a failed credential read stays unknown and a later save clears it", async 
   const badges = flatten(component, props).filter((n) =>
     n.type === "span" && n.props.className === "wsc-badge" && n.props.children === "keyReadFailedBadge"
   );
-  assert.equal(badges.length, 10, "all keyed and optional badges say read failed");
+  assert.equal(badges.length, 11, "all keyed and optional badges say read failed");
   const checking = flatten(component, props).filter((n) =>
     n.type === "span" && n.props.className === "wsc-badge" && n.props.children === "keyChecking"
   );
@@ -1312,7 +1312,7 @@ test("an explicit enabledBackends override replaces and disables the switches", 
   let nodes = flatten(component, props);
   assert.ok(nodes.find((n) => n.props.id === "wsc-override-hint"), "the override banner is visible");
   let toggles = nodes.filter((n) => n.type === "input" && n.props.type === "checkbox");
-  assert.equal(toggles.length, 13);
+  assert.equal(toggles.length, 14);
   assert.ok(toggles.every((n) => n.props.disabled === true), "all backend switches are disabled");
   assert.equal(toggles.filter((n) => n.props.checked === true).length, 1, "only the override list is enabled");
   const clear = nodes.find((n) => n.type === "button" && n.props.children === "clearOverride");

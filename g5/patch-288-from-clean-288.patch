@@ -703,6 +703,127 @@ index 37a439d..5e7c3be 100644
    if (typeof text !== "string" || text.length === 0) return [];
    let parsed;
    try {
+diff --git a/lib/backends/perplexity.js b/lib/backends/perplexity.js
+new file mode 100644
+index 0000000..2b23715
+--- /dev/null
++++ b/lib/backends/perplexity.js
+@@ -0,0 +1,115 @@
++/**
++ * Perplexity Search API backend.
++ * REST API: POST https://api.perplexity.ai/search
++ * Auth: Bearer API key. Returns ranked pages, not a generated answer.
++ */
++
++import { WebError } from "@deepseek-ai/dsh-web";
++import { webErrorFromResponse } from "../util/web-error.js";
++import { throwIfSearchAborted, searchAborted, isAbortError } from "../util/abort.js";
++import { normalizeFilters } from "../util/filters.js";
++import { egressFetch } from "../util/egress-fetch.js";
++import { describeError } from "../util/describe-error.js";
++
++const PERPLEXITY_ENDPOINT = "https://api.perplexity.ai/search";
++const RECENCY = new Set(["hour", "day", "week", "month", "year"]);
++
++/** @type {import("../provider.js").Backend} */
++export const perplexityBackend = {
++  id: "perplexity",
++  requiresCredential: true,
++
++  available(options) {
++    return typeof options?.resolveApiKey === "function";
++  },
++
++  async search(request, signal, options, hooks) {
++    throwIfSearchAborted(signal);
++    const backendOpts = options ?? {};
++    const apiKey = await backendOpts.resolveApiKey?.();
++    if (!apiKey) {
++      throw new WebError("Perplexity Search: API key not configured", "WEB_PROVIDER_CREDENTIAL_MISSING");
++    }
++
++    const body = {
++      query: request.query,
++      max_results: Math.min(Math.max(request.maxResults ?? 8, 1), 20),
++      search_type: "web",
++    };
++    const filters = normalizeFilters(request.filters);
++    if (RECENCY.has(filters.recency)) body.search_recency_filter = filters.recency;
++    const lang = typeof filters.lang === "string" ? filters.lang.trim().toLowerCase().slice(0, 2) : "";
++    if (/^[a-z]{2}$/.test(lang)) body.search_language_filter = [lang];
++    const domains = [
++      ...(Array.isArray(backendOpts.includeDomains) ? backendOpts.includeDomains : []),
++      ...(Array.isArray(backendOpts.excludeDomains) ? backendOpts.excludeDomains : []).map((d) => "-" + d),
++    ].slice(0, 200);
++    if (domains.length > 0) body.search_domain_filter = domains;
++
++    const endpoint = backendOpts.baseURL ?? PERPLEXITY_ENDPOINT;
++    hooks?.recordRequest?.({
++      endpoint,
++      toolName: "perplexity_search",
++      body: { query: request.query, max_results: body.max_results },
++    });
++
++    let response;
++    try {
++      response = await egressFetch(endpoint, {
++        method: "POST",
++        headers: {
++          Authorization: "Bearer " + apiKey,
++          "Content-Type": "application/json",
++          Accept: "application/json",
++          "User-Agent": "dsh-websearch/2.14",
++        },
++        body: JSON.stringify(body),
++        redirect: "error",
++        signal,
++      });
++    } catch (error) {
++      if (signal?.aborted === true || isAbortError(error)) throw searchAborted(signal, error);
++      throw new WebError("Perplexity Search request failed: " + describeError(error), "WEB_PROVIDER_ERROR", { cause: error });
++    }
++
++    if (!response.ok) {
++      const text = await response.text().catch(() => "").then((tx) => tx.slice(0, 300));
++      hooks?.recordOutcome?.({ status: "error", message: "HTTP " + response.status + ": " + text });
++      throw webErrorFromResponse(response, text, "Perplexity");
++    }
++
++    let data;
++    try {
++      data = await response.json();
++    } catch (error) {
++      throw new WebError("Perplexity Search: invalid JSON response", "WEB_PROVIDER_ERROR", { cause: error });
++    }
++
++    const sources = parsePerplexityResult(data, request.maxResults ?? 8);
++    hooks?.recordOutcome?.({ status: "success", count: sources.length });
++    return { sources };
++  },
++};
++
++/**
++ * Parse Perplexity Search API results. `date` is YYYY-MM-DD; the provider's
++ * finalizeSources() normalizes it to ISO and drops relative/invalid values.
++ * @param {object} data
++ * @param {number} maxResults
++ * @returns {Array<{url:string,title?:string,snippet?:string,publishedAt?:string}>}
++ */
++export function parsePerplexityResult(data, maxResults) {
++  const results = Array.isArray(data?.results) ? data.results : [];
++  const sources = [];
++  for (const item of results) {
++    if (sources.length >= maxResults) break;
++    if (typeof item?.url !== "string" || !/^https?:\/\//i.test(item.url)) continue;
++    sources.push({
++      url: item.url,
++      ...(item.title ? { title: String(item.title).slice(0, 300) } : {}),
++      ...(item.snippet ? { snippet: String(item.snippet).slice(0, 800) } : {}),
++      ...(typeof item.date === "string" ? { publishedAt: item.date } : {}),
++    });
++  }
++  return sources;
++}
 diff --git a/lib/backends/searxng.js b/lib/backends/searxng.js
 index 499763f..be33378 100644
 --- a/lib/backends/searxng.js
@@ -1407,10 +1528,10 @@ index 88dc8c3..9f58ec5 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..e6fc79c 100644
+index 783cbe6..c4fe3f3 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -23,16 +23,36 @@ window.__ModuleLoader__.load({
+@@ -23,16 +23,37 @@ window.__ModuleLoader__.load({
  			{ id: "deepseek", keyEnv: "DEEPSEEK_API_KEY", label: "DeepSeek" },
  			{ id: "anthropic", keyEnv: "ANTHROPIC_API_KEY", label: "Anthropic" },
  			{ id: "openai", keyEnv: "OPENAI_API_KEY", label: "OpenAI" },
@@ -1421,6 +1542,7 @@ index 783cbe6..e6fc79c 100644
 +			// still accept an optional key (OPTIONAL_KEYS) to raise limits.
 +			{ id: "firecrawl", keyEnv: "FIRECRAWL_API_KEY", optionalKey: true, metered: true, label: "Firecrawl (免 Key · 有额度 · 默认关)" },
 +			{ id: "tinyfish", keyEnv: "TINYFISH_API_KEY", optionalKey: true, metered: true, label: "TinyFish (免 Key · 30/分·50/日 · 默认关)" },
++			{ id: "perplexity", keyEnv: "PERPLEXITY_API_KEY", label: "Perplexity Search" },
  		];
 -		const GLOBAL_FIELDS = ["numResults", "concurrency", "backendTimeoutMs"];
 +		const GLOBAL_FIELDS = ["numResults", "concurrency", "backendTimeoutMs", "cacheTtl"];
@@ -1450,7 +1572,11 @@ index 783cbe6..e6fc79c 100644
  		const KEYED = BACKENDS.filter((b) => b.keyEnv && !b.optionalKey);
  		const OPTIONAL_KEYS = BACKENDS.filter((b) => b.keyEnv && b.optionalKey);
  
-@@ -48,15 +68,34 @@ window.__ModuleLoader__.load({
+@@ -45,18 +66,39 @@ window.__ModuleLoader__.load({
+ 			deepseek: "https://platform.deepseek.com/api_keys",
+ 			anthropic: "https://console.anthropic.com/settings/keys",
+ 			openai: "https://platform.openai.com/api-keys",
++			perplexity: "https://www.perplexity.ai/settings/api",
  		};
  
  		const zh = {
@@ -1467,6 +1593,7 @@ index 783cbe6..e6fc79c 100644
 +			backendOpenai: "OpenAI",
 +			backendFirecrawl: "Firecrawl (免 Key · 有额度 · 默认关)",
 +			backendTinyfish: "TinyFish (免 Key · 30/分·50/日 · 默认关)",
++			backendPerplexity: "Perplexity Search",
  			nav: "搜索",
  			groupFree: "免密钥（开箱即用）",
  			groupKeyed: "需要 API Key",
@@ -1486,7 +1613,7 @@ index 783cbe6..e6fc79c 100644
  			save: "保存",
  			discard: "放弃修改",
  			dirty: "有未保存修改",
-@@ -67,12 +106,18 @@ window.__ModuleLoader__.load({
+@@ -67,12 +109,18 @@ window.__ModuleLoader__.load({
  			overridden: "已自定义",
  			keyLabel: "{id} API Key",
  			getKey: "获取 Key ↗",
@@ -1507,7 +1634,7 @@ index 783cbe6..e6fc79c 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +135,73 @@ window.__ModuleLoader__.load({
+@@ -90,22 +138,73 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1584,7 +1711,7 @@ index 783cbe6..e6fc79c 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +212,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +215,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1605,7 +1732,7 @@ index 783cbe6..e6fc79c 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +244,47 @@ window.__ModuleLoader__.load({
+@@ -142,15 +247,47 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1656,7 +1783,7 @@ index 783cbe6..e6fc79c 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +322,70 @@ window.__ModuleLoader__.load({
+@@ -188,17 +325,70 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1731,7 +1858,7 @@ index 783cbe6..e6fc79c 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +396,32 @@ window.__ModuleLoader__.load({
+@@ -209,20 +399,32 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1769,7 +1896,7 @@ index 783cbe6..e6fc79c 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +435,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +438,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1797,7 +1924,7 @@ index 783cbe6..e6fc79c 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +467,32 @@ window.__ModuleLoader__.load({
+@@ -258,11 +470,32 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1831,7 +1958,7 @@ index 783cbe6..e6fc79c 100644
  			}
  
  			sectionValue(field) {
-@@ -276,15 +506,34 @@ window.__ModuleLoader__.load({
+@@ -276,15 +509,34 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1866,7 +1993,7 @@ index 783cbe6..e6fc79c 100644
  					savedAt: this.savedAt,
  					stagedText: (field) => {
  						const s = this.staged.get(field);
-@@ -292,59 +541,240 @@ window.__ModuleLoader__.load({
+@@ -292,59 +544,240 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -2129,7 +2256,7 @@ index 783cbe6..e6fc79c 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,73 +784,179 @@ window.__ModuleLoader__.load({
+@@ -354,73 +787,179 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2326,7 +2453,7 @@ index 783cbe6..e6fc79c 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +967,15 @@ window.__ModuleLoader__.load({
+@@ -431,12 +970,15 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2344,7 +2471,7 @@ index 783cbe6..e6fc79c 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +983,92 @@ window.__ModuleLoader__.load({
+@@ -444,16 +986,92 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2445,7 +2572,7 @@ index 783cbe6..e6fc79c 100644
  			] });
  		}
  
-@@ -463,6 +1078,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +1081,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2455,7 +2582,7 @@ index 783cbe6..e6fc79c 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -472,171 +1090,442 @@ window.__ModuleLoader__.load({
+@@ -472,171 +1093,442 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -3026,7 +3153,7 @@ index 783cbe6..e6fc79c 100644
  			] });
  		}
  
-@@ -646,7 +1535,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1538,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -3040,7 +3167,7 @@ index 783cbe6..e6fc79c 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1566,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1569,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -3057,7 +3184,7 @@ index 783cbe6..e6fc79c 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1602,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1605,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -3380,7 +3507,7 @@ index dd15b37..fb23fee 100644
 +  return disposers.filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 99230ce..6d40e2a 100644
+index 99230ce..5a74842 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,8 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -3392,17 +3519,18 @@ index 99230ce..6d40e2a 100644
  
  // Import all backends
  import { exaBackend } from "./backends/exa.js";
-@@ -33,6 +35,9 @@ import { tavilyBackend } from "./backends/tavily.js";
+@@ -33,6 +35,10 @@ import { tavilyBackend } from "./backends/tavily.js";
  import { serperBackend } from "./backends/serper.js";
  import { searxngBackend } from "./backends/searxng.js";
  import { mojeekBackend } from "./backends/mojeek.js";
 +// OpenCode v2 keyless MCP backends.
 +import { firecrawlBackend } from "./backends/firecrawl.js";
 +import { tinyfishBackend } from "./backends/tinyfish.js";
++import { perplexityBackend } from "./backends/perplexity.js";
  import { createUnifiedSearchProvider, getLatestBackendHealth } from "./provider.js";
  import { registerHealthRoute } from "./health.js";
  import { createSearchCache, CACHE_DEFAULTS } from "./cache.js";
-@@ -63,12 +68,19 @@ const BACKENDS = {
+@@ -63,12 +69,20 @@ const BACKENDS = {
    deepseek: deepseekBackend,
    anthropic: anthropicBackend,
    openai: openaiBackend,
@@ -3411,6 +3539,7 @@ index 99230ce..6d40e2a 100644
 +  // and Firecrawl's exact daily ceiling is not published by the vendor.
 +  firecrawl: firecrawlBackend,
 +  tinyfish: tinyfishBackend,
++  perplexity: perplexityBackend,
  };
  
  /** All backend ids in registry order. */
@@ -3422,13 +3551,14 @@ index 99230ce..6d40e2a 100644
  const DEFAULT_ENABLED = ["exa", "parallel", "ddg", "searxng"];
  
  /** Environment-variable names each key-gated backend reads. */
-@@ -80,8 +92,16 @@ const DEFAULT_KEY_ENV = {
+@@ -80,8 +94,17 @@ const DEFAULT_KEY_ENV = {
    tavily: "TAVILY_API_KEY",
    serper: "SERPER_API_KEY",
    mojeek: "MOJEEK_API_KEY",
 +  // Optional keys; keyless works without them.
 +  firecrawl: "FIRECRAWL_API_KEY",
 +  tinyfish: "TINYFISH_API_KEY",
++  perplexity: "PERPLEXITY_API_KEY",
  };
  
 +/** Backends whose key only raises the hosted tier's limits, not a prerequisite. */
@@ -3439,7 +3569,7 @@ index 99230ce..6d40e2a 100644
  /** Default base URLs. */
  const DEFAULT_BASE_URLS = {
    exa: "https://mcp.exa.ai/mcp",
-@@ -95,6 +115,10 @@ const DEFAULT_BASE_URLS = {
+@@ -95,6 +118,11 @@ const DEFAULT_BASE_URLS = {
    deepseek: "https://api.deepseek.com/anthropic/v1",
    anthropic: "https://api.anthropic.com/v1",
    openai: "https://api.openai.com/v1",
@@ -3447,10 +3577,11 @@ index 99230ce..6d40e2a 100644
 +  // matching *BaseURL settings so a TLS-fingerprint sidecar can be pointed at.
 +  firecrawl: "https://mcp.firecrawl.dev/v2/mcp",
 +  tinyfish: "https://agent.tinyfish.ai/mcp",
++  perplexity: "https://api.perplexity.ai/search",
  };
  
  /** Env var that overrides the default backend sweep order / enabled set. */
-@@ -122,6 +146,10 @@ const DEFAULT_LABELS = {
+@@ -122,6 +150,11 @@ const DEFAULT_LABELS = {
    deepseek: "DeepSeek (原生 web_search, 需 Key)",
    anthropic: "Anthropic (Claude 原生 web_search, 需 Key)",
    openai: "OpenAI (Responses API web_search, 需 Key)",
@@ -3458,10 +3589,11 @@ index 99230ce..6d40e2a 100644
 +  // which is why both toggles default to off.
 +  firecrawl: "Firecrawl (MCP, keyless with quota, off by default)",
 +  tinyfish: "TinyFish (MCP, keyless 30/min and 50/day, off by default)",
++  perplexity: "Perplexity Search (ranked pages, API key required)",
  };
  
  /**
-@@ -132,12 +160,14 @@ const DEFAULT_LABELS = {
+@@ -132,12 +165,14 @@ const DEFAULT_LABELS = {
   */
  export const Config = z.object({
    // Global
@@ -3480,7 +3612,7 @@ index 99230ce..6d40e2a 100644
  
    // v2.1 result shaping
    recency: z.union(["any", "day", "week", "month", "year"]).default("any")
-@@ -146,12 +176,18 @@ export const Config = z.object({
+@@ -146,12 +181,18 @@ export const Config = z.object({
      .description("搜索语言（如 en、zh-CN；留空用各后端默认）"),
    safeSearch: z.boolean().default(true)
      .description("安全搜索（SearXNG / Brave 支持开关，其余后端忽略）"),
@@ -3501,7 +3633,7 @@ index 99230ce..6d40e2a 100644
  
    // v2.7.0 disk cache / circuit breaker / search history
    // W1 (fe-ui review): labels speak user language with a group prefix
-@@ -159,22 +195,22 @@ export const Config = z.object({
+@@ -159,22 +200,22 @@ export const Config = z.object({
    // spelled out (秒 / 毫秒) and grouping follows the field order below.
    cacheEnabled: z.boolean().default(true)
      .description("启用搜索结果缓存【缓存】：相同查询+过滤+条数在有效期内直接命中，不再请求后端"),
@@ -3529,13 +3661,14 @@ index 99230ce..6d40e2a 100644
  
    // Enable toggles (one per backend)
    enableExa: z.boolean().default(true).description(DEFAULT_LABELS.exa),
-@@ -188,24 +224,33 @@ export const Config = z.object({
+@@ -188,24 +229,36 @@ export const Config = z.object({
    enableDeepseek: z.boolean().default(false).description(DEFAULT_LABELS.deepseek),
    enableAnthropic: z.boolean().default(false).description(DEFAULT_LABELS.anthropic),
    enableOpenai: z.boolean().default(false).description(DEFAULT_LABELS.openai),
 +  // Opt-in by default; see DEFAULT_ENABLED comment.
 +  enableFirecrawl: z.boolean().default(false).description(DEFAULT_LABELS.firecrawl),
 +  enableTinyfish: z.boolean().default(false).description(DEFAULT_LABELS.tinyfish),
++  enablePerplexity: z.boolean().default(false).description(DEFAULT_LABELS.perplexity),
  
    // Credential refs (env-var names; secrets live in the credentials service)
 -  braveApiKeyEnv: z.string().role("credential-ref").default(DEFAULT_KEY_ENV.brave)
@@ -3568,10 +3701,12 @@ index 99230ce..6d40e2a 100644
 +    .description("Firecrawl API key credential reference (optional; blank uses the hosted keyless tier)"),
 +  tinyfishApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.tinyfish)
 +    .description("TinyFish API key credential reference (optional; blank uses keyless mode)"),
++  perplexityApiKeyEnv: z.string().role("credential-ref").pattern(/^[A-Za-z_][A-Za-z0-9_]*$/).min(1).default(DEFAULT_KEY_ENV.perplexity)
++    .description("Perplexity Search API key credential reference"),
  
    // Base URLs (defaults from built-in registry)
    braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
-@@ -226,6 +271,12 @@ export const Config = z.object({
+@@ -226,6 +279,14 @@ export const Config = z.object({
      .description("Anthropic API 端点（默认官方；自托管/代理实例改此项）"),
    openaiBaseURL: z.string().default(DEFAULT_BASE_URLS.openai)
      .description("OpenAI API 端点（默认官方；自托管/代理实例改此项）"),
@@ -3581,10 +3716,12 @@ index 99230ce..6d40e2a 100644
 +    .description("Firecrawl MCP endpoint (official v2 by default; may point at a TLS sidecar)"),
 +  tinyfishBaseURL: z.string().default(DEFAULT_BASE_URLS.tinyfish)
 +    .description("TinyFish MCP endpoint (official by default; may point at a TLS sidecar)"),
++  perplexityBaseURL: z.string().default(DEFAULT_BASE_URLS.perplexity)
++    .description("Perplexity Search endpoint (official by default)"),
  
    // Models
    deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
-@@ -260,8 +311,9 @@ Config.meta = { ...Config.meta, volatile: true };
+@@ -260,8 +321,9 @@ Config.meta = { ...Config.meta, volatile: true };
   * provides the field regardless.
   */
  const FIELD_LABELS = {
@@ -3595,7 +3732,7 @@ index 99230ce..6d40e2a 100644
    breakerEnabled: "后端熔断器",
    breakerThreshold: "熔断阈值（连续失败次数）",
    breakerCooldownMs: "熔断冷却时长（毫秒）",
-@@ -280,8 +332,35 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+@@ -280,8 +342,35 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
   * serves its NEXT search with. Key resolution: credentialRef -> credentials
   * service -> env.
   */
@@ -3632,7 +3769,7 @@ index 99230ce..6d40e2a 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -289,20 +368,9 @@ export function resolveOptions(ctx, config) {
+@@ -289,20 +378,9 @@ export function resolveOptions(ctx, config) {
    }
  
    if (enabledBackends.length === 0) {
@@ -3656,7 +3793,7 @@ index 99230ce..6d40e2a 100644
    }
  
    if (enabledBackends.length === 0) {
-@@ -318,8 +386,20 @@ export function resolveOptions(ctx, config) {
+@@ -318,8 +396,20 @@ export function resolveOptions(ctx, config) {
    if (enabledBackends.length === 0) {
      enabledBackends = [...DEFAULT_ENABLED];
    }
@@ -3677,7 +3814,7 @@ index 99230ce..6d40e2a 100644
    const backends = {};
    for (const id of ALL_BACKENDS) {
      const keyEnvName = config?.[`${id}ApiKeyEnv`] ?? DEFAULT_KEY_ENV[id];
-@@ -336,8 +416,12 @@ export function resolveOptions(ctx, config) {
+@@ -336,8 +426,12 @@ export function resolveOptions(ctx, config) {
            : [],
        } : {}),
        safeSearch: config?.safeSearch !== false,
@@ -3691,7 +3828,7 @@ index 99230ce..6d40e2a 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -348,32 +432,77 @@ export function resolveOptions(ctx, config) {
+@@ -348,32 +442,77 @@ export function resolveOptions(ctx, config) {
    }
  
    const language = typeof config?.language === "string" ? config.language.trim() : "";
@@ -3786,7 +3923,7 @@ index 99230ce..6d40e2a 100644
      backends,
      ctx,
    };
-@@ -414,11 +543,28 @@ export function apply(ctx, config) {
+@@ -414,11 +553,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -3820,7 +3957,7 @@ index 99230ce..6d40e2a 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -440,10 +586,9 @@ export function apply(ctx, config) {
+@@ -440,10 +596,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -3834,7 +3971,7 @@ index 99230ce..6d40e2a 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -467,26 +612,48 @@ export function apply(ctx, config) {
+@@ -467,26 +622,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
