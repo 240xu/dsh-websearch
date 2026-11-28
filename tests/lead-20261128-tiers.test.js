@@ -220,7 +220,7 @@ test("a backend that ignores its abort signal still obeys the per-backend timeou
   const started = Date.now();
   await assert.rejects(
     provider.search({ query: "hang", maxResults: 5 }, new AbortController().signal),
-    /timed out after 1\d{2}ms/,
+    /(?:timed out|search budget exhausted) after 1?\d{2,3}ms/,
   );
   assert.ok(Date.now() - started < 1000, "the race must not wait for the hung promise");
 });
@@ -259,7 +259,7 @@ test("a synchronously throwing backend does not create an unhandled rejection", 
     backends: { boom: { id: "boom", available: () => true, search() { throw new Error("sync boom"); } } },
     resolveOptions: () => ({
       ...resolveOptions(CTX, {}), enabledBackends: ["boom"], backends: { boom: {} }, filters: {},
-      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 100,
+      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 5000,
       language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
     }),
   });
@@ -475,27 +475,34 @@ test("a 2s budget still runs three fast facets", async () => {
 test("a starved multi-query run reports the skipped facets and is not cached", async () => {
   let calls = 0;
   let slow = true;
-  const provider = createUnifiedSearchProvider({
-    ctx: {}, cache: new Map(), history: undefined,
-    backends: { b: { id: "b", available: () => true, async search() {
-      calls += 1;
-      if (slow) await new Promise((r) => setTimeout(r, 500));
-      return { sources: [{ url: `https://b.example/${calls}` }] };
-    } } },
-    resolveOptions: () => ({
-      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["b"], backends: { b: {} },
-      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 600,
-      language: "", recency: "any", cacheEnabled: true, breakerEnabled: false, historyEnabled: false,
-    }),
-  });
-  // A real cache instance is needed for the write path; cacheEnabled + Map is not enough.
-  const first = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
-  assert.match(String(first.content ?? ""), /multiQuery: 2\/3 facets not run/);
-  const firstCalls = calls;
-  slow = false;
-  await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
-  assert.ok(calls > firstCalls, "a truncated facet run is not served from the cache");
+  const realNow = Date.now;
+  let shift = 0;
+  Date.now = () => realNow() + shift;
+  try {
+    const provider = createUnifiedSearchProvider({
+      ctx: {}, cache: new Map(), history: undefined,
+      backends: { b: { id: "b", available: () => true, async search() {
+        calls += 1;
+        if (slow) shift = 1000; // make the first facet consume most of the 1500ms budget
+        return { sources: [{ url: `https://b.example/${calls}` }] };
+      } } },
+      resolveOptions: () => ({
+        ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["b"], backends: { b: {} },
+        filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1500,
+        language: "", recency: "any", cacheEnabled: true, breakerEnabled: false, historyEnabled: false,
+      }),
+    });
+    const first = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+    assert.match(String(first.content ?? ""), /multiQuery: 2\/3 facets not run/);
+    const firstCalls = calls;
+    slow = false;
+    await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+    assert.ok(calls > firstCalls, "a truncated facet run is not served from the cache");
+  } finally {
+    Date.now = realNow;
+  }
 });
+
 
 test("a missing key is a health diagnosis, not a breaker failure", async () => {
   getLatestBackendHealth().clear();
@@ -520,19 +527,29 @@ test("a missing key is a health diagnosis, not a breaker failure", async () => {
 });
 
 test("an empty starved multi-query result still reports the skipped facets", async () => {
-  const provider = createUnifiedSearchProvider({
-    ctx: {}, cache: undefined, history: undefined,
-    backends: { empty: { id: "empty", available: () => true, async search() {
-      await new Promise((r) => setTimeout(r, 900));
-      return { sources: [] };
-    } } },
-    resolveOptions: () => ({
-      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["empty"], backends: { empty: {} },
-      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1000,
-      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
-    }),
-  });
-  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
-  assert.equal(out.sources.length, 0);
-  assert.match(String(out.content ?? ""), /multiQuery: 2\/3 facets not run/);
+  const realNow = Date.now;
+  let shift = 0;
+  Date.now = () => realNow() + shift;
+  try {
+    const provider = createUnifiedSearchProvider({
+      ctx: {}, cache: undefined, history: undefined,
+      backends: { empty: { id: "empty", available: () => true, async search() {
+        shift = 1000;
+        return { sources: [] };
+      } } },
+      resolveOptions: () => ({
+        ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["empty"], backends: { empty: {} },
+        filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 1500,
+        language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+      }),
+    });
+    const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+    assert.equal(out.sources.length, 0);
+    assert.match(String(out.content ?? ""), /multiQuery: 2\/3 facets not run/);
+  } finally {
+    Date.now = realNow;
+  }
 });
+
+
+

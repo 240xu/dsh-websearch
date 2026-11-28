@@ -3376,7 +3376,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..6505d56 100644
+index 7242a56..03e752b 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -4000,10 +4000,14 @@ index 7242a56..6505d56 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -409,43 +697,109 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -409,43 +697,113 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
++      if (variantsRun === 0) {
++        recordHistory(history, request?.query, 0, 0, candidates.length);
++        throw new WebError("unified search: search budget exhausted before any backend could run", "WEB_PROVIDER_ERROR");
++      }
 +      const variantsSkipped = variants.length - variantsRun;
 +      const facetNote = useMulti && variantsSkipped > 0
 +        ? ` · multiQuery: ${variantsSkipped}/${variants.length} facets not run (search budget)`
@@ -4128,7 +4132,7 @@ index 7242a56..6505d56 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,23 +807,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +811,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
@@ -4157,7 +4161,7 @@ index 7242a56..6505d56 100644
          };
        }
  
-@@ -477,20 +832,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +836,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4198,7 +4202,7 @@ index 7242a56..6505d56 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +866,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +870,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.

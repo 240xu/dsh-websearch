@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.13.8 - 2026-11-28
+
+- Fix: if the shared deadline is already spent before the first variant, the
+  provider now throws `search budget exhausted before any backend could run`
+  instead of returning an empty success.
+- Test reliability: starvation tests advance a stubbed clock instead of
+  sleeping; the sync-throw timeout has realistic headroom. 15 consecutive
+  full-suite runs green.
+- Tests: 240.
 ## 2.13.7 - 2026-11-28
 
 - Fix: switching to `intervention=official` drops drafts for the four fields

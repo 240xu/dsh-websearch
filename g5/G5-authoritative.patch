@@ -3565,7 +3565,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..6505d56 100644
+index 744917e..03e752b 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -4204,10 +4204,14 @@ index 744917e..6505d56 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -395,58 +697,134 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -395,58 +697,138 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
++      if (variantsRun === 0) {
++        recordHistory(history, request?.query, 0, 0, candidates.length);
++        throw new WebError("unified search: search budget exhausted before any backend could run", "WEB_PROVIDER_ERROR");
++      }
 +      const variantsSkipped = variants.length - variantsRun;
 +      const facetNote = useMulti && variantsSkipped > 0
 +        ? ` · multiQuery: ${variantsSkipped}/${variants.length} facets not run (search budget)`
@@ -4362,7 +4366,7 @@ index 744917e..6505d56 100644
          };
        }
  
-@@ -454,20 +832,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -454,20 +836,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4403,7 +4407,7 @@ index 744917e..6505d56 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -475,21 +864,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -475,21 +868,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          };
        }
  
