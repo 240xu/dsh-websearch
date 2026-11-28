@@ -1,4 +1,4 @@
-// 2.8.2 P1 回归：零结果不伪造失败 / limiter 同步抛出不死锁 / exa category 门控
+// 2.8.2 P1 回归：零结果不伪造失败 / limiter 同步抛出不死锁 / exa 参数最小化
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -34,7 +34,7 @@ test("limiter：fn 同步抛出时 running 计数不泄漏，后续任务仍可�
   assert.equal(raced, "second ok");
 });
 
-test("exa：deepCoverage=false 时不得注入 category（默认查询词也一样）", async () => {
+test("exa：不注入 tools/list 未声明的 category 参数", async () => {
   const { exaBackend } = await import("../lib/backends/exa.js");
   let captured;
   const hooks = { recordRequest: (r) => { captured = r.body; } };
@@ -42,14 +42,14 @@ test("exa：deepCoverage=false 时不得注入 category（默认查询词也一�
   ac.abort(); // 让 mcpCall 立即拒绝，不打真实网络
   await assert.rejects(() => exaBackend.search({ query: "awesome github repos", maxResults: 5, deepCoverage: false }, ac.signal, {}, hooks));
   assert.ok(captured, "recordRequest captured");
-  assert.equal(captured.category, undefined, "deepCoverage=false 不得带 category");
+  assert.equal(captured.category, undefined, "category 不在工具 schema 中");
   // deepCoverage=true 时允许注入
   let captured2;
   const ac2 = new AbortController();
   ac2.abort();
   await assert.rejects(() => exaBackend.search({ query: "awesome github repos", maxResults: 5, deepCoverage: true }, ac2.signal, {}, { recordRequest: (r) => { captured2 = r.body; } }));
   assert.ok(captured2, "recordRequest captured (deep)");
-  assert.equal(typeof captured2.category, "string", "deepCoverage=true 可注入 category");
+  assert.equal(captured2.category, undefined, "deepCoverage 也不得注入未声明参数");
 });
 
 test("multiquery：CJK 分隔符无空格不切实体（和/比较 词内保护）", async () => {

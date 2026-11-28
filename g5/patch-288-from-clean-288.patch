@@ -212,19 +212,51 @@ index 3d122f8..8950c96 100644
  
      const source = { url };
 diff --git a/lib/backends/exa.js b/lib/backends/exa.js
-index 3b80319..30c5dd0 100644
+index 3b80319..9f73da3 100644
 --- a/lib/backends/exa.js
 +++ b/lib/backends/exa.js
-@@ -41,7 +41,7 @@ export const exaBackend = {
+@@ -14,22 +14,6 @@ import { describeError } from "../util/describe-error.js";
+ const EXA_ENDPOINT = "https://mcp.exa.ai/mcp";
+ const EXA_TOOL = "web_search_exa";
+ 
+-/**
+- * Infer an Exa data category from the query (v2.8.0). Only high-confidence
+- * patterns map — Exa rejects unknown categories with a 400, so this returns
+- * undefined unless a signal is explicit. Valid values per the Exa OpenAPI
+- * enum: github / "research paper" / news / pdf / company / people /
+- * "personal site" / "financial report".
+- */
+-export function inferExaCategory(query) {
+-  const q = typeof query === "string" ? query.toLowerCase() : "";
+-  if (!q) return undefined;
+-  if (/\bgithub\b|\brepo\b|repository|开源项目|源码/.test(q)) return "github";
+-  if (/\barxiv\b|\bpaper\b|论文|研究文献|preprint/.test(q)) return "research paper";
+-  if (/\bnews\b|新闻|最新消息|动态/.test(q)) return "news";
+-  return undefined;
+-}
+-
+ export const exaBackend = {
+   id: "exa",
+   requiresCredential: false,
+@@ -41,16 +25,8 @@ export const exaBackend = {
    async search(request, signal, options, hooks = {}) {
      const args = {
        query: request.query,
 -      numResults: request.maxResults ?? 8,
 +      numResults: Math.max(1, Math.min(Number(request.maxResults) || 10, 100)),
      };
-     // v2.8.0: category inference — deepCoverage-gated like tavily (searchDepth
-     // advanced) and searxng (category sweep): 2.8.1 审计发现此处漏了门控，
-@@ -60,7 +60,9 @@ export const exaBackend = {
+-    // v2.8.0: category inference — deepCoverage-gated like tavily (searchDepth
+-    // advanced) and searxng (category sweep): 2.8.1 审计发现此处漏了门控，
+-    // 默认关着 deepCoverage 也注入 category，把结果悄悄收窄到单类目，与 README
+-    // 「deepCoverage 深度覆盖」承诺相反。
+-    if (request.deepCoverage === true) {
+-      const category = inferExaCategory(request.query);
+-      if (category) args.category = category;
+-    }
+     hooks.recordRequest?.({
+       endpoint: EXA_ENDPOINT,
+       toolName: EXA_TOOL,
+@@ -60,7 +36,9 @@ export const exaBackend = {
  
      let result;
      try {
@@ -235,7 +267,7 @@ index 3b80319..30c5dd0 100644
      } catch (err) {
        if (err instanceof WebError) throw err;
        throw new WebError(
-@@ -76,7 +78,7 @@ export const exaBackend = {
+@@ -76,7 +54,7 @@ export const exaBackend = {
        throw new WebError(`exa returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
      }
  
@@ -244,7 +276,7 @@ index 3b80319..30c5dd0 100644
      hooks.recordOutcome?.({ status: "ok", count: sources.length });
  
      return { sources, content: undefined, truncated: false };
-@@ -115,7 +117,8 @@ function joinHighlights(block) {
+@@ -115,7 +93,8 @@ function joinHighlights(block) {
    const tail = block.slice(m.index + m[0].length);
    const bullets = [...tail.matchAll(/^\s+-\s+(.+)$/gm)].map((b) => b[1].trim());
    if (bullets.length === 0) return undefined;
@@ -3284,7 +3316,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..834a155 100644
+index 7242a56..36f3eeb 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3770,7 +3802,7 @@ index 7242a56..834a155 100644
                  // Timeout classification happens BEFORE telemetry/health are
                  // recorded (route6 P6): backends surface an internal timeout
                  // as their own abort-flavored error ("unified search aborted",
-@@ -353,22 +563,38 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -353,22 +563,41 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
                  // thrown error said "timed out after Nms" — the two disagreed
                  // and "(unified search aborted)" read as if the USER cancelled.
                  const timedOut = controller.signal.aborted && !(signal && signal.aborted);
@@ -3789,6 +3821,9 @@ index 7242a56..834a155 100644
 +                const msg = sanitizeError(reason, 80);
                  telemetry.push({ id, ok: false, ms: Date.now() - startedAtMs, error: msg });
 -                recordBackendHealth(id, { ok: false, at: Date.now(), ms: Date.now() - startedAtMs, error: msg }, breakerCfg);
+-                throw timedOut
+-                  ? new WebError(reason, "WEB_PROVIDER_ERROR", { cause: err instanceof Error ? err : undefined })
+-                  : err;
 +                // A missing API key is a configuration state, not an outage:
 +                // publish it for /health but keep it out of the breaker.
 +                if (!budgetClipped) {
@@ -3799,9 +3834,12 @@ index 7242a56..834a155 100644
 +                    rateLimited: rateLimited(err), keylessRejected: keylessRejected(err), retryAfterMs: retryAfterMsFrom(err),
 +                  });
 +                }
-                 throw timedOut
-                   ? new WebError(reason, "WEB_PROVIDER_ERROR", { cause: err instanceof Error ? err : undefined })
-                   : err;
++                if (timedOut) {
++                  const wrapped = new WebError(reason, "WEB_PROVIDER_ERROR", { cause: err instanceof Error ? err : undefined });
++                  wrapped.timedOut = true;
++                  throw wrapped;
++                }
++                throw err;
                },
              )
 -            .finally(() => clearTimeout(timeoutId));
@@ -3814,7 +3852,7 @@ index 7242a56..834a155 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -377,8 +603,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -377,8 +606,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -3825,7 +3863,7 @@ index 7242a56..834a155 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -386,15 +612,68 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -386,15 +615,73 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -3849,10 +3887,11 @@ index 7242a56..834a155 100644
 +        // would contradict a success from the same backend in variant 1.
 +        const minVariantBudgetMs = Math.min(Number(opts.backendTimeoutMs) || 24000, 2000);
 +        if (remaining < minVariantBudgetMs) break;
-+        // Split the remaining budget across the variants still owed, so one
-+        // slow variant cannot starve the rest (the old code gave each variant
-+        // the full budget, and each backend inside it).
-+        const share = Math.max(1, Math.floor(remaining / Math.max(1, variants.length - variantIndex)));
++        // Per-backend timeout is a contract, not a per-variant quota: a
++        // variant gets the configured timeout while the shared deadline still
++        // bounds the whole search. Dividing by the variant count made a
++        // healthy 1s backend fail at 666ms under three variants.
++        const share = Math.max(1, Math.min(remaining, Number(opts.backendTimeoutMs) || 24000));
 +        // Parallel can merge the derived facets into one request; give it the
 +        // plan on the primary variant and skip it for later variants. Other
 +        // backends must not opt into handlesAllVariants (they cannot merge
@@ -3878,7 +3917,11 @@ index 7242a56..834a155 100644
 -        const fold = await fanoutVariant(variantReq);
 +        const fold = await fanoutVariant(variantReq, share, searchDeadline, variantEligible);
 +        if (variantIndex === 0 && useMulti) {
-+          primaryPlanFailed = fold.failures.some((failure) => planBackendIds.has(failure.id));
++          // A hung plan backend will not recover under a smaller later share;
++          // only fast failures fall back to per-facet retries.
++          primaryPlanFailed = fold.failures.some(
++            (failure) => planBackendIds.has(failure.id) && failure.err?.timedOut !== true,
++          );
 +        }
 +        for (const outcome of fold.health) {
 +          const prev = searchHealth.get(outcome.id);
@@ -3896,7 +3939,7 @@ index 7242a56..834a155 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -409,43 +688,102 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -409,43 +696,105 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -3932,14 +3975,17 @@ index 7242a56..834a155 100644
 +          foldedTelemetry.push(copy);
 +          continue;
 +        }
++        if (prev.ok === true) continue; // a success already won; keep its latency
 +        if (t.ok === true) {
 +          prev.ok = true;
++          prev.skipped = false;
 +          prev.count = Math.max(prev.count ?? 0, t.count ?? 0);
 +          prev.error = undefined;
-+        } else if (prev.ok !== true) {
++          prev.ms = t.ms ?? 0;
++        } else {
 +          prev.error = t.error;
++          prev.ms = Math.max(prev.ms ?? 0, t.ms ?? 0);
 +        }
-+        prev.ms = Math.max(prev.ms ?? 0, t.ms ?? 0);
 +      }
 +      const okCount = foldedTelemetry.filter((t) => t.ok).length;
 +      const historyOk = new Set(allTelemetry.filter((t) => t.ok).map((t) => t.id)).size;
@@ -4016,7 +4062,7 @@ index 7242a56..834a155 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,23 +791,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +802,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
@@ -4044,7 +4090,7 @@ index 7242a56..834a155 100644
          };
        }
  
-@@ -477,20 +816,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +827,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4085,7 +4131,7 @@ index 7242a56..834a155 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +850,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +861,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.

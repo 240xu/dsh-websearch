@@ -405,3 +405,49 @@ test("a failed plan backend is retried per variant instead of disappearing", asy
   assert.ok(calls > 1, "later variants retry the plan backend");
   assert.equal(out.sources[0]?.url, "https://plan.example/1");
 });
+
+test("a timed-out plan backend is not retried per variant", async () => {
+  let calls = 0;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: {
+      plan: { id: "plan", handlesAllVariants: true, available: () => true, async search(request, signal) {
+        calls += 1;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 5000);
+          signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+        });
+        return { sources: [{ url: "https://plan.example/1" }] };
+      } },
+    },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["plan"], backends: { plan: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 600,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal).catch(() => {});
+  assert.equal(calls, 1, "the hung planned call is not repeated for later facets");
+});
+
+test("multi-query keeps the configured backend timeout instead of dividing it", async () => {
+  let calls = 0;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: {
+      slow: { id: "slow", available: () => true, async search() {
+        calls += 1;
+        await new Promise((r) => setTimeout(r, 300));
+        return { sources: [{ url: `https://slow.example/${calls}` }] };
+      } },
+    },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["slow"], backends: { slow: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 900,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.ok(out.sources.length >= 1, "a backend inside its configured timeout returns results");
+  assert.doesNotMatch(String(out.content ?? ""), /all attempted backends failed/);
+});

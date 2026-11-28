@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.13.1 - 2026-11-28
+
+- Fix: a timed-out plan backend is not retried per variant. Only fast failures
+  fall back; timeout errors are tagged so a hung Parallel call keeps its
+  single-call cost (previously it doubled wall-clock time).
+- Fix: telemetry latency follows the winning attempt instead of `max(ms)`, so
+  a failed-then-succeeded backend no longer reports `124ms` while `/health`
+  says `6ms`; failure-only folds still report the worst attempt.
+- Fix: multi-query no longer divides `backendTimeoutMs` by the variant count.
+  A variant gets the configured timeout while the absolute search deadline
+  still bounds the total, so a healthy 1s backend no longer fails at 666ms.
+- Fix: Exa no longer injects the undeclared `category` argument; the MCP
+  `tools/list` schema only declares `query`, `numResults` and `objective`.
+- Tests: 229.
 ## 2.13.0 - 2026-11-28
 
 Round-5 fixes; details `docs/audit/131-round5-20261128.md`.

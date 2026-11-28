@@ -164,7 +164,7 @@ pnpm install
 
 - 每后端请求条数上调至 `ceil(maxResults × 1.5)`，全局去重后仍按 maxResults 截断——牺牲带宽换覆盖面。
 - 后端能力适配（feature-detect，不破坏旧参数）：Tavily 自动切 `search_depth: advanced`（2 credits，多 snippet/URL）；SearXNG 类目扩为 `general,news,it`（Search API `categories` 逗号列表）。
-- Exa：`inferExaCategory` 从查询推断 data category（github / research paper / news，仅高置信注入）。
+- Exa：只发送工具 schema 声明的 `query` / `numResults`；不注入 category（`tools/list` 未声明）。
 
 ### 3. 运维可观测（P2）
 
