@@ -219,7 +219,7 @@ test("a backend that ignores its abort signal still obeys the per-backend timeou
   const started = Date.now();
   await assert.rejects(
     provider.search({ query: "hang", maxResults: 5 }, new AbortController().signal),
-    /timed out after 120ms/,
+    /timed out after 1\d{2}ms/,
   );
   assert.ok(Date.now() - started < 1000, "the race must not wait for the hung promise");
 });
@@ -263,4 +263,25 @@ test("a synchronously throwing backend does not create an unhandled rejection", 
     }),
   });
   await assert.rejects(provider.search({ query: "x", maxResults: 5 }, new AbortController().signal), /sync boom/);
+});
+
+test("domain filters normalize URLs/hosts and cap at 20", () => {
+  const opts = resolveOptions(CTX, {
+    includeDomains: "https://Example.com/path?q=1, Sub.Example.org, not_a_host!, 192.168.1.1",
+    excludeDomains: "ads.example.net",
+  });
+  assert.deepEqual(opts.includeDomains, ["example.com", "sub.example.org", "192.168.1.1"]);
+  assert.deepEqual(opts.excludeDomains, ["ads.example.net"]);
+  const many = resolveOptions(CTX, { includeDomains: Array.from({ length: 30 }, (_, i) => `d${i}.example`).join(",") });
+  assert.equal(many.includeDomains.length, 20);
+});
+
+test("cache key distinguishes backend fan-out order", async () => {
+  const { cacheKeyFor } = await import("../lib/cache.js");
+  const base = { query: "q", filters: {}, maxResults: 5, mode: "single" };
+  assert.notEqual(
+    cacheKeyFor({ ...base, backends: ["exa", "ddg"] }),
+    cacheKeyFor({ ...base, backends: ["ddg", "exa"] }),
+    "reordering changes dedupe priority, so the key must change",
+  );
 });

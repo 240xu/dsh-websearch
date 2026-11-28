@@ -92,14 +92,16 @@ pnpm install
 > 每个 API Key 字段旁有 **「获取 Key ↗」** 直达对应平台控制台；保存即写入凭证库并立即生效。
 
 
-插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 24 个开关/参数；缓存、熔断、历史、多查询、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 profile patch 配置：
+插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 24 个开关/参数（共 60 个配置字段）；缓存、熔断、历史、多查询、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 profile patch 配置：
 
 **全局**
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `intervention` | balanced | 搜索介入程度：`official` / `balanced` / `thorough`（见下表） |
-| `numResults` | 10 | 每次搜索返回结果数（1-50；official 档沿用宿主工具的条数上限） |
+| `numResults` | 10 | 每次搜索返回结果数（1-100；Exa 上限 100，official 档沿用宿主工具的条数上限） |
+| `includeDomains` | 空 | 仅允许这些域名（逗号/空格分隔，最多 20；OpenAI/Anthropic 原生后端生效） |
+| `excludeDomains` | 空 | 排除这些域名（最多 20；同时设置时原生后端优先 allow） |
 | `concurrency` | 6 | 并发后端数（1-10） |
 | `backendTimeoutMs` | 24000 | 单后端超时毫秒（为宿主 30s 工具超时预留余量） |
 | `recency` | any | 时间范围过滤：day / week / month / year（映射到各后端原生参数） |
@@ -264,7 +266,7 @@ tests/
 node --test tests/
 ```
 
-当前 218/218 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 220/220 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 
@@ -277,7 +279,7 @@ live service before running the suite:
 ```bash
 bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 find node_modules/@deepseek-ai -xtype l   # expect no output
-node --test tests/*.test.js                 # 218/218
+node --test tests/*.test.js                 # 220/220
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。

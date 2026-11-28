@@ -1,5 +1,5 @@
 diff --git a/lib/backends/anthropic-like.js b/lib/backends/anthropic-like.js
-index 1bde4ff..cfd20e1 100644
+index 1bde4ff..047e2eb 100644
 --- a/lib/backends/anthropic-like.js
 +++ b/lib/backends/anthropic-like.js
 @@ -17,9 +17,11 @@
@@ -15,7 +15,28 @@ index 1bde4ff..cfd20e1 100644
  const UA = "dsh-websearch/2.3";
  
  /**
-@@ -128,16 +130,18 @@ export function createAnthropicLikeBackend(spec) {
+@@ -84,6 +86,11 @@ export function createAnthropicLikeBackend(spec) {
+       const maxUses = options.maxUses ?? 5;
+       const endpoint = `${baseURL.replace(/\/$/, "")}/messages`;
+ 
++      const domainArgs = Array.isArray(options?.includeDomains) && options.includeDomains.length > 0
++        ? { allowed_domains: options.includeDomains }
++        : Array.isArray(options?.excludeDomains) && options.excludeDomains.length > 0
++          ? { blocked_domains: options.excludeDomains }
++          : {};
+       const body = {
+         model,
+         max_tokens: maxTokens,
+@@ -98,7 +105,7 @@ export function createAnthropicLikeBackend(spec) {
+             ],
+           },
+         ],
+-        tools: [{ type: toolName, name: "web_search", max_uses: maxUses }],
++        tools: [{ type: toolName, name: "web_search", max_uses: maxUses, ...domainArgs }],
+       };
+ 
+       hooks.recordRequest?.({
+@@ -128,16 +135,18 @@ export function createAnthropicLikeBackend(spec) {
          });
        } catch (err) {
          if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
@@ -37,7 +58,7 @@ index 1bde4ff..cfd20e1 100644
          try {
            const parsed = await response.json();
            const detail =
-@@ -148,8 +152,8 @@ export function createAnthropicLikeBackend(spec) {
+@@ -148,8 +157,8 @@ export function createAnthropicLikeBackend(spec) {
          } catch (err) {
            if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
          }
@@ -48,7 +69,7 @@ index 1bde4ff..cfd20e1 100644
        }
  
        try {
-@@ -162,9 +166,9 @@ export function createAnthropicLikeBackend(spec) {
+@@ -162,9 +171,9 @@ export function createAnthropicLikeBackend(spec) {
            hooks.recordOutcome?.({ status: "error", message: err.message });
            throw err;
          }
@@ -218,7 +239,7 @@ index 8a0213a..8950c96 100644
  
      const source = { url };
 diff --git a/lib/backends/exa.js b/lib/backends/exa.js
-index 3c94ace..13085b9 100644
+index 3c94ace..30c5dd0 100644
 --- a/lib/backends/exa.js
 +++ b/lib/backends/exa.js
 @@ -9,6 +9,7 @@
@@ -229,6 +250,15 @@ index 3c94ace..13085b9 100644
  
  const EXA_ENDPOINT = "https://mcp.exa.ai/mcp";
  const EXA_TOOL = "web_search_exa";
+@@ -40,7 +41,7 @@ export const exaBackend = {
+   async search(request, signal, options, hooks = {}) {
+     const args = {
+       query: request.query,
+-      numResults: request.maxResults ?? 8,
++      numResults: Math.max(1, Math.min(Number(request.maxResults) || 10, 100)),
+     };
+     // v2.8.0: category inference — deepCoverage-gated like tavily (searchDepth
+     // advanced) and searxng (category sweep): 2.8.1 审计发现此处漏了门控，
 @@ -59,11 +60,13 @@ export const exaBackend = {
  
      let result;
@@ -245,6 +275,15 @@ index 3c94ace..13085b9 100644
          "WEB_PROVIDER_ERROR",
          { cause: err },
        );
+@@ -75,7 +78,7 @@ export const exaBackend = {
+       throw new WebError(`exa returned an MCP error: ${message}`, "WEB_PROVIDER_ERROR");
+     }
+ 
+-    const sources = parseExaResult(result, request.maxResults ?? 8);
++    const sources = parseExaResult(result, Math.max(1, Math.min(Number(request.maxResults) || 10, 100)));
+     hooks.recordOutcome?.({ status: "ok", count: sources.length });
+ 
+     return { sources, content: undefined, truncated: false };
 @@ -114,7 +117,8 @@ function joinHighlights(block) {
    const tail = block.slice(m.index + m[0].length);
    const bullets = [...tail.matchAll(/^\s+-\s+(.+)$/gm)].map((b) => b[1].trim());
@@ -431,7 +470,7 @@ index 9699f72..5a803b6 100644
  
      let data;
 diff --git a/lib/backends/openai.js b/lib/backends/openai.js
-index 037ea85..8c5d070 100644
+index 037ea85..5a4705c 100644
 --- a/lib/backends/openai.js
 +++ b/lib/backends/openai.js
 @@ -12,7 +12,9 @@
@@ -444,7 +483,24 @@ index 037ea85..8c5d070 100644
  
  const UA = "dsh-websearch/2.3";
  
-@@ -82,16 +84,19 @@ export const openaiBackend = {
+@@ -51,9 +53,15 @@ export const openaiBackend = {
+     const model = options.model || "gpt-4o";
+     const endpoint = `${baseURL}/responses`;
+ 
++    const domainFilters = {};
++    if (Array.isArray(options?.includeDomains) && options.includeDomains.length > 0) domainFilters.allowed_domains = options.includeDomains;
++    if (Array.isArray(options?.excludeDomains) && options.excludeDomains.length > 0) domainFilters.blocked_domains = options.excludeDomains;
+     const body = {
+       model,
+-      tools: [{ type: "web_search" }],
++      tools: [{
++        type: "web_search",
++        ...(Object.keys(domainFilters).length > 0 ? { filters: domainFilters } : {}),
++      }],
+       input: request.query,
+     };
+ 
+@@ -82,16 +90,19 @@ export const openaiBackend = {
        });
      } catch (err) {
        if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
@@ -467,7 +523,7 @@ index 037ea85..8c5d070 100644
        try {
          const parsed = await response.json();
          const detail =
-@@ -102,8 +107,8 @@ export const openaiBackend = {
+@@ -102,8 +113,8 @@ export const openaiBackend = {
        } catch (err) {
          if (signal?.aborted === true || isAbortError(err)) throw searchAborted(signal, err);
        }
@@ -478,7 +534,7 @@ index 037ea85..8c5d070 100644
      }
  
      try {
-@@ -117,9 +122,9 @@ export const openaiBackend = {
+@@ -117,9 +128,9 @@ export const openaiBackend = {
          hooks.recordOutcome?.({ status: "error", message: err.message });
          throw err;
        }
@@ -1114,7 +1170,7 @@ index 7218312..8c9caa1 100644
  
  /**
 diff --git a/lib/cache.js b/lib/cache.js
-index 88dc8c3..19c105d 100644
+index 88dc8c3..f8fb55b 100644
 --- a/lib/cache.js
 +++ b/lib/cache.js
 @@ -29,18 +29,27 @@ export const CACHE_DEFAULTS = {
@@ -1125,14 +1181,15 @@ index 88dc8c3..19c105d 100644
 - * mix must never serve a stale result produced by a different combination
 - * (arch-review P1-1). Pure function; exported for tests and host reuse.
 + * The key covers the shaped query, filters, the effective maxResults, the
-+ * enabledBackends set (sorted), the cache mode, and every non-function result
-+ * option: switching the backend mix or editing a result-affecting setting
-+ * must never serve a stale result within the TTL (arch-review P1-1).
++ * enabledBackends selection **in fan-out order**, the cache mode, and every
++ * non-function result option: switching the mix or reordering it can change
++ * which duplicate's title/snippet wins, so both must miss (arch-review P1-1).
 + * Pure function; exported for tests and host reuse.
   */
 -export function cacheKeyFor({ query, filters, maxResults, backends, mode }) {
+-  const backendSet = Array.isArray(backends) ? [...backends].sort().join(",") : "";
 +export function cacheKeyFor({ query, filters, maxResults, backends, mode, resultOptions }) {
-   const backendSet = Array.isArray(backends) ? [...backends].sort().join(",") : "";
++  const backendSet = Array.isArray(backends) ? backends.join(",") : "";
 +  let shaped = {};
 +  if (resultOptions && typeof resultOptions === "object") {
 +    const keys = Object.keys(resultOptions).filter((k) =>
@@ -1280,7 +1337,7 @@ index 88dc8c3..19c105d 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..ea2001e 100644
+index 783cbe6..291e6d1 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -7,6 +7,11 @@ window.__ModuleLoader__.load({
@@ -1851,7 +1908,7 @@ index 783cbe6..ea2001e 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,27 +633,47 @@ window.__ModuleLoader__.load({
+@@ -354,47 +633,78 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -1906,7 +1963,12 @@ index 783cbe6..ea2001e 100644
  						}
  						if (GLOBAL_FIELDS.includes(field)) {
  							const num = Number(staged.text);
-@@ -386,15 +685,26 @@ window.__ModuleLoader__.load({
+ 							// Mirror the server schema bounds client-side so bad input is
+ 							// caught in the UI instead of a failed Host round-trip.
+ 							const BOUNDS = {
+-								numResults: [1, 50],
++								numResults: [1, 100],
+ 								concurrency: [1, 10],
  								backendTimeoutMs: [1000, 120000],
  							};
  							const [lo, hi] = BOUNDS[field] ?? [-Infinity, Infinity];
@@ -2766,7 +2828,7 @@ index dd15b37..edd3de4 100644
 +  return [disposerA, disposerB].filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 549b13b..75dd10f 100644
+index 549b13b..dbb5789 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,7 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -2854,7 +2916,7 @@ index 549b13b..75dd10f 100644
 -    .description("每次搜索返回的最大结果数"),
 +  intervention: z.union(["official", "balanced", "thorough"]).default("balanced")
 +    .description("搜索介入程度【策略】：official=只做官方 provider 该做的（原样查询、不加结果头/遥测、沿用工具的条数上限）；balanced=确定性去噪 + 去重/遥测（默认）；thorough=额外启用相关性重排与深度覆盖（内部多查询仍是独立开关，默认关）"),
-+  numResults: z.number().step(1).min(1).max(50).default(10)
++  numResults: z.number().step(1).min(1).max(100).default(10)
 +    .description("每次搜索返回的最大结果数（official 档沿用宿主工具的条数上限）"),
    concurrency: z.number().step(1).min(1).max(10).default(6)
      .description("同时并发的后端数量"),
@@ -2865,7 +2927,17 @@ index 549b13b..75dd10f 100644
  
    // v2.1 result shaping
    recency: z.union(["any", "day", "week", "month", "year"]).default("any")
-@@ -152,6 +181,8 @@ export const Config = z.object({
+@@ -146,12 +175,18 @@ export const Config = z.object({
+     .description("搜索语言（如 en、zh-CN；留空用各后端默认）"),
+   safeSearch: z.boolean().default(true)
+     .description("安全搜索（SearXNG / Brave 支持开关，其余后端忽略）"),
++  includeDomains: z.string().default("")
++    .description("只允许这些域名（逗号/空格分隔，最多 20 个；OpenAI/Anthropic 原生后端生效）"),
++  excludeDomains: z.string().default("")
++    .description("排除这些域名（逗号/空格分隔，最多 20 个；与 includeDomains 同时设置时原生后端优先 include）"),
+   dedupStrategy: z.union(["url", "url+title"]).default("url")
+     .description("去重策略：url 仅按链接；url+title 额外合并同标题的转载镜像"),
+   rerank: z.boolean().default(false)
      .description("按查询词相关性重排序（确定性、并列时保持后端优先级）"),
    resultTelemetry: z.boolean().default(true)
      .description("在搜索结果尾部附一行后端健康遥测（状态+耗时），模型可据此自诊断"),
@@ -2874,7 +2946,7 @@ index 549b13b..75dd10f 100644
  
    // v2.7.0 disk cache / circuit breaker / search history
    // W1 (fe-ui review): labels speak user language with a group prefix
-@@ -159,7 +190,7 @@ export const Config = z.object({
+@@ -159,14 +194,14 @@ export const Config = z.object({
    // spelled out (秒 / 毫秒) and grouping follows the field order below.
    cacheEnabled: z.boolean().default(true)
      .description("启用搜索结果缓存【缓存】：相同查询+过滤+条数在有效期内直接命中，不再请求后端"),
@@ -2883,7 +2955,15 @@ index 549b13b..75dd10f 100644
      .description("缓存有效期【缓存】（单位：秒）：默认 900 秒；不想用缓存请直接关闭上一项"),
    breakerEnabled: z.boolean().default(true)
      .description("后端熔断器【熔断】：连续失败达阈值后暂停该后端一段时间；全部暂停时自动放行，不会让搜索更差"),
-@@ -188,24 +219,33 @@ export const Config = z.object({
+   breakerThreshold: z.number().step(1).min(1).max(20).default(BREAKER_DEFAULTS.threshold)
+     .description("熔断阈值【熔断】：连续失败多少次后触发（默认 3 次）"),
+   breakerCooldownMs: z.number().step(1000).min(0).max(3600000).default(BREAKER_DEFAULTS.cooldownMs)
+-    .description("熔断冷却时长【熔断】（单位：毫秒）：默认 60000；设为 0 表示关闭冷却（熔断仅计数）"),
++    .description("熔断冷却时长【熔断】（单位：毫秒）：默认 60000；0 关闭按阈值的冷却，带 Retry-After 的 429 仍按该窗口冷却"),
+   historyEnabled: z.boolean().default(true)
+     .description("记录搜索历史【历史】：只追加，最多 50 条；可在设置 → 搜索 中查看与清空"),
+ 
+@@ -188,24 +223,33 @@ export const Config = z.object({
    enableDeepseek: z.boolean().default(false).description(DEFAULT_LABELS.deepseek),
    enableAnthropic: z.boolean().default(false).description(DEFAULT_LABELS.anthropic),
    enableOpenai: z.boolean().default(false).description(DEFAULT_LABELS.openai),
@@ -2925,7 +3005,7 @@ index 549b13b..75dd10f 100644
  
    // Base URLs (defaults from built-in registry)
    braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
-@@ -218,12 +258,20 @@ export const Config = z.object({
+@@ -218,12 +262,20 @@ export const Config = z.object({
      .description("Mojeek API 端点（默认官方；自托管/代理实例改此项）"),
    searxngBaseURL: z.string().default(DEFAULT_BASE_URLS.searxng)
      .description("SearXNG API 端点（默认官方；自托管/代理实例改此项）"),
@@ -2946,7 +3026,7 @@ index 549b13b..75dd10f 100644
  
    // Models
    deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
-@@ -258,8 +306,9 @@ Config.meta = { ...Config.meta, volatile: true };
+@@ -258,8 +310,9 @@ Config.meta = { ...Config.meta, volatile: true };
   * provides the field regardless.
   */
  const FIELD_LABELS = {
@@ -2957,9 +3037,30 @@ index 549b13b..75dd10f 100644
    breakerEnabled: "后端熔断器",
    breakerThreshold: "熔断阈值（连续失败次数）",
    breakerCooldownMs: "熔断冷却时长（毫秒）",
-@@ -279,7 +328,9 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+@@ -278,8 +331,30 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+  * serves its NEXT search with. Key resolution: credentialRef -> credentials
   * service -> env.
   */
++/** Normalize a comma/space-domain setting into lowercase bare hostnames. */
++function normalizeDomainList(raw) {
++  if (typeof raw !== "string" || raw.trim() === "") return [];
++  const out = [];
++  for (const piece of raw.split(/[,\s]+/)) {
++    const item = piece.trim().toLowerCase();
++    if (item === "") continue;
++    let host = item;
++    try {
++      const u = new URL(item.includes("://") ? item : "https://" + item);
++      host = u.hostname;
++    } catch { /* keep the raw token and validate below */ }
++    host = host.replace(/^\[|\]$/g, "");
++    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host)) continue;
++    if (!out.includes(host)) out.push(host);
++    if (out.length >= 20) break;
++  }
++  return out;
++}
++
  export function resolveOptions(ctx, config) {
 -  // 1. Determine enabled backends: explicit list > toggles > env > defaults
 +  // 1. Determine enabled backends: explicit list > toggles > env > defaults.
@@ -2968,7 +3069,7 @@ index 549b13b..75dd10f 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -287,20 +338,9 @@ export function resolveOptions(ctx, config) {
+@@ -287,20 +362,9 @@ export function resolveOptions(ctx, config) {
    }
  
    if (enabledBackends.length === 0) {
@@ -2992,7 +3093,7 @@ index 549b13b..75dd10f 100644
    }
  
    if (enabledBackends.length === 0) {
-@@ -316,6 +356,9 @@ export function resolveOptions(ctx, config) {
+@@ -316,6 +380,9 @@ export function resolveOptions(ctx, config) {
    if (enabledBackends.length === 0) {
      enabledBackends = [...DEFAULT_ENABLED];
    }
@@ -3002,7 +3103,7 @@ index 549b13b..75dd10f 100644
  
    // 2. Resolve each backend option
    const backends = {};
-@@ -328,9 +371,16 @@ export function resolveOptions(ctx, config) {
+@@ -328,9 +395,18 @@ export function resolveOptions(ctx, config) {
        baseURL: config?.[`${id}BaseURL`] ?? DEFAULT_BASE_URLS[id],
        model: config?.[`${id}Model`] ?? DEFAULT_MODELS[id],
        ...(id === "tavily" ? { searchDepth: config?.tavilySearchDepth ?? "basic" } : {}),
@@ -3012,6 +3113,8 @@ index 549b13b..75dd10f 100644
 +          : [],
 +      } : {}),
        safeSearch: config?.safeSearch !== false,
++      includeDomains: normalizeDomainList(config?.includeDomains),
++      excludeDomains: normalizeDomainList(config?.excludeDomains),
        label: DEFAULT_LABELS[id] ?? id,
 -      requiresKey: DEFAULT_KEY_ENV[id] !== undefined,
 +      requiresKey: DEFAULT_KEY_ENV[id] !== undefined && !OPTIONAL_KEY_IDS.has(id),
@@ -3020,7 +3123,7 @@ index 549b13b..75dd10f 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -341,19 +391,34 @@ export function resolveOptions(ctx, config) {
+@@ -341,19 +417,34 @@ export function resolveOptions(ctx, config) {
    }
  
    const language = typeof config?.language === "string" ? config.language.trim() : "";
@@ -3061,7 +3164,7 @@ index 549b13b..75dd10f 100644
      breakerEnabled: config?.breakerEnabled !== false,
      breakerThreshold: Math.max(1, Math.floor(Number(config?.breakerThreshold) || BREAKER_DEFAULTS.threshold)),
      breakerCooldownMs: config?.breakerCooldownMs != null
-@@ -361,8 +426,12 @@ export function resolveOptions(ctx, config) {
+@@ -361,8 +452,14 @@ export function resolveOptions(ctx, config) {
        : BREAKER_DEFAULTS.cooldownMs,
      historyEnabled: config?.historyEnabled !== false,
      // v2.8.0 coverage / multiQuery
@@ -3073,10 +3176,12 @@ index 549b13b..75dd10f 100644
 +    // invisibly.
 +    multiQueryEnabled: !official && config?.multiQueryEnabled === true,
 +    deepCoverage: thorough || (!official && config?.deepCoverage === true),
++    includeDomains: normalizeDomainList(config?.includeDomains),
++    excludeDomains: normalizeDomainList(config?.excludeDomains),
      filters: {
        recency: typeof config?.recency === "string" && config.recency !== "any" ? config.recency : undefined,
        lang: language.length > 0 ? language : undefined,
-@@ -407,11 +476,28 @@ export function apply(ctx, config) {
+@@ -407,11 +504,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -3110,7 +3215,7 @@ index 549b13b..75dd10f 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -433,10 +519,9 @@ export function apply(ctx, config) {
+@@ -433,10 +547,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -3124,7 +3229,7 @@ index 549b13b..75dd10f 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -460,26 +545,48 @@ export function apply(ctx, config) {
+@@ -460,26 +573,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
@@ -3251,7 +3356,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..392a891 100644
+index 744917e..8c7a4ca 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3818,7 +3923,7 @@ index 744917e..392a891 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -395,49 +635,95 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -395,58 +635,126 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -3841,7 +3946,29 @@ index 744917e..392a891 100644
 +      // finished by this point so the array no longer grows. History counts
 +      // unique backends, not attempts: multi-query fans one backend out once
 +      // per variant, which used to report `backendsTotal` as variants × backends.
-+      const okCount = allTelemetry.filter((t) => t.ok).length;
++      // One display segment per backend, not per variant: a multi-query
++      // search otherwise repeats the same backend N times and can hide a
++      // backend beyond the 12-slot cap while health/history show it once.
++      const foldedTelemetry = [];
++      const telemetryById = new Map();
++      for (const t of allTelemetry) {
++        const prev = telemetryById.get(t.id);
++        if (prev === undefined) {
++          const copy = { ...t };
++          telemetryById.set(t.id, copy);
++          foldedTelemetry.push(copy);
++          continue;
++        }
++        if (t.ok === true) {
++          prev.ok = true;
++          prev.count = Math.max(prev.count ?? 0, t.count ?? 0);
++          prev.error = undefined;
++        } else if (prev.ok !== true) {
++          prev.error = t.error;
++        }
++        prev.ms = Math.max(prev.ms ?? 0, t.ms ?? 0);
++      }
++      const okCount = foldedTelemetry.filter((t) => t.ok).length;
 +      const historyOk = new Set(allTelemetry.filter((t) => t.ok).map((t) => t.id)).size;
 +      const historyTotal = new Set(allTelemetry.map((t) => t.id)).size;
 +
@@ -3916,11 +4043,12 @@ index 744917e..392a891 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
+-          const parts = allTelemetry
 +          // Failure notes translate known classes into short user-facing
 +          // labels (route6 P2); the raw text remains the fallback, and a
 +          // backend that just crossed the breaker threshold is annotated as
 +          // cooled on this same line.
-           const parts = allTelemetry
++          const parts = foldedTelemetry
              .slice(0, 12)
 -            .map((t) => t.id + (t.ok ? " ✓" : " ✗") + t.ms + "ms" + (t.ok ? "/" + t.count : (t.error ? " (" + String(t.error).slice(0, 40) + ")" : "")))
 +            .map((t) => {
@@ -3930,9 +4058,11 @@ index 744917e..392a891 100644
 +              return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "") + (cooledNow ? " " + cooledNow : "");
 +            })
              .concat(cooledParts);
-           if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
+-          if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
++          if (foldedTelemetry.length > 12) parts.push(`… +${foldedTelemetry.length - 12}`);
            const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
-@@ -446,7 +732,7 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+           outContent = outContent === undefined ? line : outContent + "\n\n" + line;
+         }
          return {
            sources,
            ...(outContent !== undefined ? { content: outContent } : {}),
@@ -3941,7 +4071,7 @@ index 744917e..392a891 100644
          };
        }
  
-@@ -454,20 +740,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -454,20 +762,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -3966,12 +4096,12 @@ index 744917e..392a891 100644
 -        });
 -        if (cacheKey && cache) cache.set(cacheKey, { sources: [], content: emptyContent, truncated: false });
 +        if (opts.resultTelemetry !== false && allFailures.length > 0) {
-+          const parts = allTelemetry.slice(0, 12).map((t) => {
++          const parts = foldedTelemetry.slice(0, 12).map((t) => {
 +            if (t.ok) return t.id + " ✓" + t.ms + "ms/" + t.count;
 +            const label = failureLabel(t.id, t.error) ?? (t.error ? String(t.error).slice(0, 40) : "");
 +            return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "");
 +          });
-+          if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
++          if (foldedTelemetry.length > 12) parts.push(`… +${foldedTelemetry.length - 12}`);
 +          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
 +          emptyContent = emptyContent === undefined ? line : emptyContent + "\n\n" + line;
 +        }
@@ -3982,7 +4112,7 @@ index 744917e..392a891 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -475,21 +772,47 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -475,21 +794,47 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          };
        }
  

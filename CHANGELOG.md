@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.10.0 - 2026-11-28
+
+Implements the first authority-ranked deferred items from audit 127
+(`docs/audit/128-domain-filters-20261128.md`).
+
+- Add: `includeDomains` / `excludeDomains` Config fields (comma/space lists,
+  URL or host, lowercased, invalid dropped, max 20). OpenAI sends
+  `filters.allowed_domains`/`blocked_domains`; Anthropic sends top-level
+  `allowed_domains`/`blocked_domains` (include wins if both are set). Exa's
+  simple MCP tool has no domain field, so it is documented as not yet mapped.
+- Align: `numResults` accepts 1-100 (Exa's documented max); Exa clamps to 100
+  and defaults to 10 when a caller omits the count. Brave/Tavily stay at 20.
+- Perf/clarity: multi-query telemetry is folded to one segment per backend
+  (any success wins, max latency/count, error only when no success), so it
+  matches history/health and cannot hide a backend behind the 12-slot cap.
+- Fix: the cache key preserves backend fan-out order; reordering can change
+  which duplicate's title/snippet wins, so it must not serve the old entry.
+- Tests: 220 unit tests.
+
 ## 2.9.1 - 2026-11-28
 
 Second expert re-audit on 2.9.0. Details: `docs/audit/127-expert-round2-20261128.md`.
