@@ -7,7 +7,7 @@ import { resolveOptions } from "../lib/index.js";
 import { shapeQuery } from "../lib/prompting.js";
 import { tokenize, tokenSimilarity, dedupeSources } from "../lib/util/rank.js";
 import { rrfFuse } from "../lib/rrf.js";
-import { createUnifiedSearchProvider, getBackendBreaker, getLatestBackendHealth } from "../lib/provider.js";
+import { createUnifiedSearchProvider, getBackendBreaker, getLatestBackendHealth, shouldStartVariant } from "../lib/provider.js";
 import { braveBackend } from "../lib/backends/brave.js";
 
 const CTX = { get: () => undefined };
@@ -479,8 +479,13 @@ test("a starved multi-query run reports the skipped facets and is not cached", a
   let shift = 0;
   Date.now = () => realNow() + shift;
   try {
+    const cacheStore = new Map();
+    const cache = {
+      get: (key) => cacheStore.has(key) ? { value: cacheStore.get(key), age: 1 } : null,
+      set: (key, value) => cacheStore.set(key, value),
+    };
     const provider = createUnifiedSearchProvider({
-      ctx: {}, cache: new Map(), history: undefined,
+      ctx: {}, cache, history: undefined,
       backends: { b: { id: "b", available: () => true, async search() {
         calls += 1;
         if (slow) shift = 1000; // make the first facet consume most of the 1500ms budget
@@ -494,6 +499,7 @@ test("a starved multi-query run reports the skipped facets and is not cached", a
     });
     const first = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
     assert.match(String(first.content ?? ""), /multiQuery: 2\/3 facets not run/);
+    assert.equal(cacheStore.size, 0, "a truncated facet run is never written to the cache");
     const firstCalls = calls;
     slow = false;
     await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
@@ -555,3 +561,10 @@ test("an empty starved multi-query result still reports the skipped facets", asy
 
 
 
+
+test("shouldStartVariant runs variant 1 on any remaining budget but floors later ones", () => {
+  assert.equal(shouldStartVariant(0, 999, 1000), true, "a 1 ms clock tick must not skip the whole search");
+  assert.equal(shouldStartVariant(0, 0, 1000), false);
+  assert.equal(shouldStartVariant(1, 999, 1000), false);
+  assert.equal(shouldStartVariant(1, 1000, 1000), true);
+});

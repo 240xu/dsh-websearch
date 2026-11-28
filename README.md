@@ -203,8 +203,8 @@ pnpm install
 
 ### 1. 搜索结果磁盘缓存（默认开）
 
-- 相同 **(整形后查询 + filters + maxResults + 启用后端集合)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
-- 命中时 `content` 追加一行 `[websearch cache] cache hit, age Ns`。
+- 相同 **(整形后查询 + filters + 生效 maxResults + 有序后端集合 + 档位/域名过滤/宿主上限)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
+- 命中时 `content` 追加一行 `[websearch cache] cache hit, age Ns`；`official` 档或关闭遥测时不追加（命中仍生效）。
 - 存储位置：`$DSH_HOME/cache/websearch/results/`，单条目一个 JSON 文件，tmp+rename 原子写，超出上限按最旧淘汰；任何 fs 错误都被吞掉，缓存坏了绝不影响搜索。
 - 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900；**0 = no-store**，不读也不写）。
 - 上限 200 条，超出按 mtime 最旧淘汰；缓存目录 0700、文件 0600（查询与结果属于用户数据）。
@@ -283,7 +283,7 @@ live service before running the suite:
 ```bash
 bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 find node_modules/@deepseek-ai -xtype l   # expect no output
-node --test tests/*.test.js                 # 225/225
+node --test tests/*.test.js                 # 241/241
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。

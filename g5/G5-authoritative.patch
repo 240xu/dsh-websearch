@@ -1487,7 +1487,7 @@ index 88dc8c3..8ed7fad 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..5545d22 100644
+index 783cbe6..a3e203b 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,33 @@ window.__ModuleLoader__.load({
@@ -1870,7 +1870,7 @@ index 783cbe6..5545d22 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +469,173 @@ window.__ModuleLoader__.load({
+@@ -292,59 +469,192 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1889,6 +1889,9 @@ index 783cbe6..5545d22 100644
 +			/** Push the current projection to the store and notify subscribers. */
 +			republish() {
 +				if (this.disposed) return;
++				// Reconcile drafts when official arrives from a reload/revision
++				// update, not only from the local edit path.
++				this.dropOfficialDrafts(this.scope.getSnapshot().value);
 +				this.store.set(this.projection());
 +			}
  
@@ -1904,19 +1907,35 @@ index 783cbe6..5545d22 100644
 +				return typeof this.scope.load === "function" ? this.scope.load() : undefined;
 +			}
 +
++			/**
++			 * Drop drafts for fields the official tier overrides, and their
++			 * stale validation errors. Returns whether anything changed.
++			 * @param {object} value settings snapshot
++			 * @returns {boolean}
++			 */
++			dropOfficialDrafts(value) {
++				if (String(value?.intervention) !== "official") return false;
++				let changed = false;
++				for (const ignored of OFFICIAL_IGNORED_FIELDS) {
++					if (this.staged.delete(ignored)) changed = true;
++					if (this.failedFields.delete(ignored)) changed = true;
++				}
++				return changed;
++			}
 +			/** Stage a field edit (clears the saved marker so the card shows "unsaved"). */
 +			edit(field, text) {
++				// A revert to the saved official value must still drop ignored drafts.
++				const dropped = field === "intervention" && String(text) === "official"
++					? this.dropOfficialDrafts({ intervention: "official" })
++					: false;
 +				const committed = String(this.sectionValue(field) ?? "");
 +				if (String(text) === committed) {
 +					// Reverting to the stored value is not a pending write.
-+					if (this.staged.delete(field)) this.republish();
++					if (this.staged.delete(field) || dropped) this.republish();
 +					return;
 +				}
 +				this.savedAt = 0;
 +				this.staged.set(field, { text });
-+				if (field === "intervention" && String(text) === "official") {
-+					for (const ignored of OFFICIAL_IGNORED_FIELDS) this.staged.delete(ignored);
-+				}
 +				this.republish();
 +			}
 +			/** Drop a staged field edit; the stored value is untouched. */
@@ -2064,7 +2083,7 @@ index 783cbe6..5545d22 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +645,84 @@ window.__ModuleLoader__.load({
+@@ -354,47 +664,84 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2163,7 +2182,7 @@ index 783cbe6..5545d22 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +733,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +752,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -2214,7 +2233,7 @@ index 783cbe6..5545d22 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +783,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +802,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2230,7 +2249,7 @@ index 783cbe6..5545d22 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +797,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +816,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2303,7 +2322,7 @@ index 783cbe6..5545d22 100644
  			] });
  		}
  
-@@ -463,6 +869,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +888,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2313,7 +2332,7 @@ index 783cbe6..5545d22 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -473,169 +882,280 @@ window.__ModuleLoader__.load({
+@@ -473,169 +901,273 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -2700,13 +2719,6 @@ index 783cbe6..5545d22 100644
 +				{ value: "false", label: props.t("off") },
 +			];
 +			const selVal = (f, dflt) => state.stagedText(f) ?? String(state.value[f] ?? dflt);
-+			const cacheOn = selVal("cacheEnabled", "true") !== "false";
-+			const official = selVal("intervention", "balanced") === "official";
-+			const hasDraft = (f) => state.stagedText(f) !== undefined;
-+			// A gate only locks untouched fields; a field with a pending edit
-+			// stays editable so the user can correct or discard it.
-+			const officialLocked = (f) => official && !hasDraft(f); // drafts are dropped on switching to official
-+			const ttlLocked = !cacheOn && !hasDraft("cacheTtl");
 +
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
 +				react_jsx_runtime.jsx(StatusSummary, { state, enabledCount, hasOverride: override.length > 0, keysReady, t: props.t }),
@@ -2720,7 +2732,7 @@ index 783cbe6..5545d22 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1166,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1178,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2734,7 +2746,7 @@ index 783cbe6..5545d22 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1197,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1209,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2751,7 +2763,7 @@ index 783cbe6..5545d22 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1233,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1245,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
@@ -3577,7 +3589,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 744917e..03e752b 100644
+index 744917e..c7514f4 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3670,7 +3682,26 @@ index 744917e..03e752b 100644
    });
  }
  
-@@ -84,6 +120,10 @@ export function getBackendBreaker(id) {
+@@ -78,12 +114,29 @@ export function getBackendBreaker(id) {
+   return e ? { failCount: e.failCount ?? 0, cooledUntil: e.cooledUntil ?? 0 } : { failCount: 0, cooledUntil: 0 };
+ }
+ 
++/**
++ * Whether a variant may start. Variant 1 runs whenever any budget remains
++ * (a 1 ms clock tick at the 1 s minimum must not skip the whole search);
++ * later variants need a meaningful slice.
++ * @param {number} variantIndex
++ * @param {number} remaining
++ * @param {number} minVariantBudgetMs
++ * @returns {boolean}
++ */
++export function shouldStartVariant(variantIndex, remaining, minVariantBudgetMs) {
++  return variantIndex === 0 ? remaining > 0 : remaining >= minVariantBudgetMs;
++}
++
+ /**
+  * Simple concurrency limiter using a semaphore pattern.
+  * No external dependency needed.
   */
  // 2.8.2: exported for P1 regression tests (limiter sync-throw deadlock)
  export function createLimiter(concurrency) {
@@ -3681,7 +3712,7 @@ index 744917e..03e752b 100644
    const queue = [];
    let running = 0;
    
-@@ -93,7 +133,7 @@ export function createLimiter(concurrency) {
+@@ -93,7 +146,7 @@ export function createLimiter(concurrency) {
        process();
        
        function process() {
@@ -3690,7 +3721,7 @@ index 744917e..03e752b 100644
            const { fn, resolve, reject } = queue.shift();
            running++;
            // 2.8.2（P1）：必须 .then(fn) 而非 Promise.resolve(fn())——后者先执行
-@@ -120,7 +160,7 @@ export function createLimiter(concurrency) {
+@@ -120,7 +173,7 @@ export function createLimiter(concurrency) {
   * compromised or poisoned backends never reach model/GUI consumers.
   */
  function collectFanoutResults(results, eligible, signal) {
@@ -3699,7 +3730,7 @@ index 744917e..03e752b 100644
    let mergedContent;
    let hardAborted = false;
    let hardError = null;
-@@ -134,11 +174,15 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -134,11 +187,15 @@ function collectFanoutResults(results, eligible, signal) {
        if (mergedContent === undefined && typeof settled.value?.content === "string" && settled.value.content.length > 0) {
          mergedContent = settled.value.content;
        }
@@ -3717,7 +3748,7 @@ index 744917e..03e752b 100644
        if (err instanceof WebError && err.code === "WEB_ABORTED") {
          // Per-backend abort -> soft unless the caller signal fired.
          if (signal?.aborted === true) hardAborted = true;
-@@ -149,6 +193,16 @@ function collectFanoutResults(results, eligible, signal) {
+@@ -149,6 +206,16 @@ function collectFanoutResults(results, eligible, signal) {
        }
      }
    }
@@ -3734,7 +3765,7 @@ index 744917e..03e752b 100644
    return { collected, mergedContent, hardAborted, hardError, failures };
  }
  
-@@ -187,39 +241,73 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -187,48 +254,114 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
      async search(request, signal) {
        throwIfSearchAborted(signal);
        const opts = resolveOptions();
@@ -3823,9 +3854,16 @@ index 744917e..03e752b 100644
 -      const cacheMode = (multi ? "multi" : "single") + (coverage ? "+coverage" : "");
 +      const cacheMode = (useMulti ? "multi" : "single") + (coverage ? "+coverage" : "");
  
-       // v2.7.0 disk cache: keyed on (shaped query + filters + maxResults +
-       // backends + mode). A hit short-circuits the fan-out entirely; sources
-@@ -228,7 +316,37 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+-      // v2.7.0 disk cache: keyed on (shaped query + filters + maxResults +
+-      // backends + mode). A hit short-circuits the fan-out entirely; sources
+-      // are byte-identical to the first search and content carries a
+-      // "cache hit, age Ns" note. Cache failures never break the search.
++      // v2.7.0 disk cache: keyed on the shaped query, filters, effective
++      // maxResults, ordered backends, mode and every result-affecting option
++      // (tier, domains, host bound, per-backend URL/model). A hit
++      // short-circuits the fan-out; sources are byte-identical and content
++      // carries an age note unless resultTelemetry is off. Cache failures
++      // never break the search.
        const cacheEnabled = opts.cacheEnabled === true && cache;
        let cacheKey = null;
        if (cacheEnabled) {
@@ -3864,7 +3902,7 @@ index 744917e..03e752b 100644
          const hit = cache.get(cacheKey);
          if (hit && Array.isArray(hit.value?.sources) && hit.value.sources.length > 0) {
            // Defense in depth: the fresh path drops non-http(s) schemes before
-@@ -241,15 +359,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -241,15 +374,18 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
              cacheKey = null;
            } else {
            let hitContent = typeof hit.value.content === "string" ? hit.value.content : undefined;
@@ -3892,7 +3930,7 @@ index 744917e..03e752b 100644
            return {
              sources: safeSources,
              ...(hitContent !== undefined ? { content: hitContent } : {}),
-@@ -279,22 +400,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -279,22 +415,66 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          candidates.push({ id, backend: be, beOpts });
        }
        const cooled = new Map();
@@ -3964,7 +4002,7 @@ index 744917e..03e752b 100644
            "WEB_PROVIDER_UNAVAILABLE",
          );
        }
-@@ -302,8 +467,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -302,8 +482,12 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // Run ONE query variant through the full fan-out: breaker-aware backend
        // execution under the per-variant limiter, then PHASE 1 collect. The
        // internal abort/timeout semantics are unchanged from v2.7.
@@ -3978,7 +4016,7 @@ index 744917e..03e752b 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -311,50 +480,118 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -311,50 +495,118 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -4122,7 +4160,7 @@ index 744917e..03e752b 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -363,8 +600,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -363,8 +615,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -4133,7 +4171,7 @@ index 744917e..03e752b 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -372,15 +609,80 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -372,15 +624,81 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -4156,13 +4194,14 @@ index 744917e..03e752b 100644
 +        // Do not start a variant that cannot get a meaningful slice: its
 +        // "timeout" would be budget exhaustion, not a backend outage, and
 +        // would contradict a success from the same backend in variant 1.
-+        // A 2s budget must still be able to run three fast facets; the floor
-+        // only prevents starting a variant that cannot get a meaningful slice.
++        // A 2s budget must still run three fast facets because the floor is
++        // 1s; the floor only prevents starting a later variant with no
++        // meaningful slice, and variant 1 always runs while any budget remains.
 +        const minVariantBudgetMs = Math.min(Number(opts.backendTimeoutMs) || 24000, 1000);
-+        if (remaining < minVariantBudgetMs) break;
-+        // Per-backend timeout is a contract, not a per-variant quota: a
-+        // variant gets the configured timeout while the shared deadline still
-+        // bounds the whole search. Dividing by the variant count made a
++        if (!shouldStartVariant(variantIndex, remaining, minVariantBudgetMs)) break;
++        // Per-backend timeout is a contract, not a per-variant quota: while
++        // the deadline allows, a variant gets the configured timeout; later
++        // variants get whatever time is left, and the deadline bounds all. Dividing by the variant count made a
 +        // healthy 1s backend fail at 666ms under three variants.
 +        const share = Math.max(1, Math.min(remaining, Number(opts.backendTimeoutMs) || 24000));
 +        // Parallel can merge the derived facets into one request; give it the
@@ -4216,7 +4255,7 @@ index 744917e..03e752b 100644
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -395,58 +697,138 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -395,58 +713,138 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
@@ -4378,7 +4417,7 @@ index 744917e..03e752b 100644
          };
        }
  
-@@ -454,20 +836,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -454,20 +852,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4419,7 +4458,7 @@ index 744917e..03e752b 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -475,21 +868,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -475,21 +884,51 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          };
        }
  

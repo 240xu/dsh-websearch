@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.13.10 - 2026-11-28
+
+- Fix: variant 1 starts whenever any search budget remains; the 1s floor now
+  applies only to later variants. A valid 1000ms timeout no longer fails on a
+  single clock tick before the first backend.
+- Fix: official-overridden drafts are dropped on reload/revert and external
+  snapshot updates, not only on a local edit; their stale validation errors
+  are cleared.
+- Test: the starved-cache test uses the real cache hit shape and asserts the
+  truncated run is not written.
+- Docs: 241 test count, conditional cache-hit note, corrected key fields.
+- Tests: 241.
 ## 2.13.9 - 2026-11-28
 
 - Fix: result-cache keys include `CACHE_SEMANTICS_VERSION` (currently 2).
