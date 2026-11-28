@@ -995,3 +995,15 @@ test("an invalid overridden draft cannot block Save after switching to official"
 });
 
 
+
+test("dropping an invalid overridden draft clears the validation status", async () => {
+  const { props, store } = bootCard();
+  await new Promise((r) => setTimeout(r, 10));
+  props.edit("numResults", "150");
+  await props.save();
+  assert.equal(store.getSnapshot().failed, true);
+  props.edit("intervention", "official");
+  const snap = store.getSnapshot();
+  assert.equal(snap.failedFields.includes("numResults"), false);
+  assert.equal(snap.failed, false, "the status strip has no invalid fields left to report");
+});

@@ -1487,7 +1487,7 @@ index 88dc8c3..8ed7fad 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..57a2ad0 100644
+index 783cbe6..932cfc1 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,33 @@ window.__ModuleLoader__.load({
@@ -1870,7 +1870,7 @@ index 783cbe6..57a2ad0 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +469,198 @@ window.__ModuleLoader__.load({
+@@ -292,59 +469,201 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1926,6 +1926,9 @@ index 783cbe6..57a2ad0 100644
 +					if (this.staged.delete(ignored)) changed = true;
 +					if (this.failedFields.delete(ignored)) changed = true;
 +				}
++				// The status strip must not keep saying "invalid fields" when
++				// the only invalid drafts were the ones just dropped.
++				if (changed && this.failedFields.size === 0) this.failed = false;
 +				return changed;
 +			}
 +			/** Stage a field edit (clears the saved marker so the card shows "unsaved"). */
@@ -2089,7 +2092,7 @@ index 783cbe6..57a2ad0 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +670,84 @@ window.__ModuleLoader__.load({
+@@ -354,47 +673,84 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2188,7 +2191,7 @@ index 783cbe6..57a2ad0 100644
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +758,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +761,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -2239,7 +2242,7 @@ index 783cbe6..57a2ad0 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +808,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +811,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2255,7 +2258,7 @@ index 783cbe6..57a2ad0 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +822,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +825,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2328,7 +2331,7 @@ index 783cbe6..57a2ad0 100644
  			] });
  		}
  
-@@ -463,6 +894,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +897,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2338,7 +2341,7 @@ index 783cbe6..57a2ad0 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -473,169 +907,273 @@ window.__ModuleLoader__.load({
+@@ -473,169 +910,273 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -2738,7 +2741,7 @@ index 783cbe6..57a2ad0 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1184,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1187,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2752,7 +2755,7 @@ index 783cbe6..57a2ad0 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1215,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1218,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2769,7 +2772,7 @@ index 783cbe6..57a2ad0 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1251,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1254,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });

@@ -270,7 +270,7 @@ tests/
 node --test tests/
 ```
 
-当前 246/246 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 247/247 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 

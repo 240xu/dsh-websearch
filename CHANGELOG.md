@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.13.14 - 2026-11-28
+
+- Fix: dropping invalid official-overridden drafts clears the validation
+  status when no invalid fields remain, so the strip cannot keep reporting
+  "invalid fields" with an empty list.
+- Test: invalid `numResults` → Save fails → switch to official → the status
+  is clean.
+- Tests: 247.
 ## 2.13.13 - 2026-11-28
 
 - Tests: the budget-starved breaker case advances a stubbed clock instead of
