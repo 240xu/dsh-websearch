@@ -739,6 +739,7 @@ test("resolveOptions classifies every option as result-affecting or explicitly n
     "enabledBackends", "cacheEnabled", "cacheTtlS", "breakerEnabled",
     "breakerThreshold", "breakerCooldownMs", "historyEnabled", "domainFilterError",
     "filters", "cacheKeyFields", "backendCacheKeyFields", "backends", "ctx",
+    "customBackends", "customBackendErrors",
   ]);
   for (const key of Object.keys(opts)) {
     assert.ok(Object.hasOwn(opts.cacheKeyFields, key) || nonResult.has(key), `${key} is unclassified`);

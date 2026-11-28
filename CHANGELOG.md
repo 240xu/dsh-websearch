@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.15.0 - 2026-11-29
+
+- Add config-declared custom MCP search backends: HTTPS DNS endpoint, one
+  named tool, fixed query/limit args, dotted result mapping, authRef, timeout;
+  public-host/redirect/credential constraints. Config-only activation.
+- Health reports custom ids; cache keys include endpoint/tool/mapping/authRef.
+- Tests: 303.
 ## 2.14.0 - 2026-11-29
 
 - Add Perplexity Search backend: official POST /search, Bearer key, ranked

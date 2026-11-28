@@ -3220,8 +3220,191 @@ index 783cbe6..c4fe3f3 100644
  			} catch (e) { /* non-window env */ }
  		}
  
+diff --git a/lib/custom/mcp.js b/lib/custom/mcp.js
+new file mode 100644
+index 0000000..85b1912
+--- /dev/null
++++ b/lib/custom/mcp.js
+@@ -0,0 +1,177 @@
++// custom/mcp.js — a config-declared MCP search backend.
++//
++// This is deliberately narrow: a trusted HTTPS MCP endpoint, one named tool,
++// fixed query/limit argument names, and field mapping by key path. It does not
++// accept arbitrary URLs per request, headers, expressions, or result HTML.
++
++import { WebError } from "@deepseek-ai/dsh-web";
++import { mcpCall, mcpText } from "../util/mcp-client.js";
++import { invalidBaseURL } from "../util/base-url.js";
++import { throwIfSearchAborted } from "../util/abort.js";
++
++const ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
++const TOOL_RE = /^[A-Za-z0-9_.-]{1,80}$/;
++const FIELD_RE = /^[A-Za-z0-9_.[\]-]{1,80}$/;
++
++/**
++ * Validate a custom backend declaration. Invalid entries are returned as
++ * errors rather than silently becoming a different backend.
++ * @param {unknown} raw
++ * @returns {{ defs: object[], errors: string[] }}
++ */
++export function normalizeCustomBackends(raw) {
++  const defs = [];
++  const errors = [];
++  if (raw === undefined || raw === null) return { defs, errors };
++  if (!Array.isArray(raw)) return { defs, errors: ["customBackends must be an array"] };
++  const seen = new Set();
++  for (const item of raw.slice(0, 8)) {
++    if (item === null || typeof item !== "object") { errors.push("custom backend must be an object"); continue; }
++    const id = typeof item.id === "string" ? item.id.trim() : "";
++    const label = typeof item.label === "string" ? item.label.trim() : "";
++    const endpoint = typeof item.endpoint === "string" ? item.endpoint.trim() : "";
++    const tool = typeof item.tool === "string" ? item.tool.trim() : "";
++    if (!ID_RE.test(id)) { errors.push(`custom backend id "${id}" is invalid`); continue; }
++    if (seen.has(id)) { errors.push(`custom backend id "${id}" is duplicated`); continue; }
++    seen.add(id);
++    if (label.length === 0 || label.length > 80) { errors.push(`custom backend "${id}" needs a label (1-80 chars)`); continue; }
++    if (!TOOL_RE.test(tool)) { errors.push(`custom backend "${id}" needs a tool name`); continue; }
++    let parsed;
++    try { parsed = new URL(endpoint); } catch { errors.push(`custom backend "${id}" endpoint is not a URL`); continue; }
++    if (parsed.protocol !== "https:") { errors.push(`custom backend "${id}" endpoint must be HTTPS`); continue; }
++    if (parsed.username !== "" || parsed.password !== "" || parsed.hash !== "") {
++      errors.push(`custom backend "${id}" endpoint must not contain credentials or a fragment`); continue;
++    }
++    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.+$/, "");
++    if (/^[0-9.]+$/.test(host) || host.includes(":")) {
++      errors.push(`custom backend "${id}" endpoint must use a DNS hostname`);
++      continue;
++    }
++    if (host.startsWith("::ffff:")) {
++      errors.push(`custom backend "${id}" endpoint must not use an IPv4-mapped address`);
++      continue;
++    }
++    if (/^(localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|::1|f[cd][0-9a-f]{2}:)/.test(host)) {
++      errors.push(`custom backend "${id}" endpoint must be public (private host rejected)`);
++      continue;
++    }
++    const blocked = invalidBaseURL(endpoint);
++    if (blocked !== undefined) { errors.push(`custom backend "${id}": ${blocked}`); continue; }
++    const authRef = typeof item.authRef === "string" ? item.authRef.trim() : "";
++    if (authRef !== "" && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef)) {
++      errors.push(`custom backend "${id}" authRef must be an env-style reference`); continue;
++    }
++    const queryArg = typeof item.queryArg === "string" && item.queryArg.trim() !== "" ? item.queryArg.trim() : "query";
++    const limitArg = typeof item.limitArg === "string" && item.limitArg.trim() !== "" ? item.limitArg.trim() : "max_results";
++    const resultsPath = typeof item.resultsPath === "string" ? item.resultsPath.trim() : "results";
++    const fields = {};
++    for (const [key, fallback] of [["urlField", "url"], ["titleField", "title"], ["snippetField", "snippet"], ["dateField", "date"]]) {
++      const value = typeof item[key] === "string" && item[key].trim() !== "" ? item[key].trim() : fallback;
++      if (!FIELD_RE.test(value)) { errors.push(`custom backend "${id}" ${key} is invalid`); continue; }
++      fields[key] = value;
++    }
++    if (Object.keys(fields).length !== 4) continue;
++    const timeoutMs = Number(item.timeoutMs);
++    defs.push({
++      id, label, endpoint, tool, authRef,
++      enabled: item.enabled === true,
++      stateless: item.stateless === true,
++      queryArg, limitArg, resultsPath,
++      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(Math.max(timeoutMs, 500), 60_000) : 15_000,
++      ...fields,
++    });
++  }
++  return { defs, errors };
++}
++
++/** Read a dotted key path without evaluating expressions. */
++export function readField(value, path) {
++  if (path === "") return value;
++  let current = value;
++  for (const part of String(path).split(".").slice(0, 8)) {
++    if (current === null || current === undefined || (typeof current !== "object" && !Array.isArray(current))) return undefined;
++    if (!Object.hasOwn(current, part)) return undefined;
++    current = current[part];
++  }
++  return current;
++}
++
++/**
++ * Map one MCP result to the web seam's source records. The result must expose
++ * a JSON object/array (structuredContent or JSON text) with a results array.
++ * @param {object} result
++ * @param {object} def
++ * @param {number} maxResults
++ * @returns {Array<{url:string,title?:string,snippet?:string,publishedAt?:string}>}
++ */
++export function customSourcesFromResult(result, def, maxResults) {
++  let data = result?.structuredContent;
++  if (data === undefined) {
++    try { data = JSON.parse(mcpText(result) || "{}"); } catch { data = undefined; }
++  }
++  const list = def.resultsPath === "" ? data : readField(data, def.resultsPath);
++  if (!Array.isArray(list)) return [];
++  const sources = [];
++  for (const item of list) {
++    if (sources.length >= maxResults) break;
++    if (item === null || typeof item !== "object") continue;
++    const url = readField(item, def.urlField);
++    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) continue;
++    const title = readField(item, def.titleField);
++    const snippet = readField(item, def.snippetField);
++    const date = readField(item, def.dateField);
++    sources.push({
++      url,
++      ...(typeof title === "string" && title.trim() !== "" ? { title: title.trim().slice(0, 300) } : {}),
++      ...(typeof snippet === "string" && snippet.trim() !== "" ? { snippet: snippet.trim().slice(0, 800) } : {}),
++      ...(typeof date === "string" && date.trim() !== "" ? { publishedAt: date.trim() } : {}),
++    });
++  }
++  return sources;
++}
++
++/**
++ * Build one provider backend from a normalized custom declaration.
++ * @param {object} def
++ * @param {{ resolveApiKey?: () => Promise<string|undefined> }} options
++ * @returns {object}
++ */
++export function createCustomMcpBackend(def, options = {}) {
++  const id = `custom:${def.id}`;
++  const requiresKey = def.authRef !== "";
++  return {
++    id,
++    requiresCredential: requiresKey,
++    custom: true,
++    available() {
++      return typeof def.endpoint === "string" && typeof def.tool === "string";
++    },
++    async search(request, signal, backendOpts, hooks) {
++      throwIfSearchAborted(signal);
++      const apiKey = requiresKey ? await options.resolveApiKey?.() : undefined;
++      if (requiresKey && !apiKey) {
++        throw new WebError(`Custom backend ${def.label}: credential ${def.authRef} is not configured`, "WEB_PROVIDER_CREDENTIAL_MISSING");
++      }
++      const args = { [def.queryArg]: request.query };
++      const limit = Math.max(1, Math.min(Number(request.maxResults) || 8, 100));
++      if (def.limitArg !== "") args[def.limitArg] = limit;
++      hooks?.recordRequest?.({ endpoint: def.endpoint, toolName: def.tool, body: args });
++      let result;
++      try {
++        result = await mcpCall(def.endpoint, def.tool, args, apiKey ? { Authorization: "Bearer " + apiKey } : {}, signal, {
++          skipInitialize: def.stateless,
++          deadlineMs: def.timeoutMs,
++        });
++      } catch (error) {
++        if (error instanceof WebError) throw error;
++        throw new WebError(`Custom backend ${def.label}: ${error?.message ?? "request failed"}`, "WEB_PROVIDER_ERROR", { cause: error });
++      }
++      if (result?.isError === true) {
++        throw new WebError(`Custom backend ${def.label}: ${mcpText(result).slice(0, 300)}`, "WEB_PROVIDER_ERROR");
++      }
++      const sources = customSourcesFromResult(result, def, limit);
++      hooks?.recordOutcome?.({ status: "success", count: sources.length });
++      return { sources };
++    },
++  };
++}
 diff --git a/lib/health.js b/lib/health.js
-index 4e54f1a..c1f7b9b 100644
+index 4e54f1a..549db25 100644
 --- a/lib/health.js
 +++ b/lib/health.js
 @@ -7,28 +7,18 @@
@@ -3265,7 +3448,7 @@ index 4e54f1a..c1f7b9b 100644
  
    const enabledSet = new Set(
      (opts.enabledBackends ?? []).filter((id) => backends[id] !== undefined),
-@@ -60,8 +51,17 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+@@ -60,18 +51,53 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
        id,
        enabled,
        keyless,
@@ -3283,7 +3466,32 @@ index 4e54f1a..c1f7b9b 100644
        lastOk: t && typeof t.lastOkAt === "number" ? t.lastOkAt : null,
        lastError: t && t.ok !== true ? sanitizeError(t.error) || "unknown error" : null,
      };
-@@ -72,6 +72,10 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+   });
+ 
++  // Config-declared custom backends are not in the static registry; report
++  // them with the same redacted telemetry keyed by their namespaced id.
++  for (const def of opts.customBackends ?? []) {
++    const id = "custom:" + def.id;
++    const t = tel.get(id);
++    list.push({
++      id,
++      enabled: enabledSet.has(id) || (def.enabled === true && (opts.enabledBackends ?? []).includes(id)),
++      keyless: def.authRef === "",
++      optionalKey: false,
++      metered: false,
++      custom: true,
++      rateLimited: t?.rateLimited === true,
++      keylessRejected: t?.keylessRejected === true,
++      cooledUntilMs: Number.isFinite(t?.cooledUntil) && t.cooledUntil > nowMs ? t.cooledUntil : null,
++      reachable: t ? t.ok === true : null,
++      credentialMissing: t?.credentialMissing === true,
++      lastOk: t && typeof t.lastOkAt === "number" ? t.lastOkAt : null,
++      lastError: t && t.ok !== true ? sanitizeError(t.error) || "unknown error" : null,
++    });
++  }
++
+   const enabledList = list.filter((b) => b.enabled);
+   return {
      ok: true,
      enabled: enabledList.length,
      keyless: enabledList.filter((b) => b.keyless).length,
@@ -3294,7 +3502,7 @@ index 4e54f1a..c1f7b9b 100644
      backends: list,
      updatedAt: Date.now(),
    };
-@@ -82,8 +86,8 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
+@@ -82,8 +108,8 @@ export function buildHealthReport({ resolveOptions, backends, getBackendHealth }
   * GET only; never probes backends; response is JSON with no credentials.
   */
  export function registerHealthRoute(ws, deps) {
@@ -3305,7 +3513,7 @@ index 4e54f1a..c1f7b9b 100644
      kind: "exact",
      path: "/api/unified-search/health",
      handler: (req, res) => {
-@@ -93,7 +97,7 @@ export function registerHealthRoute(ws, deps) {
+@@ -93,7 +119,7 @@ export function registerHealthRoute(ws, deps) {
        };
        const rejection = rejectionFor(req, typeof deps.getConnection === "function" ? deps.getConnection() : undefined);
        if (rejection !== undefined) {
@@ -3314,7 +3522,7 @@ index 4e54f1a..c1f7b9b 100644
          return;
        }
        if (req.method !== "GET" && req.method !== "HEAD") {
-@@ -107,4 +111,5 @@ export function registerHealthRoute(ws, deps) {
+@@ -107,4 +133,5 @@ export function registerHealthRoute(ws, deps) {
        }
      },
    });
@@ -3507,7 +3715,7 @@ index dd15b37..fb23fee 100644
 +  return disposers.filter((d) => typeof d === "function");
  }
 diff --git a/lib/index.js b/lib/index.js
-index 99230ce..5a74842 100644
+index 99230ce..9000e78 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -18,6 +18,8 @@ import { credentialRef } from "@deepseek-ai/dsh-credentials";
@@ -3519,7 +3727,7 @@ index 99230ce..5a74842 100644
  
  // Import all backends
  import { exaBackend } from "./backends/exa.js";
-@@ -33,6 +35,10 @@ import { tavilyBackend } from "./backends/tavily.js";
+@@ -33,6 +35,11 @@ import { tavilyBackend } from "./backends/tavily.js";
  import { serperBackend } from "./backends/serper.js";
  import { searxngBackend } from "./backends/searxng.js";
  import { mojeekBackend } from "./backends/mojeek.js";
@@ -3527,10 +3735,11 @@ index 99230ce..5a74842 100644
 +import { firecrawlBackend } from "./backends/firecrawl.js";
 +import { tinyfishBackend } from "./backends/tinyfish.js";
 +import { perplexityBackend } from "./backends/perplexity.js";
++import { normalizeCustomBackends, createCustomMcpBackend } from "./custom/mcp.js";
  import { createUnifiedSearchProvider, getLatestBackendHealth } from "./provider.js";
  import { registerHealthRoute } from "./health.js";
  import { createSearchCache, CACHE_DEFAULTS } from "./cache.js";
-@@ -63,12 +69,20 @@ const BACKENDS = {
+@@ -63,12 +70,20 @@ const BACKENDS = {
    deepseek: deepseekBackend,
    anthropic: anthropicBackend,
    openai: openaiBackend,
@@ -3551,7 +3760,7 @@ index 99230ce..5a74842 100644
  const DEFAULT_ENABLED = ["exa", "parallel", "ddg", "searxng"];
  
  /** Environment-variable names each key-gated backend reads. */
-@@ -80,8 +94,17 @@ const DEFAULT_KEY_ENV = {
+@@ -80,8 +95,17 @@ const DEFAULT_KEY_ENV = {
    tavily: "TAVILY_API_KEY",
    serper: "SERPER_API_KEY",
    mojeek: "MOJEEK_API_KEY",
@@ -3569,7 +3778,7 @@ index 99230ce..5a74842 100644
  /** Default base URLs. */
  const DEFAULT_BASE_URLS = {
    exa: "https://mcp.exa.ai/mcp",
-@@ -95,6 +118,11 @@ const DEFAULT_BASE_URLS = {
+@@ -95,6 +119,11 @@ const DEFAULT_BASE_URLS = {
    deepseek: "https://api.deepseek.com/anthropic/v1",
    anthropic: "https://api.anthropic.com/v1",
    openai: "https://api.openai.com/v1",
@@ -3581,7 +3790,7 @@ index 99230ce..5a74842 100644
  };
  
  /** Env var that overrides the default backend sweep order / enabled set. */
-@@ -122,6 +150,11 @@ const DEFAULT_LABELS = {
+@@ -122,6 +151,11 @@ const DEFAULT_LABELS = {
    deepseek: "DeepSeek (原生 web_search, 需 Key)",
    anthropic: "Anthropic (Claude 原生 web_search, 需 Key)",
    openai: "OpenAI (Responses API web_search, 需 Key)",
@@ -3593,7 +3802,7 @@ index 99230ce..5a74842 100644
  };
  
  /**
-@@ -132,12 +165,14 @@ const DEFAULT_LABELS = {
+@@ -132,12 +166,14 @@ const DEFAULT_LABELS = {
   */
  export const Config = z.object({
    // Global
@@ -3612,7 +3821,7 @@ index 99230ce..5a74842 100644
  
    // v2.1 result shaping
    recency: z.union(["any", "day", "week", "month", "year"]).default("any")
-@@ -146,12 +181,18 @@ export const Config = z.object({
+@@ -146,12 +182,18 @@ export const Config = z.object({
      .description("搜索语言（如 en、zh-CN；留空用各后端默认）"),
    safeSearch: z.boolean().default(true)
      .description("安全搜索（SearXNG / Brave 支持开关，其余后端忽略）"),
@@ -3633,7 +3842,7 @@ index 99230ce..5a74842 100644
  
    // v2.7.0 disk cache / circuit breaker / search history
    // W1 (fe-ui review): labels speak user language with a group prefix
-@@ -159,22 +200,22 @@ export const Config = z.object({
+@@ -159,22 +201,22 @@ export const Config = z.object({
    // spelled out (秒 / 毫秒) and grouping follows the field order below.
    cacheEnabled: z.boolean().default(true)
      .description("启用搜索结果缓存【缓存】：相同查询+过滤+条数在有效期内直接命中，不再请求后端"),
@@ -3661,7 +3870,7 @@ index 99230ce..5a74842 100644
  
    // Enable toggles (one per backend)
    enableExa: z.boolean().default(true).description(DEFAULT_LABELS.exa),
-@@ -188,24 +229,36 @@ export const Config = z.object({
+@@ -188,24 +230,36 @@ export const Config = z.object({
    enableDeepseek: z.boolean().default(false).description(DEFAULT_LABELS.deepseek),
    enableAnthropic: z.boolean().default(false).description(DEFAULT_LABELS.anthropic),
    enableOpenai: z.boolean().default(false).description(DEFAULT_LABELS.openai),
@@ -3706,7 +3915,7 @@ index 99230ce..5a74842 100644
  
    // Base URLs (defaults from built-in registry)
    braveBaseURL: z.string().default(DEFAULT_BASE_URLS.brave)
-@@ -226,6 +279,14 @@ export const Config = z.object({
+@@ -226,6 +280,14 @@ export const Config = z.object({
      .description("Anthropic API 端点（默认官方；自托管/代理实例改此项）"),
    openaiBaseURL: z.string().default(DEFAULT_BASE_URLS.openai)
      .description("OpenAI API 端点（默认官方；自托管/代理实例改此项）"),
@@ -3721,7 +3930,35 @@ index 99230ce..5a74842 100644
  
    // Models
    deepseekModel: z.string().default(DEFAULT_MODELS.deepseek)
-@@ -260,8 +321,9 @@ Config.meta = { ...Config.meta, volatile: true };
+@@ -237,6 +299,27 @@ export const Config = z.object({
+   tavilySearchDepth: z.union(["basic", "advanced"]).default("basic")
+     .description("Tavily 搜索深度"),
+ 
++  // Config-only custom MCP backends. They do not appear among the built-in
++  // toggles; `enabled: true` includes one in the fan-out.
++  customBackends: z.array(z.object({
++    id: z.string().default(""),
++    label: z.string().default(""),
++    endpoint: z.string().default(""),
++    tool: z.string().default(""),
++    authRef: z.string().default(""),
++    enabled: z.boolean().default(false),
++    stateless: z.boolean().default(false),
++    queryArg: z.string().default("query"),
++    limitArg: z.string().default("max_results"),
++    resultsPath: z.string().default("results"),
++    urlField: z.string().default("url"),
++    titleField: z.string().default("title"),
++    snippetField: z.string().default("snippet"),
++    dateField: z.string().default("date"),
++    timeoutMs: z.number().default(15000),
++  })).default([])
++    .description("自定义 MCP 搜索后端（HTTPS + 指定 tool；仅配置启用，不出现在内置开关中）"),
++
+   // Legacy compatibility: explicit enabled-backend list overrides toggles
+   enabledBackends: z.array(z.string())
+     .description("显式启用后端列表（优先于上方开关；留空则用开关）"),
+@@ -260,8 +343,9 @@ Config.meta = { ...Config.meta, volatile: true };
   * provides the field regardless.
   */
  const FIELD_LABELS = {
@@ -3732,7 +3969,7 @@ index 99230ce..5a74842 100644
    breakerEnabled: "后端熔断器",
    breakerThreshold: "熔断阈值（连续失败次数）",
    breakerCooldownMs: "熔断冷却时长（毫秒）",
-@@ -280,8 +342,35 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
+@@ -280,8 +364,35 @@ for (const [key, label] of Object.entries(FIELD_LABELS)) {
   * serves its NEXT search with. Key resolution: credentialRef -> credentials
   * service -> env.
   */
@@ -3769,7 +4006,7 @@ index 99230ce..5a74842 100644
    let enabledBackends = [];
  
    if (config?.enabledBackends && config.enabledBackends.length > 0) {
-@@ -289,20 +378,9 @@ export function resolveOptions(ctx, config) {
+@@ -289,20 +400,9 @@ export function resolveOptions(ctx, config) {
    }
  
    if (enabledBackends.length === 0) {
@@ -3793,7 +4030,7 @@ index 99230ce..5a74842 100644
    }
  
    if (enabledBackends.length === 0) {
-@@ -318,8 +396,20 @@ export function resolveOptions(ctx, config) {
+@@ -318,8 +418,20 @@ export function resolveOptions(ctx, config) {
    if (enabledBackends.length === 0) {
      enabledBackends = [...DEFAULT_ENABLED];
    }
@@ -3814,7 +4051,7 @@ index 99230ce..5a74842 100644
    const backends = {};
    for (const id of ALL_BACKENDS) {
      const keyEnvName = config?.[`${id}ApiKeyEnv`] ?? DEFAULT_KEY_ENV[id];
-@@ -336,8 +426,12 @@ export function resolveOptions(ctx, config) {
+@@ -336,8 +448,12 @@ export function resolveOptions(ctx, config) {
            : [],
        } : {}),
        safeSearch: config?.safeSearch !== false,
@@ -3828,14 +4065,43 @@ index 99230ce..5a74842 100644
        resolveApiKey: async () => {
          const credentials = ctx.get("credentials");
          if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
-@@ -348,32 +442,77 @@ export function resolveOptions(ctx, config) {
+@@ -347,33 +463,109 @@ export function resolveOptions(ctx, config) {
+     };
    }
  
-   const language = typeof config?.language === "string" ? config.language.trim() : "";
--
+-  const language = typeof config?.language === "string" ? config.language.trim() : "";
++  // Config-declared MCP backends. A declaration is inert unless enabled; an
++  // invalid declaration never replaces a valid built-in backend.
++  const customSpec = normalizeCustomBackends(config?.customBackends);
++  const customEnabled = [];
++  const customBackendFields = {};
++  for (const def of customSpec.defs) {
++    const ref = def.authRef === "" ? undefined : credentialRef(def.authRef);
++    const backend = createCustomMcpBackend(def, {
++      resolveApiKey: async () => {
++        if (ref === undefined) return undefined;
++        const credentials = ctx.get("credentials");
++        if (credentials !== undefined) return (await credentials.resolve(ref))?.value;
++        const ambient = launchEnvironmentOf(ctx).get(ref);
++        return ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined;
++      },
++    });
++    backends[backend.id] = backend;
++    customBackendFields[backend.id] = {
++      endpoint: def.endpoint, tool: def.tool, authRef: def.authRef,
++      queryArg: def.queryArg, limitArg: def.limitArg, resultsPath: def.resultsPath,
++      urlField: def.urlField, titleField: def.titleField,
++      snippetField: def.snippetField, dateField: def.dateField,
++      timeoutMs: def.timeoutMs, stateless: def.stateless,
++    };
++    if (def.enabled) customEnabled.push(backend.id);
++  }
++  if (customEnabled.length > 0) enabledBackends = [...new Set([...enabledBackends, ...customEnabled])];
+ 
 -  return {
 -    enabledBackends,
 -    numResults: config?.numResults ?? 8,
++  const language = typeof config?.language === "string" ? config.language.trim() : "";
 +  // Coarse intervention preset. `balanced` is the historical default and keeps
 +  // every field independently configurable; `official` removes provider-level
 +  // rewriting/presentation so the consumer (dsh-tool-web) owns them; `thorough`
@@ -3895,9 +4161,12 @@ index 99230ce..5a74842 100644
 +      excludeDomains: be.excludeDomains,
 +    };
 +  }
++  Object.assign(backendCacheKeyFields, customBackendFields);
 +  return {
 +    ...cacheKeyFields,
 +    enabledBackends,
++    customBackends: customSpec.defs,
++    customBackendErrors: customSpec.errors,
      // v2.7.0 cache / breaker / history
 -    cacheEnabled: config?.cacheEnabled === true,
 -    cacheTtlS: Math.max(30, Math.floor(Number(config?.cacheTtl) || CACHE_DEFAULTS.ttlMs / 1000)),
@@ -3923,7 +4192,7 @@ index 99230ce..5a74842 100644
      backends,
      ctx,
    };
-@@ -414,11 +553,28 @@ export function apply(ctx, config) {
+@@ -414,11 +606,28 @@ export function apply(ctx, config) {
        });
        return;
      }
@@ -3957,7 +4226,7 @@ index 99230ce..5a74842 100644
    });
  
    // v2.7.0 stores: disk cache + append-only search history, both under
-@@ -440,10 +596,9 @@ export function apply(ctx, config) {
+@@ -440,10 +649,9 @@ export function apply(ctx, config) {
      ctx,
      resolveOptions: () => resolveOptions(ctx, current()),
      backends: BACKENDS,
@@ -3971,7 +4240,7 @@ index 99230ce..5a74842 100644
      history: {
        record: (entry) => {
          if (resolveOptions(ctx, current()).historyEnabled !== true) return;
-@@ -467,26 +622,48 @@ export function apply(ctx, config) {
+@@ -467,26 +675,48 @@ export function apply(ctx, config) {
          return undefined;
        }
      };
