@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.13.11 - 2026-11-28
+
+- Fix (P1): a reload/reconcile no longer deletes `numResults`/`rerank` edits
+  made after staging `balanced` away from a saved official profile; the
+  effective tier is the staged one, and a reload to official still drops the
+  overridden drafts.
+- Fix: variant 1 needs at least a 50ms slice; a 1ms remainder no longer starts
+  every backend with a 1ms timeout. The zero-variant guard remains.
+- Docs: 242 test count, audit 139 restated as the 2.13.8 record, audit 137
+  superseded sentence struck, official hint names multiQuery/deep coverage.
+- Tests: 242.
 ## 2.13.10 - 2026-11-28
 
 - Fix: variant 1 starts whenever any search budget remains; the 1s floor now

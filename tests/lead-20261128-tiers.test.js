@@ -285,6 +285,7 @@ test("cache key distinguishes backend fan-out order", async () => {
     cacheKeyFor({ ...base, backends: ["ddg", "exa"] }),
     "reordering changes dedupe priority, so the key must change",
   );
+  assert.notEqual(cacheKeyFor(base), cacheKeyFor({ ...base, version: 99 }), "a semantics bump invalidates old entries");
 });
 
 test("domain filters accept wildcard/FQDN/fullwidth input and fail loud when empty", () => {
@@ -564,6 +565,8 @@ test("an empty starved multi-query result still reports the skipped facets", asy
 
 test("shouldStartVariant runs variant 1 on any remaining budget but floors later ones", () => {
   assert.equal(shouldStartVariant(0, 999, 1000), true, "a 1 ms clock tick must not skip the whole search");
+  assert.equal(shouldStartVariant(0, 49, 1000), false, "a 1 ms slice would only produce timeout noise");
+  assert.equal(shouldStartVariant(0, 50, 1000), true);
   assert.equal(shouldStartVariant(0, 0, 1000), false);
   assert.equal(shouldStartVariant(1, 999, 1000), false);
   assert.equal(shouldStartVariant(1, 1000, 1000), true);

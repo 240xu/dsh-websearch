@@ -957,6 +957,26 @@ test("switching to official drops overridden drafts instead of saving ignored va
   assert.equal(body.ops.some((op) => op.path[0] === "numResults" || op.path[0] === "rerank"), false, "overridden drafts are not posted");
 });
 
+test("staging balanced away from a saved official keeps the results edit", async () => {
+  const posts = [];
+  const { props, component } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { intervention: "official", numResults: 8 }, base: {}, user: {}, revision: 1 }) };
+    }
+    posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { intervention: "balanced", numResults: 40 }, base: {}, user: {}, revision: 2 }) };
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("intervention", "balanced");
+  props.edit("numResults", "40");
+  const input = flatten(component, props).find((n) => n.type === "input" && n.props["aria-label"] === "numResultsLabel");
+  assert.equal(input.props.disabled, false, "balanced unlocks the results field");
+  assert.equal(input.props.value, "40", "the edit is not dropped against the committed official snapshot");
+  await props.save();
+  const body = posts.at(-1);
+  assert.equal(body.ops.some((op) => op.path[0] === "numResults" && op.value === 40), true);
+});
+
 test("an invalid overridden draft cannot block Save after switching to official", async () => {
   const posts = [];
   const { props } = bootWithFetch(async (_url, init = {}) => {
