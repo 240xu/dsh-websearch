@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.13.7 - 2026-11-28
+
+- Fix: switching to `intervention=official` drops drafts for the four fields
+  the provider overrides (`numResults`, `rerank`, `resultTelemetry`,
+  `resultHeader`). They are no longer posted as ignored values, and an invalid
+  draft cannot block Save behind a locked control.
+- Tests: 240.
 ## 2.13.6 - 2026-11-28
 
 - UI: under `intervention=official`, gate `numResults`, `rerank`,

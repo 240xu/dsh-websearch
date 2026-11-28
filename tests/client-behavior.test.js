@@ -935,22 +935,43 @@ test("official intervention disables the controls the provider overrides", async
   assert.notEqual(byLabel("concurrencyLabel").props.disabled, true);
 });
 
-test("a staged official-overridden field stays editable until saved or discarded", async () => {
-  const { props, component } = bootWithFetch(async () => ({
-    ok: true, status: 200,
-    json: async () => ({ ok: true, writable: true, value: { numResults: 8, intervention: "balanced" }, base: {}, user: {}, revision: 1 }),
-  }));
+test("switching to official drops overridden drafts instead of saving ignored values", async () => {
+  const posts = [];
+  const { props, component } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 8, intervention: "balanced" }, base: {}, user: {}, revision: 1 }) };
+    }
+    posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { intervention: "official" }, base: {}, user: {}, revision: 2 }) };
+  });
   await new Promise((r) => setTimeout(r, 20));
   props.edit("numResults", "40");
+  props.edit("rerank", "true");
   props.edit("intervention", "official");
-  let nodes = flatten(component, props);
-  let input = nodes.find((n) => n.type === "input" && n.props["aria-label"] === "numResultsLabel");
-  assert.equal(input.props.disabled, false, "a drafted field must remain correctable");
+  const nodes = flatten(component, props);
+  const input = nodes.find((n) => n.type === "input" && n.props["aria-label"] === "numResultsLabel");
+  assert.equal(input.props.disabled, true, "the overridden control returns to its locked state");
   assert.match(String(nodes.find((n) => n.type === "p" && n.props.id === "wsc-intervention-hint").props.children), /officialHint/);
-  props.edit("numResults", "0");
   await props.save();
-  nodes = flatten(component, props);
-  input = nodes.find((n) => n.type === "input" && n.props["aria-label"] === "numResultsLabel");
-  assert.equal(input.props["aria-invalid"], true);
-  assert.equal(input.props.disabled, false, "the invalid field must stay focusable");
+  const body = posts.at(-1);
+  assert.equal(body.ops.some((op) => op.path[0] === "numResults" || op.path[0] === "rerank"), false, "overridden drafts are not posted");
 });
+
+test("an invalid overridden draft cannot block Save after switching to official", async () => {
+  const posts = [];
+  const { props } = bootWithFetch(async (_url, init = {}) => {
+    if ((init.method ?? "GET") !== "POST") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { numResults: 8, intervention: "balanced" }, base: {}, user: {}, revision: 1 }) };
+    }
+    posts.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true, writable: true, value: { intervention: "official" }, base: {}, user: {}, revision: 2 }) };
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  props.edit("numResults", "150");
+  props.edit("intervention", "official");
+  await props.save();
+  assert.equal(posts.length, 1, "the invalid overridden draft is gone, so Save is not blocked");
+  assert.equal(posts[0].ops.some((op) => op.path[0] === "numResults"), false);
+});
+
+

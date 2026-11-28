@@ -1475,10 +1475,10 @@ index 88dc8c3..25cec9e 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..50c67c2 100644
+index 783cbe6..5545d22 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -23,16 +23,29 @@ window.__ModuleLoader__.load({
+@@ -23,16 +23,33 @@ window.__ModuleLoader__.load({
  			{ id: "deepseek", keyEnv: "DEEPSEEK_API_KEY", label: "DeepSeek" },
  			{ id: "anthropic", keyEnv: "ANTHROPIC_API_KEY", label: "Anthropic" },
  			{ id: "openai", keyEnv: "OPENAI_API_KEY", label: "OpenAI" },
@@ -1502,6 +1502,10 @@ index 783cbe6..50c67c2 100644
 -		const BOOLEAN_FIELDS = ["rerank", "safeSearch", "resultTelemetry"];
 -		const KEYLESS = BACKENDS.filter((b) => !b.keyEnv || b.optionalKey);
 +		const BOOLEAN_FIELDS = ["rerank", "safeSearch", "resultTelemetry", "resultHeader", "cacheEnabled"];
++		// resolveOptions forces these under official; a draft left behind would
++		// be saved while having no runtime effect, and could block Save with an
++		// invalid value the disabled control cannot correct.
++		const OFFICIAL_IGNORED_FIELDS = ["numResults", "rerank", "resultTelemetry", "resultHeader"];
 +		// split metered, opt-in backends out of the
 +		// "keyless / ready to use" group. They work without a key but are rate
 +		// limited and default OFF, so a separate section with an explicit hint
@@ -1511,7 +1515,7 @@ index 783cbe6..50c67c2 100644
  		const KEYED = BACKENDS.filter((b) => b.keyEnv && !b.optionalKey);
  		const OPTIONAL_KEYS = BACKENDS.filter((b) => b.keyEnv && b.optionalKey);
  
-@@ -48,15 +61,34 @@ window.__ModuleLoader__.load({
+@@ -48,15 +65,34 @@ window.__ModuleLoader__.load({
  		};
  
  		const zh = {
@@ -1547,7 +1551,7 @@ index 783cbe6..50c67c2 100644
  			save: "保存",
  			discard: "放弃修改",
  			dirty: "有未保存修改",
-@@ -67,12 +99,18 @@ window.__ModuleLoader__.load({
+@@ -67,12 +103,18 @@ window.__ModuleLoader__.load({
  			overridden: "已自定义",
  			keyLabel: "{id} API Key",
  			getKey: "获取 Key ↗",
@@ -1568,7 +1572,7 @@ index 783cbe6..50c67c2 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +128,57 @@ window.__ModuleLoader__.load({
+@@ -90,22 +132,57 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1629,7 +1633,7 @@ index 783cbe6..50c67c2 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +189,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +193,18 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
@@ -1650,7 +1654,7 @@ index 783cbe6..50c67c2 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +221,31 @@ window.__ModuleLoader__.load({
+@@ -142,15 +225,31 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1685,7 +1689,7 @@ index 783cbe6..50c67c2 100644
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +283,54 @@ window.__ModuleLoader__.load({
+@@ -188,17 +287,54 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1744,7 +1748,7 @@ index 783cbe6..50c67c2 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +341,31 @@ window.__ModuleLoader__.load({
+@@ -209,20 +345,31 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1781,7 +1785,7 @@ index 783cbe6..50c67c2 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +379,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +383,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1809,7 +1813,7 @@ index 783cbe6..50c67c2 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +411,23 @@ window.__ModuleLoader__.load({
+@@ -258,11 +415,23 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1834,7 +1838,7 @@ index 783cbe6..50c67c2 100644
  			}
  
  			sectionValue(field) {
-@@ -276,11 +441,19 @@ window.__ModuleLoader__.load({
+@@ -276,11 +445,19 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1854,7 +1858,7 @@ index 783cbe6..50c67c2 100644
  					value: snap.value ?? {},
  					keyState: Object.fromEntries(this.keyState),
  					stagedKeys: Object.fromEntries([...this.stagedKeys].map(([k, v]) => [k, v.text])),
-@@ -292,59 +465,170 @@ window.__ModuleLoader__.load({
+@@ -292,59 +469,173 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -1898,6 +1902,9 @@ index 783cbe6..50c67c2 100644
 +				}
 +				this.savedAt = 0;
 +				this.staged.set(field, { text });
++				if (field === "intervention" && String(text) === "official") {
++					for (const ignored of OFFICIAL_IGNORED_FIELDS) this.staged.delete(ignored);
++				}
 +				this.republish();
 +			}
 +			/** Drop a staged field edit; the stored value is untouched. */
@@ -2045,7 +2052,7 @@ index 783cbe6..50c67c2 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,47 +638,84 @@ window.__ModuleLoader__.load({
+@@ -354,47 +645,84 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2117,12 +2124,10 @@ index 783cbe6..50c67c2 100644
 -							doneFields.push(field);
 +							if (!Number.isInteger(num) || num < lo || num > hi || num % (STEP[field] ?? 1) !== 0) { this.failed = true; this.failedFields.add(field); continue; }
 +							fieldOps.push({ op: "set", path: [field], value: num }); fieldOpNames.push(field);
- 						} else {
--							await this.scope.set(field, staged.text);
--							doneFields.push(field);
++						} else {
 +							fieldOps.push({ op: "set", path: [field], value: staged.text }); fieldOpNames.push(field);
- 						}
- 					}
++						}
++					}
 +					if (this.failedFields.size > 0) {
 +						// All-or-nothing: never half-commit a Save the card reports as failed.
 +						this.saving = false; this.republish(); return;
@@ -2130,21 +2135,23 @@ index 783cbe6..50c67c2 100644
 +					if (fieldOps.length > 0) {
 +						if (typeof this.scope.setMany === "function") {
 +							await this.scope.setMany(fieldOps);
-+						} else {
+ 						} else {
+-							await this.scope.set(field, staged.text);
+-							doneFields.push(field);
 +							for (const op of fieldOps) {
 +								if (op.op === "unset") await this.scope.unset(op.path[0]);
 +								else await this.scope.set(op.path[0], op.value);
 +							}
-+						}
+ 						}
 +						doneFields.push(...fieldOpNames);
-+					}
+ 					}
  					for (const [ref, staged] of this.stagedKeys) {
 +						// Snapshot before any await, same reason as the field loop.
 +						savedKeyRefs.set(ref, staged);
  						const value = staged.text.trim();
  						if (value !== "") {
  							try {
-@@ -405,22 +726,46 @@ window.__ModuleLoader__.load({
+@@ -405,22 +733,46 @@ window.__ModuleLoader__.load({
  							} catch (keyErr) {
  								// env-shadowed reference (fail-loud doctrine): isolate so other keys still land.
  								this.failed = true;
@@ -2195,7 +2202,7 @@ index 783cbe6..50c67c2 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +776,13 @@ window.__ModuleLoader__.load({
+@@ -431,12 +783,13 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2211,7 +2218,7 @@ index 783cbe6..50c67c2 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +790,69 @@ window.__ModuleLoader__.load({
+@@ -444,16 +797,69 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2284,7 +2291,7 @@ index 783cbe6..50c67c2 100644
  			] });
  		}
  
-@@ -463,6 +862,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +869,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2294,7 +2301,7 @@ index 783cbe6..50c67c2 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -473,169 +875,280 @@ window.__ModuleLoader__.load({
+@@ -473,169 +882,280 @@ window.__ModuleLoader__.load({
  		}
  
  		/** The card root. */
@@ -2429,7 +2436,7 @@ index 783cbe6..50c67c2 100644
 +			const hasDraft = (f) => state.stagedText(f) !== undefined;
 +			// A gate only locks untouched fields; a field with a pending edit
 +			// stays editable so the user can correct or discard it.
-+			const officialLocked = (f) => official && !hasDraft(f);
++			const officialLocked = (f) => official && !hasDraft(f); // drafts are dropped on switching to official
 +			const ttlLocked = !cacheOn && !hasDraft("cacheTtl");
 +			const recencyOptions = [
 +				{ value: "any", label: t("recencyAny") },
@@ -2580,9 +2587,12 @@ index 783cbe6..50c67c2 100644
  							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							disabled: state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false,
 -							placeholder: (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false) ? props.t("readOnly") : b.keyEnv,
--							value: state.stagedKeys[b.keyEnv] ?? "",
--							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
--						}),
++							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
++							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
++							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
+ 							value: state.stagedKeys[b.keyEnv] ?? "",
+ 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+ 						}),
 -						react_jsx_runtime.jsx("p", { className: "wsc-hint", children: props.t("keyHint") }),
 -						state.failedKeys.includes(b.keyEnv) && react_jsx_runtime.jsx("p", { className: "wsc-hint", style: { color: "#e5534b" }, children: props.t("keyFailed") }),
 -					] }, b.id)
@@ -2594,12 +2604,9 @@ index 783cbe6..50c67c2 100644
 -						react_jsx_runtime.jsx("input", {
 -							className: "wsc-keyInput", type: "password", autoComplete: "off",
 -							placeholder: b.keyEnv,
-+							"aria-label": t("keyLabel", { id: t("backend" + b.id.charAt(0).toUpperCase() + b.id.slice(1)) }),
-+							disabled: state.writable === false || (state.keyState[b.keyEnv]?.configured && state.keyState[b.keyEnv]?.writable === false),
-+							placeholder: state.writable === false ? t("readOnly") : b.keyEnv,
- 							value: state.stagedKeys[b.keyEnv] ?? "",
- 							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
- 						}),
+-							value: state.stagedKeys[b.keyEnv] ?? "",
+-							onChange: (e) => card.editKey(b.keyEnv, e.target.value),
+-						}),
 -					] }, b.id),
 -				) }),
 -				state.stagedCount > 0 && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .6 }, children: props.t("unsavedHint") }),
@@ -2686,7 +2693,7 @@ index 783cbe6..50c67c2 100644
 +			const hasDraft = (f) => state.stagedText(f) !== undefined;
 +			// A gate only locks untouched fields; a field with a pending edit
 +			// stays editable so the user can correct or discard it.
-+			const officialLocked = (f) => official && !hasDraft(f);
++			const officialLocked = (f) => official && !hasDraft(f); // drafts are dropped on switching to official
 +			const ttlLocked = !cacheOn && !hasDraft("cacheTtl");
 +
 +			return react_jsx_runtime.jsxs("div", { className: "wsc-card", children: [
@@ -2701,7 +2708,7 @@ index 783cbe6..50c67c2 100644
  				] }),
  			] });
  		}
-@@ -646,7 +1159,12 @@ window.__ModuleLoader__.load({
+@@ -646,7 +1166,12 @@ window.__ModuleLoader__.load({
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -2715,7 +2722,7 @@ index 783cbe6..50c67c2 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1190,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1197,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -2732,7 +2739,7 @@ index 783cbe6..50c67c2 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1226,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1233,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
