@@ -3334,7 +3334,7 @@ index 105fff8..b1002f2 100644
  
  /**
 diff --git a/lib/provider.js b/lib/provider.js
-index 7242a56..36f3eeb 100644
+index 7242a56..b394bde 100644
 --- a/lib/provider.js
 +++ b/lib/provider.js
 @@ -15,7 +15,7 @@
@@ -3727,7 +3727,7 @@ index 7242a56..36f3eeb 100644
          const limit = createLimiter(concurrency);
          const runBackend = ({ id, backend, beOpts, hooks }) => {
            const startedAtMs = Date.now();
-@@ -322,29 +480,81 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -322,29 +480,75 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // Enforce http(s); plain http only for private hosts (self-hosted SearXNG).
            // Reject embedded credentials. Failure is a per-backend soft error.
            if (beOpts.baseURL !== undefined) {
@@ -3755,12 +3755,6 @@ index 7242a56..36f3eeb 100644
 +          }
 +          const configuredTimeoutMs = effectiveBackendTimeoutMs(id, backendTimeoutMs);
 +          const effectiveTimeoutMs = Math.max(1, Math.min(configuredTimeoutMs, variantBudgetMs, remainingNow));
-+          // A call cut below its configured timeout by the shared budget is
-+          // not an outage: do not fold it into the breaker/health.
-+          // Startup jitter can shave a millisecond off the configured timeout; only
-+          // a material cut is budget starvation.
-+          const budgetClipped = effectiveTimeoutMs < configuredTimeoutMs
-+            && remainingNow < configuredTimeoutMs - 10;
            const timeoutId = setTimeout(() => controller.abort(), effectiveTimeoutMs);
 -          return backend
 -            .search(variantReq, mergedSignal, beOpts, hooks)
@@ -3820,7 +3814,7 @@ index 7242a56..36f3eeb 100644
                  // Timeout classification happens BEFORE telemetry/health are
                  // recorded (route6 P6): backends surface an internal timeout
                  // as their own abort-flavored error ("unified search aborted",
-@@ -353,22 +563,41 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -353,22 +557,41 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
                  // thrown error said "timed out after Nms" — the two disagreed
                  // and "(unified search aborted)" read as if the USER cancelled.
                  const timedOut = controller.signal.aborted && !(signal && signal.aborted);
@@ -3870,7 +3864,7 @@ index 7242a56..36f3eeb 100644
              const hooks = {
                recordRequest: (req) => recordBackendRequest(ctx, id, req),
                recordOutcome: (out) => recordBackendOutcome(ctx, id, out),
-@@ -377,8 +606,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -377,8 +600,8 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            }),
          );
          throwIfSearchAborted(signal);
@@ -3881,7 +3875,7 @@ index 7242a56..36f3eeb 100644
        };
  
        // Fan out per variant (sequential — the limiter already parallelizes
-@@ -386,15 +615,73 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -386,15 +609,80 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        const perVariant = [];
        const allTelemetry = [];
        const allFailures = [];
@@ -3897,13 +3891,16 @@ index 7242a56..36f3eeb 100644
 +      const searchHealth = new Map();
 +      const planBackendIds = new Set(eligible.filter(({ backend }) => backend.handlesAllVariants === true).map(({ id }) => id));
 +      let primaryPlanFailed = false;
++      let variantsRun = 0;
 +      for (let variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
 +        const variantQuery = variants[variantIndex];
 +        const remaining = searchDeadline - Date.now();
 +        // Do not start a variant that cannot get a meaningful slice: its
 +        // "timeout" would be budget exhaustion, not a backend outage, and
 +        // would contradict a success from the same backend in variant 1.
-+        const minVariantBudgetMs = Math.min(Number(opts.backendTimeoutMs) || 24000, 2000);
++        // A 2s budget must still be able to run three fast facets; the floor
++        // only prevents starting a variant that cannot get a meaningful slice.
++        const minVariantBudgetMs = Math.min(Number(opts.backendTimeoutMs) || 24000, 1000);
 +        if (remaining < minVariantBudgetMs) break;
 +        // Per-backend timeout is a contract, not a per-variant quota: a
 +        // variant gets the configured timeout while the shared deadline still
@@ -3948,25 +3945,33 @@ index 7242a56..36f3eeb 100644
 +          } else if (prev.ok !== true) {
 +            searchHealth.set(outcome.id, {
 +              ...outcome,
++              // A later non-credential failure in another variant must not
++              // erase the missing-key diagnosis.
++              credentialMissing: prev.credentialMissing === true || outcome.credentialMissing === true,
 +              rateLimited: prev.rateLimited === true || outcome.rateLimited === true,
 +              keylessRejected: prev.keylessRejected === true || outcome.keylessRejected === true,
 +              retryAfterMs: Math.max(prev.retryAfterMs ?? 0, outcome.retryAfterMs ?? 0) || undefined,
 +            });
 +          }
 +        }
++        variantsRun += 1;
          allTelemetry.push(...fold.telemetry);
          allFailures.push(...fold.failures);
          if (fold.hardError !== null && hardError === null) hardError = fold.hardError;
-@@ -409,43 +696,105 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -409,43 +697,109 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
          perVariant.push({ query: variantQuery, ordered, mergedContent: fold.mergedContent });
        }
  
++      const variantsSkipped = variants.length - variantsRun;
++      const facetNote = useMulti && variantsSkipped > 0
++        ? ` · multiQuery: ${variantsSkipped}/${variants.length} facets not run (search budget)`
++        : "";
 +      // Fold the breaker once per backend per search. `null` (breaker off) is
 +      // honoured by recordBackendHealth and never publishes a cooldown.
 +      for (const [id, outcome] of searchHealth) {
 +        recordBackendHealth(
 +          id,
-+          { ok: outcome.ok, at: outcome.at, ms: outcome.ms, count: outcome.count, error: outcome.error },
++          { ok: outcome.ok, at: outcome.at, ms: outcome.ms, count: outcome.count, error: outcome.error, credentialMissing: outcome.credentialMissing === true },
 +          breakerCfg,
 +          {
 +            rateLimited: outcome.rateLimited === true,
@@ -4044,8 +4049,9 @@ index 7242a56..36f3eeb 100644
          }
          // Store the pre-telemetry core (sources + headered content) so a cache
          // hit reproduces the exact sources and the model-facing header.
-         if (cacheKey && cache) {
+-        if (cacheKey && cache) {
 -          cache.set(cacheKey, { sources, content: outContent, truncated: ordered.length > maxResults });
++        if (cacheKey && cache && variantsSkipped === 0) {
 +          cache.set(cacheKey, {
 +            sources, content: outContent,
 +            truncated: maxResults === seamBound && ordered.length > maxResults,
@@ -4080,7 +4086,7 @@ index 7242a56..36f3eeb 100644
            }
            // Multi-query fans every variant through every backend; cap the line
            // so the telemetry note cannot dwarf the results themselves.
-@@ -453,23 +802,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -453,23 +807,24 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
            // labels (route6 P2); the raw text remains the fallback, and a
            // backend that just crossed the breaker threshold is annotated as
            // cooled on this same line.
@@ -4096,8 +4102,9 @@ index 7242a56..36f3eeb 100644
              })
              .concat(cooledParts);
 -          if (allTelemetry.length > 12) parts.push(`… +${allTelemetry.length - 12}`);
+-          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
 +          if (foldedTelemetry.length > 12) parts.push(`… +${foldedTelemetry.length - 12}`);
-           const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
++          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ") + facetNote;
            outContent = outContent === undefined ? line : outContent + "\n\n" + line;
          }
          return {
@@ -4108,7 +4115,7 @@ index 7242a56..36f3eeb 100644
          };
        }
  
-@@ -477,20 +827,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -477,20 +832,31 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
        // 过滤后为空）时，原实现无条件落入下面的 throw，模型端拿到
        // `all enabled backends failed (0) - `（detail 空、计数自相矛盾），且丢弃已
        // 拿到的 mergedContent（如 Tavily 直答）。成功即空 → 正常返回空结果。
@@ -4139,7 +4146,7 @@ index 7242a56..36f3eeb 100644
 +            return t.id + " ✗" + t.ms + "ms" + (label ? " (" + label + ")" : "");
 +          });
 +          if (foldedTelemetry.length > 12) parts.push(`… +${foldedTelemetry.length - 12}`);
-+          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ");
++          const line = "[websearch backends]" + TELEMETRY_TAG + " " + parts.join(" · ") + facetNote;
 +          emptyContent = emptyContent === undefined ? line : emptyContent + "\n\n" + line;
 +        }
 +        recordHistory(history, request?.query, 0, historyOk, historyTotal);
@@ -4149,7 +4156,7 @@ index 7242a56..36f3eeb 100644
          return {
            sources: [],
            ...(emptyContent !== undefined ? { content: emptyContent } : {}),
-@@ -500,25 +861,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
+@@ -500,25 +866,49 @@ export function createUnifiedSearchProvider({ ctx, resolveOptions, backends, cac
  
        // All attempted backends failed - synthesize one meaningful error that
        // names each backend's own reason so the caller (model or user) can act.

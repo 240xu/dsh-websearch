@@ -8,6 +8,7 @@ import { shapeQuery } from "../lib/prompting.js";
 import { tokenize, tokenSimilarity, dedupeSources } from "../lib/util/rank.js";
 import { rrfFuse } from "../lib/rrf.js";
 import { createUnifiedSearchProvider, getBackendBreaker, getLatestBackendHealth } from "../lib/provider.js";
+import { braveBackend } from "../lib/backends/brave.js";
 
 const CTX = { get: () => undefined };
 
@@ -450,4 +451,70 @@ test("multi-query keeps the configured backend timeout instead of dividing it", 
   const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
   assert.ok(out.sources.length >= 1, "a backend inside its configured timeout returns results");
   assert.doesNotMatch(String(out.content ?? ""), /all attempted backends failed/);
+});
+
+test("a 2s budget still runs three fast facets", async () => {
+  let calls = 0;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { fast: { id: "fast", available: () => true, async search() {
+      calls += 1;
+      return { sources: [{ url: `https://fast.example/${calls}` }] };
+    } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["fast"], backends: { fast: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 2000,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  const out = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.equal(calls, 3, "three fast facets fit inside 2s");
+  assert.ok(out.sources.length >= 1);
+});
+
+test("a starved multi-query run reports the skipped facets and is not cached", async () => {
+  let calls = 0;
+  let slow = true;
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: new Map(), history: undefined,
+    backends: { b: { id: "b", available: () => true, async search() {
+      calls += 1;
+      if (slow) await new Promise((r) => setTimeout(r, 500));
+      return { sources: [{ url: `https://b.example/${calls}` }] };
+    } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { multiQueryEnabled: true }), enabledBackends: ["b"], backends: { b: {} },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 600,
+      language: "", recency: "any", cacheEnabled: true, breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  // A real cache instance is needed for the write path; cacheEnabled + Map is not enough.
+  const first = await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.match(String(first.content ?? ""), /multiQuery: 2\/3 facets not run/);
+  const firstCalls = calls;
+  slow = false;
+  await provider.search({ query: "cats and dogs vs ferrets and birds", maxResults: 10 }, new AbortController().signal);
+  assert.ok(calls > firstCalls, "a truncated facet run is not served from the cache");
+});
+
+test("a missing key is a health diagnosis, not a breaker failure", async () => {
+  getLatestBackendHealth().clear();
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { brave: braveBackend },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, { enableBrave: true }), enabledBackends: ["brave"],
+      backends: { brave: { ...resolveOptions(CTX, { enableBrave: true }).backends.brave, resolveApiKey: async () => undefined } },
+      filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 5000,
+      breakerThreshold: 2, breakerCooldownMs: 60_000, breakerEnabled: true,
+      language: "", recency: "any", cacheEnabled: false, historyEnabled: false,
+    }),
+  });
+  for (let i = 0; i < 3; i += 1) {
+    await provider.search({ query: "missing key", maxResults: 5 }, new AbortController().signal).catch(() => {});
+  }
+  const health = getLatestBackendHealth().get("brave");
+  assert.equal(health.credentialMissing, true);
+  assert.equal(getBackendBreaker("brave").failCount, 0);
+  assert.equal(getBackendBreaker("brave").cooledUntil, 0);
 });

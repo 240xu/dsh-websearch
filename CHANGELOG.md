@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.13.3 - 2026-11-28
+
+- Fix: `credentialMissing` is preserved through the per-variant health fold;
+  a missing key no longer cools the backend and `/health` reports the flag.
+- Fix: a 2s `backendTimeoutMs` can run three fast multi-query facets (floor
+  lowered from 2000ms to 1000ms).
+- Fix: when the search deadline skips later facets, the result carries a
+  `multiQuery: N/M facets not run (search budget)` note and is not cached;
+  a transient slow variant no longer degrades identical searches for the TTL.
+- Tests: 235.
 ## 2.13.2 - 2026-11-28
 
 Frontend UX fixes from the round-6 review; details
