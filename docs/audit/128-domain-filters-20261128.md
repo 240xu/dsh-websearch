@@ -11,15 +11,15 @@ fixes. Verification: **220/220** tests, health 1/1, npm 2.10.0, both patches.
   tokens dropped, deduped, capped at 20. `resolveOptions` exposes the lists
   top-level and on every backend's options; OpenAI sends
   `filters.allowed_domains` / `filters.blocked_domains` inside the
-  `web_search` tool, Anthropic sends top-level `allowed_domains` /
-  `blocked_domains` with include winning when both are set. Config is now 60
+  `web_search` tool, Anthropic sends `allowed_domains` /
+  `blocked_domains` inside the `web_search` tool, with include winning when both are set. Config is now 60
   fields; the card still edits 24 (domains are profile-level).
   - Sources: OpenAI web-search guide (`filters.allowed_domains`,
     `filters.blocked_domains`), Anthropic `web_search_20250305`
     (`allowed_domains`/`blocked_domains`, mutually exclusive).
-  - Exa's simple MCP tool has no domain filter; switching to
-    `web_search_advanced_exa` needs a tool-list probe, so it remains deferred
-    rather than guessing the schema.
+  - Exa's simple MCP tool has no documented domain filter; switching to
+    `web_search_advanced_exa` is deferred pending a recorded `tools/list`
+    probe, rather than guessing the schema (claim marked unverified).
 - **Exa / `numResults` ceiling**: Config max 50 → 100 and client bounds match;
   Exa sends `clamp(request.maxResults, 1, 100)`, default 10 when a caller
   omits it. Brave/Tavily still cap at their documented 20.

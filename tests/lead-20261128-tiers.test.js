@@ -3,7 +3,8 @@
 // Run: node --test tests/lead-20261128-tiers.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveOptions } from "../lib/index.js";
+import { resolveOptions, resetKeyPresence } from "../lib/index.js";
+import { braveBackend } from "../lib/backends/brave.js";
 import { shapeQuery } from "../lib/prompting.js";
 import { tokenize, tokenSimilarity, dedupeSources } from "../lib/util/rank.js";
 import { rrfFuse } from "../lib/rrf.js";
@@ -267,10 +268,10 @@ test("a synchronously throwing backend does not create an unhandled rejection", 
 
 test("domain filters normalize URLs/hosts and cap at 20", () => {
   const opts = resolveOptions(CTX, {
-    includeDomains: "https://Example.com/path?q=1, Sub.Example.org, not_a_host!, 192.168.1.1",
+    includeDomains: "https://Example.com/path?q=1, Sub.Example.org, not_a_host!, 192.168.1.1, a..b",
     excludeDomains: "ads.example.net",
   });
-  assert.deepEqual(opts.includeDomains, ["example.com", "sub.example.org", "192.168.1.1"]);
+  assert.deepEqual(opts.includeDomains, ["example.com", "sub.example.org"]);
   assert.deepEqual(opts.excludeDomains, ["ads.example.net"]);
   const many = resolveOptions(CTX, { includeDomains: Array.from({ length: 30 }, (_, i) => `d${i}.example`).join(",") });
   assert.equal(many.includeDomains.length, 20);
@@ -284,4 +285,69 @@ test("cache key distinguishes backend fan-out order", async () => {
     cacheKeyFor({ ...base, backends: ["ddg", "exa"] }),
     "reordering changes dedupe priority, so the key must change",
   );
+});
+
+test("domain filters accept wildcard/FQDN/fullwidth input and fail loud when empty", () => {
+  const opts = resolveOptions(CTX, { includeDomains: "*.Example.com, a.com，b.com, x.com." });
+  assert.deepEqual(opts.includeDomains, ["example.com", "a.com", "b.com", "x.com"]);
+  assert.equal(opts.domainFilterError, undefined);
+  const bad = resolveOptions(CTX, { includeDomains: "not_a_host!" });
+  assert.deepEqual(bad.includeDomains, []);
+  assert.match(String(bad.domainFilterError), /no valid hostname/);
+});
+
+test("changing a domain filter cannot be served from the prior cache entry", async () => {
+  const calls = [];
+  const store = new Map();
+  const cache = { get: (k) => store.get(k) ?? null, set: (k, v) => store.set(k, { value: v, age: 0 }) };
+  let includeDomains = [];
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache, history: undefined,
+    backends: { fake: { id: "fake", available: () => true, async search() { calls.push(1); return { sources: [{ url: "https://none.example/1" }] }; } } },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["fake"], backends: { fake: {} }, includeDomains,
+      excludeDomains: [], filters: {}, safeSearch: true, dedupStrategy: "url", concurrency: 1,
+      backendTimeoutMs: 5000, language: "", recency: "any", cacheEnabled: true,
+      breakerEnabled: false, historyEnabled: false,
+    }),
+  });
+  await provider.search({ query: "domain cache", maxResults: 5 }, new AbortController().signal);
+  includeDomains = ["arxiv.org"];
+  await provider.search({ query: "domain cache", maxResults: 5 }, new AbortController().signal);
+  assert.equal(calls.length, 2, "the restricted search must miss the unfiltered entry");
+  assert.equal(store.size, 2);
+});
+
+test("budget-starved healthy backends are not cooled by the breaker", async () => {
+  getLatestBackendHealth().clear();
+  const sleeper = (id) => ({ id, available: () => true, async search() { await new Promise((r) => setTimeout(r, 60)); return { sources: [{ url: `https://${id}.example/1` }] }; } });
+  const provider = createUnifiedSearchProvider({
+    ctx: {}, cache: undefined, history: undefined,
+    backends: { a: sleeper("a"), b: sleeper("b") },
+    resolveOptions: () => ({
+      ...resolveOptions(CTX, {}), enabledBackends: ["a", "b"], backends: { a: {}, b: {} }, filters: {},
+      safeSearch: true, dedupStrategy: "url", concurrency: 1, backendTimeoutMs: 80,
+      language: "", recency: "any", cacheEnabled: false, breakerEnabled: true,
+      breakerThreshold: 3, breakerCooldownMs: 60_000, historyEnabled: false,
+    }),
+  });
+  for (let i = 0; i < 3; i += 1) {
+    await provider.search({ query: "budget", maxResults: 5 }, new AbortController().signal);
+  }
+  assert.equal(getBackendBreaker("b").failCount, 0, "a backend cut by the shared budget is not an outage");
+});
+
+test("available() reflects a resolved missing key without a restart", async () => {
+  resetKeyPresence();
+  let value = "";
+  const ctx = { get: (name) => name === "credentials" ? { resolve: async () => ({ value }) } : undefined };
+  const first = resolveOptions(ctx, { enableBrave: true });
+  await first.backends.brave.resolveApiKey();
+  const missing = resolveOptions(ctx, { enableBrave: true });
+  assert.equal(braveBackend.available(missing.backends.brave), false);
+  value = "sk-test";
+  await missing.backends.brave.resolveApiKey();
+  const present = resolveOptions(ctx, { enableBrave: true });
+  assert.equal(braveBackend.available(present.backends.brave), true);
+  resetKeyPresence();
 });

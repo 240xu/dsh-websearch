@@ -92,7 +92,7 @@ pnpm install
 > 每个 API Key 字段旁有 **「获取 Key ↗」** 直达对应平台控制台；保存即写入凭证库并立即生效。
 
 
-插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 24 个开关/参数（共 60 个配置字段）；缓存、熔断、历史、多查询、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 profile patch 配置：
+插件向 DSH 设置面板注册 `unified-search` namespace（Settings → Unified Search），面板可编辑 24 个开关/参数（共 60 个配置字段）；缓存、熔断、历史、多查询、域名过滤、BaseURL、Model 与 `*ApiKeyEnv` 等其余字段通过 Config 表单 / profile patch 配置：
 
 **全局**
 
@@ -100,8 +100,8 @@ pnpm install
 |---|---|---|
 | `intervention` | balanced | 搜索介入程度：`official` / `balanced` / `thorough`（见下表） |
 | `numResults` | 10 | 每次搜索返回结果数（1-100；Exa 上限 100，official 档沿用宿主工具的条数上限） |
-| `includeDomains` | 空 | 仅允许这些域名（逗号/空格分隔，最多 20；OpenAI/Anthropic 原生后端生效） |
-| `excludeDomains` | 空 | 排除这些域名（最多 20；同时设置时原生后端优先 allow） |
+| `includeDomains` | 空 | 仅约束 OpenAI/Anthropic 原生后端（最多 20；其余后端不支持，合并结果仍可能来自其他域名） |
+| `excludeDomains` | 空 | 排除这些域名（最多 20；Anthropic 仅发 allow，OpenAI 两个列表同时发送） |
 | `concurrency` | 6 | 并发后端数（1-10） |
 | `backendTimeoutMs` | 24000 | 单后端超时毫秒（为宿主 30s 工具超时预留余量） |
 | `recency` | any | 时间范围过滤：day / week / month / year（映射到各后端原生参数） |
@@ -172,6 +172,7 @@ pnpm install
 
 ### 4. per-backend 超时上限（P2）
 
+- SearXNG 仅在 `thorough`/`deepCoverage` 且未开启内部多查询时翻第 2 页（单实例；第 2 页 429/5xx 会回退到第 1 页并冷却 60 秒）；多实例 failover 始终只取第 1 页。
 - `ddg` / `searxng` 专属超时上限 8s（`min(8s, backendTimeoutMs)`，全局默认 24s、配置更短则以配置为准）——不可达后端不再拖住整个扇出尾。实测见 docs/real-call-2.8.0.md。
 
 ## v2.7.3 兼容修复 | What's new in v2.7.3
@@ -205,7 +206,9 @@ pnpm install
 - 相同 **(整形后查询 + filters + maxResults + 启用后端集合)** 在 TTL 内直接命中缓存，不打任何后端；`sources` 与首次搜索完全一致。
 - 命中时 `content` 追加一行 `[websearch cache] cache hit, age Ns`。
 - 存储位置：`$DSH_HOME/cache/websearch/results/`，单条目一个 JSON 文件，tmp+rename 原子写，超出上限按最旧淘汰；任何 fs 错误都被吞掉，缓存坏了绝不影响搜索。
-- 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900）。
+- 设置：`cacheEnabled`（默认 true）、`cacheTtl`（秒，默认 900；**0 = no-store**，不读也不写）。
+- 上限 200 条，超出按 mtime 最旧淘汰；缓存目录 0700、文件 0600（查询与结果属于用户数据）。
+- 清理：`rm -rf $DSH_HOME/cache/websearch/results`（`DSH_HOME` 通常为 `~/.dsh`）。
 
 ### 2. 后端熔断器（默认开，保守阈值）
 
@@ -266,7 +269,7 @@ tests/
 node --test tests/
 ```
 
-当前 220/220 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 225/225 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 
@@ -279,7 +282,7 @@ live service before running the suite:
 ```bash
 bash tests/relink-test-deps.sh   # derives the scope from dsh-web.service MainPID
 find node_modules/@deepseek-ai -xtype l   # expect no output
-node --test tests/*.test.js                 # 220/220
+node --test tests/*.test.js                 # 225/225
 ```
 
 v2.7.0 起共 76+ tests pass（`node --test "tests/*.test.js" "test/*.test.mjs"`）〔历史快照；当前口径见上〕。

@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.11.0 - 2026-11-28
+
+Round-3 expert fixes and the gated SearXNG pagination.
+
+- Fix (P1): domain filters are part of the cache key (top-level and per-backend
+  lists); enabling `includeDomains`/`excludeDomains` no longer serves the prior
+  unfiltered entry for up to the TTL.
+- Fix: domain normalization accepts fullwidth/Chinese commas, FQDN trailing
+  dots and `*.` prefixes; bare IPs and malformed labels are rejected. A
+  non-empty setting that normalizes to nothing fails the search loudly instead
+  of silently disabling the restriction.
+- Add: `available()` tracks credential presence observed by the last key
+  resolve; a key-gated backend with a confirmed missing key stops advertising
+  itself until a key is added (60 s unknown fallback), while optional-key
+  backends stay usable.
+- SearXNG: gated two-page fetch (single instance, `deepCoverage` without
+  internal multi-query), cross-page URL dedupe, page-1 results survive a
+  page-2 failure, page-2 429/5xx backs off pagination for 60 s. Multi-instance
+  failover still uses one page per attempt.
+- Fix: a backend cut by the shared search budget is no longer folded into the
+  breaker/health as an outage, and skipped backends appear in telemetry rather
+  than silently disappearing from history counts.
+- OpenAI domain filters now follow include-wins (only one list is sent);
+  Anthropic keeps include-wins, and the shared DeepSeek route no longer
+  receives unprobed domain fields.
+- Settings: numeric fields enforce server steps (`backendTimeoutMs` 1000,
+  `cacheTtl` 30) client-side; a server schema 400 is attributed to the named
+  field. `cacheEnabled`/`cacheTtl` are accepted by the shared field validator.
+- Docs: cache no-store/cap/permissions/purge, SearXNG paging, domain scope.
+- Tests: 225 unit tests.
+
 ## 2.10.0 - 2026-11-28
 
 Implements the first authority-ranked deferred items from audit 127
