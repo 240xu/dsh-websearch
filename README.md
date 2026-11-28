@@ -65,7 +65,7 @@ The tool must return `structuredContent` or JSON text containing an array at
 (private, loopback, link-local and metadata hosts are rejected); redirects are
 disabled and the credential is only sent as `Authorization: Bearer`. `enabled`
 is the only activation switch for a custom entry; keep `enabledBackends` for
-built-in ids. Config-only means no per-custom toggle in the Settings card yet.
+built-in ids. The Settings card edits this array through an advanced JSON editor; there is no per-entry form or per-custom toggle yet.
 
 > 可用性说明：available() 只做本地配置检查（不联网探测可达性）；密钥在每次搜索时按操作解析，缺失时该后端以明确错误码软失败（不阻塞其他后端）。全部缺 Key 时错误会指向设置页。
 
@@ -306,7 +306,7 @@ tests/
 node --test tests/
 ```
 
-当前 303/303 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
+当前 305/305 pass（`node --test tests/*.test.js`；`tests/up-health.test.mjs` 单独跑）。
 
 ### Test-only dependencies
 

@@ -1477,3 +1477,29 @@ test("both locales define the tier-controlled label", () => {
   const src = readFileSync(CLIENT, "utf8");
   assert.equal((src.match(/^\s*tierControlled:/gm) ?? []).length, 2);
 });
+
+test("the custom-backends editor stages and saves a JSON array", async () => {
+  const { props, store, lastWrite } = bootCard({
+    settings: { ok: true, writable: true, value: { numResults: 8, customBackends: [] }, base: {}, user: {}, revision: 1 },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  const next = [{ id: "team", label: "Team", endpoint: "https://mcp.example/x", tool: "search", enabled: true }];
+  props.edit("customBackends", JSON.stringify(next, null, 2));
+  assert.equal(store.getSnapshot().stagedCount, 1);
+  await props.save();
+  const write = lastWrite();
+  assert.deepEqual(write.ops, [{ op: "set", path: ["customBackends"], value: next }]);
+});
+
+test("the custom-backends editor rejects invalid JSON without a write", async () => {
+  const { props, store, requests } = bootCard({
+    settings: { ok: true, writable: true, value: { customBackends: [] }, base: {}, user: {}, revision: 1 },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  const before = requests.length;
+  props.edit("customBackends", "{not json");
+  await props.save();
+  assert.equal(requests.length, before, "invalid JSON must not be posted");
+  assert.deepEqual(store.getSnapshot().failedFields, ["customBackends"]);
+  assert.equal(store.getSnapshot().failed, true);
+});

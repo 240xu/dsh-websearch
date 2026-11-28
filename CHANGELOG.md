@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.16.0 - 2026-11-29
+
+- Settings: advanced JSON editor for custom MCP backends, staged with the same
+  save/validation path; invalid JSON is a field error and never posts.
+- Tests: 305.
 ## 2.15.0 - 2026-11-29
 
 - Add config-declared custom MCP search backends: HTTPS DNS endpoint, one

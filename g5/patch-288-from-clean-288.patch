@@ -1528,7 +1528,7 @@ index 88dc8c3..9f58ec5 100644
            try { unlinkSync(e.file); } catch { /* raced */ }
          }
 diff --git a/lib/client.js b/lib/client.js
-index 783cbe6..c4fe3f3 100644
+index 783cbe6..d272072 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -23,16 +23,37 @@ window.__ModuleLoader__.load({
@@ -1613,13 +1613,17 @@ index 783cbe6..c4fe3f3 100644
  			save: "保存",
  			discard: "放弃修改",
  			dirty: "有未保存修改",
-@@ -67,12 +109,18 @@ window.__ModuleLoader__.load({
+@@ -67,12 +109,22 @@ window.__ModuleLoader__.load({
  			overridden: "已自定义",
  			keyLabel: "{id} API Key",
  			getKey: "获取 Key ↗",
 -			keyHint: "填入后保存到凭证库（对应环境变量引用）；留空表示不修改",
 +			// the switch is immediate, the key needs Save.
 +			saveModelHint: "后端开关即时生效；密钥与其余字段点「保存」后生效",
++			customTitle: "自定义 MCP 后端",
++			customHint: "高级配置：JSON 数组，每项包含 id、label、endpoint、tool，可选 authRef、enabled 等。保存后按 config 生效。",
++			customInvalid: "自定义后端不是有效的 JSON 数组",
++			customSchemaHint: "仅支持公开 HTTPS MCP 端点；字段说明见 README。此处编辑的是 unified-search 的 customBackends 配置。",
  			keySet: "已配置",
  			keyUnset: "未配置",
 +			keyChecking: "检查中…",
@@ -1634,7 +1638,7 @@ index 783cbe6..c4fe3f3 100644
  			shapingTitle: "结果策略",
  			recencyLabel: "时间范围",
  			langLabel: "搜索语言",
-@@ -90,22 +138,73 @@ window.__ModuleLoader__.load({
+@@ -90,22 +142,73 @@ window.__ModuleLoader__.load({
  			dedupTitle: "链接 + 标题（合并转载）",
  			langPlaceholder: "如 en、zh-CN，留空为默认",
  						envProvided: "环境变量提供",			readOnly: "只读，无需填写",			conflict: "设置已在其他端被修改，请重试",			keyFailed: "该 Key 保存失败",
@@ -1711,13 +1715,17 @@ index 783cbe6..c4fe3f3 100644
  			save: "Save",
  			discard: "Discard",
  			dirty: "Unsaved changes",
-@@ -116,12 +215,18 @@ window.__ModuleLoader__.load({
+@@ -116,12 +219,22 @@ window.__ModuleLoader__.load({
  			overridden: "customized",
  			keyLabel: "{id} API Key",
  			getKey: "Get key ↗",
 -			keyHint: "Stored into the credential store on save; leave blank to keep current",
 +			// the switch is immediate, the key needs Save.
 +			saveModelHint: "Backend switches apply immediately; keys and every other field apply on Save",
++			customTitle: "Custom MCP backends",
++			customHint: "Advanced: a JSON array; each item needs id, label, endpoint and tool, with optional authRef, enabled and mappings.",
++			customInvalid: "Custom backends must be a valid JSON array",
++			customSchemaHint: "Public HTTPS MCP endpoints only; see README for fields. This edits unified-search customBackends.",
  			keySet: "configured",
  			keyUnset: "not set",
 +			keyChecking: "Checking…",
@@ -1732,7 +1740,7 @@ index 783cbe6..c4fe3f3 100644
  			shapingTitle: "Result shaping",
  			recencyLabel: "Recency",
  			langLabel: "Language",
-@@ -142,15 +247,47 @@ window.__ModuleLoader__.load({
+@@ -142,15 +255,47 @@ window.__ModuleLoader__.load({
  			readOnly: "read-only, nothing to fill",
  			conflict: "Changed elsewhere - please retry",
  			keyFailed: "failed to save this key",
@@ -1779,11 +1787,11 @@ index 783cbe6..c4fe3f3 100644
  
  		//#region styles
 -		const css = ".wsc-card{display:flex;flex-direction:column;gap:14px}.wsc-sectionTitle{font-size:13px;font-weight:600;opacity:.75;margin:4px 0 0}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:10px;border:1px solid var(--dsw-alias-border-subtle);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0}.wsc-toggle input{accent-color:var(--dsw-alias-accent-primary)}.wsc-input,.wsc-keyInput{box-sizing:border-box;width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-subtle);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;font-family:inherit}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:12px;opacity:.8}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-subtle)}.wsc-badgeOn{color:var(--dsw-alias-accent-primary);border-color:var(--dsw-alias-accent-primary)}.wsc-hint{font-size:11px;opacity:.55;margin:3px 0 0}.wsc-actions{display:flex;gap:8px;align-items:center}.wsc-btn{cursor:pointer;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-family:inherit;background:var(--dsw-alias-accent-primary);color:#fff}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-subtle)}.wsc-btn:disabled{opacity:.5;cursor:default}.wsc-status{font-size:12px;opacity:.7}";
-+		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggleWrap{display:flex;flex-direction:column;gap:2px}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-toggle:has(input:disabled){cursor:default;opacity:.6}@media (hover:hover){.wsc-toggle:has(input:disabled):hover{background:transparent}}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{flex-wrap:wrap;row-gap:6px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px;flex:1 1 200px;min-width:0}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;flex-wrap:wrap;row-gap:8px;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}.wsc-slider{position:relative;grid-column:1/-1;display:flex;flex-direction:column;gap:2px;padding:4px 0 2px;--wsc-progress:50%}.wsc-sliderTrack{position:relative;height:8px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3)}.wsc-sliderFill{position:absolute;inset:0 auto 0 0;width:var(--wsc-progress);border-radius:inherit;background:var(--dsw-alias-state-business-primary);transition:width .12s}.wsc-sliderThumb{position:absolute;top:50%;left:clamp(9px,var(--wsc-progress),calc(100% - 9px));width:18px;height:18px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:50%;corner-shape:round;background:var(--dsw-alias-switch-thumb);transform:translate(-50%,-50%);pointer-events:none;box-shadow:0 0 0 2px var(--dsw-alias-bg-layer-2);transition:left .12s}.wsc-sliderTicks{position:relative;height:4px;margin-top:3px}.wsc-sliderTick{position:absolute;top:0;width:4px;height:4px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-tertiary);transform:translateX(-50%)}.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(3){background:var(--dsw-alias-state-business-primary)}.wsc-slider[data-index=\"0\"] .wsc-sliderTick:nth-child(1){background:var(--dsw-alias-state-business-primary)}.wsc-sliderLabels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:3px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.wsc-sliderLabel{border:0;background:0 0;padding:0;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}.wsc-slider:has(.wsc-sliderInput:disabled) .wsc-sliderLabel{cursor:default}@media (hover:hover){.wsc-sliderLabel:not(:disabled):hover{color:var(--dsw-alias-label-primary)}}.wsc-sliderLabel:nth-child(2){text-align:center}.wsc-sliderLabel:nth-child(3){text-align:end}.wsc-slider[data-index=\"0\"] .wsc-sliderLabel:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderLabel:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderLabel:nth-child(3){color:var(--dsw-alias-label-primary);font-weight:500}.wsc-sliderInput{position:absolute;z-index:2;inset:0 0 auto;width:100%;height:24px;margin:0;opacity:0;cursor:pointer}.wsc-sliderInput:disabled{cursor:default}.wsc-slider:has(.wsc-sliderInput:focus-visible){outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:var(--dsw-radius-md)}.wsc-slider:has(.wsc-sliderInput:disabled){opacity:.5}@media (prefers-reduced-motion:reduce){.wsc-sliderFill,.wsc-sliderThumb{transition:none}}";
++		const css = ".wsc-card{display:flex;flex-direction:column;gap:8px}.wsc-sectionTitle{margin:24px 0 0;font-size:14px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}.wsc-toggleWrap{display:flex;flex-direction:column;gap:2px}.wsc-toggles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px}.wsc-toggle{display:flex;align-items:center;gap:8px;padding:7px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);cursor:pointer;font-size:13px;color:var(--dsw-alias-label-primary);background:0 0;transition:background-color .16s,border-color .16s}@media (hover:hover){.wsc-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}}.wsc-toggle input{accent-color:var(--dsw-alias-brand-primary)}.wsc-toggle:has(input:focus-visible){outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-toggle input:focus-visible{outline:none}.wsc-toggle:has(input:disabled){cursor:default;opacity:.6}@media (hover:hover){.wsc-toggle:has(input:disabled):hover{background:transparent}}.wsc-json{height:auto;min-height:140px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;resize:vertical;white-space:pre}.wsc-input,.wsc-keyInput{box-sizing:border-box;height:32px;width:100%;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-family:inherit}select.wsc-input{cursor:pointer;max-width:240px}.wsc-input[aria-invalid='true']{border-color:var(--dsw-alias-state-error-primary)}.wsc-input:focus,.wsc-keyInput:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}.wsc-input:disabled,.wsc-keyInput:disabled{opacity:.6;cursor:default}.wsc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}.wsc-fieldHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}.wsc-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}.wsc-badge{font-size:11px;padding:1px 8px;border-radius:var(--dsw-radius-xs);border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary)}.wsc-badgeOn{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-success-primary)}.wsc-hint{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);margin:3px 0 0}.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));font-size:12px}.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary));font-size:12px}.wsc-strip{flex-wrap:wrap;row-gap:6px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-module-platform)}.wsc-keyCard{border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill)}.wsc-live{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:16px;flex:1 1 200px;min-width:0}.wsc-actionsStatic{position:static;border-top:0;padding:0;background:transparent}.wsc-actions{position:sticky;bottom:0;display:flex;flex-wrap:wrap;row-gap:8px;gap:8px;align-items:center;padding:8px 0;background:var(--dsw-alias-bg-layer-2);border-top:.5px solid var(--dsw-alias-border-l2)}.wsc-btn{box-sizing:border-box;cursor:pointer;border:none;border-radius:var(--dsw-radius-md);height:36px;padding:0 14px;font-size:14px;line-height:22px;font-family:inherit;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}.wsc-btn:hover:not(.wsc-btnGhost):not(:disabled){background:var(--dsw-alias-button-primary-hover)}.wsc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}.wsc-btnGhost{background:0 0;color:var(--dsw-alias-label-primary);border:.5px solid var(--dsw-alias-border-l3)}.wsc-btnGhost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}.wsc-btn:disabled{opacity:.4;cursor:default}.wsc-status{font-size:12px;color:var(--dsw-alias-label-secondary)}.wsc-status.wsc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}.wsc-status.wsc-warn{color:color-mix(in srgb,var(--dsw-alias-state-warn-label) 65%,var(--dsw-alias-label-primary))}.wsc-dot{width:8px;height:8px;border-radius:50%;display:inline-block}.wsc-dotOn{background:var(--dsw-alias-state-success-primary)}.wsc-dotWarn{background:var(--dsw-alias-state-warn-primary)}.wsc-dotOff{background:var(--dsw-alias-label-tertiary)}.wsc-link{color:color-mix(in srgb,var(--dsw-alias-link) 90%,var(--dsw-alias-label-primary));text-decoration:none;border-radius:var(--dsw-radius-xs)}.wsc-link:hover{text-decoration:underline}.wsc-card fieldset[disabled] .wsc-toggle{opacity:.6;cursor:default}.wsc-card fieldset[disabled] .wsc-toggle:hover{background:transparent}.wsc-slider{position:relative;grid-column:1/-1;display:flex;flex-direction:column;gap:2px;padding:4px 0 2px;--wsc-progress:50%}.wsc-sliderTrack{position:relative;height:8px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3)}.wsc-sliderFill{position:absolute;inset:0 auto 0 0;width:var(--wsc-progress);border-radius:inherit;background:var(--dsw-alias-state-business-primary);transition:width .12s}.wsc-sliderThumb{position:absolute;top:50%;left:clamp(9px,var(--wsc-progress),calc(100% - 9px));width:18px;height:18px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:50%;corner-shape:round;background:var(--dsw-alias-switch-thumb);transform:translate(-50%,-50%);pointer-events:none;box-shadow:0 0 0 2px var(--dsw-alias-bg-layer-2);transition:left .12s}.wsc-sliderTicks{position:relative;height:4px;margin-top:3px}.wsc-sliderTick{position:absolute;top:0;width:4px;height:4px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-tertiary);transform:translateX(-50%)}.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(1),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderTick:nth-child(3){background:var(--dsw-alias-state-business-primary)}.wsc-slider[data-index=\"0\"] .wsc-sliderTick:nth-child(1){background:var(--dsw-alias-state-business-primary)}.wsc-sliderLabels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin-top:3px;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary)}.wsc-sliderLabel{border:0;background:0 0;padding:0;font:inherit;color:inherit;cursor:pointer;overflow-wrap:anywhere}.wsc-slider:has(.wsc-sliderInput:disabled) .wsc-sliderLabel{cursor:default}@media (hover:hover){.wsc-sliderLabel:not(:disabled):hover{color:var(--dsw-alias-label-primary)}}.wsc-sliderLabel:nth-child(2){text-align:center}.wsc-sliderLabel:nth-child(3){text-align:end}.wsc-slider[data-index=\"0\"] .wsc-sliderLabel:nth-child(1),.wsc-slider[data-index=\"1\"] .wsc-sliderLabel:nth-child(2),.wsc-slider[data-index=\"2\"] .wsc-sliderLabel:nth-child(3){color:var(--dsw-alias-label-primary);font-weight:500}.wsc-sliderInput{position:absolute;z-index:2;inset:0 0 auto;width:100%;height:24px;margin:0;opacity:0;cursor:pointer}.wsc-sliderInput:disabled{cursor:default}.wsc-slider:has(.wsc-sliderInput:focus-visible){outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:var(--dsw-radius-md)}.wsc-slider:has(.wsc-sliderInput:disabled){opacity:.5}@media (prefers-reduced-motion:reduce){.wsc-sliderFill,.wsc-sliderThumb{transition:none}}";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=\"dsh-websearch/card\"]") === null) {
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@240xu/dsh-websearch";
-@@ -188,17 +325,70 @@ window.__ModuleLoader__.load({
+@@ -188,17 +333,70 @@ window.__ModuleLoader__.load({
  					user: undefined,
  					revision: undefined,
  					mode: "routes",
@@ -1858,7 +1866,7 @@ index 783cbe6..c4fe3f3 100644
  					return;
  				}
  				this.store.set({
-@@ -209,20 +399,32 @@ window.__ModuleLoader__.load({
+@@ -209,20 +407,32 @@ window.__ModuleLoader__.load({
  					user: payload.user,
  					revision: payload.revision,
  					mode: "routes",
@@ -1896,7 +1904,7 @@ index 783cbe6..c4fe3f3 100644
  				const expectedRevision = this.store.getSnapshot().revision;
  				const response = await fetch("/api/unified-search/settings", {
  					method: "POST",
-@@ -236,17 +438,27 @@ window.__ModuleLoader__.load({
+@@ -236,17 +446,27 @@ window.__ModuleLoader__.load({
  				if (!response.ok || payload === undefined || payload.ok !== true) {
  					throw new Error(payload !== undefined && payload.error !== undefined ? String(payload.error) : "settings request failed (" + response.status + ")");
  				}
@@ -1924,7 +1932,7 @@ index 783cbe6..c4fe3f3 100644
  		class UnifiedSearchCardController {
  			constructor(scope, connection, remote) {
  				this.scope = scope;
-@@ -258,11 +470,32 @@ window.__ModuleLoader__.load({
+@@ -258,11 +478,32 @@ window.__ModuleLoader__.load({
  				this.saving = false;
  				this.failed = false;
  				this.conflict = false;
@@ -1958,7 +1966,7 @@ index 783cbe6..c4fe3f3 100644
  			}
  
  			sectionValue(field) {
-@@ -276,15 +509,34 @@ window.__ModuleLoader__.load({
+@@ -276,15 +517,34 @@ window.__ModuleLoader__.load({
  				return { text: staged.clear ? "" : staged.text, overridden: !staged.clear };
  			}
  
@@ -1993,7 +2001,7 @@ index 783cbe6..c4fe3f3 100644
  					savedAt: this.savedAt,
  					stagedText: (field) => {
  						const s = this.staged.get(field);
-@@ -292,59 +544,240 @@ window.__ModuleLoader__.load({
+@@ -292,59 +552,242 @@ window.__ModuleLoader__.load({
  					},
  					conflict: this.conflict,
  					failedKeys: [...this.failedKeys].map(([ref, reason]) => ({ ref, reason })),
@@ -2083,7 +2091,9 @@ index 783cbe6..c4fe3f3 100644
 +					? this.dropTierDrafts({ intervention: String(text) })
 +					: false;
 +				const clearedFailure = this.clearFieldFailure(field);
-+				const committed = String(this.sectionValue(field) ?? "");
++				const committed = field === "customBackends"
++					? JSON.stringify(this.sectionValue(field) ?? [], null, 2)
++					: String(this.sectionValue(field) ?? "");
 +				if (String(text) === committed) {
 +					// Reverting to the stored value is not a pending write.
 +					const changed = this.staged.delete(field) || dropped || clearedFailure;
@@ -2256,7 +2266,7 @@ index 783cbe6..c4fe3f3 100644
  					return;
  				}
  				throw new Error("credentials service unavailable");
-@@ -354,73 +787,179 @@ window.__ModuleLoader__.load({
+@@ -354,73 +797,185 @@ window.__ModuleLoader__.load({
  				for (const b of BACKENDS) if (b.keyEnv) this.readCredential(b.keyEnv);
  			}
  
@@ -2306,6 +2316,12 @@ index 783cbe6..c4fe3f3 100644
  						// Empty draft clears the override so the schema default applies again.
 -						if (staged.clear || staged.text === "") { await this.scope.unset(field); doneFields.push(field); continue; }
 +						if (staged.clear || staged.text === "") { fieldOps.push({ op: "unset", path: [field] }); fieldOpNames.push(field); continue; }
++						if (field === "customBackends") {
++							let parsed;
++							try { parsed = JSON.parse(staged.text); } catch { parsed = undefined; }
++							if (!Array.isArray(parsed)) { this.failed = true; this.failedFields.add(field); continue; }
++							fieldOps.push({ op: "set", path: [field], value: parsed }); fieldOpNames.push(field); continue;
++						}
  						if (SELECT_FIELDS[field]) {
  							if (!SELECT_FIELDS[field].includes(staged.text)) { this.failed = true; this.failedFields.add(field); continue; }
 -							await this.scope.set(field, staged.text);
@@ -2453,7 +2469,7 @@ index 783cbe6..c4fe3f3 100644
  			inject() {
  				// Slot contract: hooks.{name} must be an observable store; the renderer
  				// converts it into props.use{Name} (observableHook). Actions go top-level.
-@@ -431,12 +970,15 @@ window.__ModuleLoader__.load({
+@@ -431,12 +986,15 @@ window.__ModuleLoader__.load({
  					reset: (f) => this.reset(f),
  					editKey: (r, t) => this.editKey(r, t),
  					save: () => this.save(),
@@ -2471,7 +2487,7 @@ index 783cbe6..c4fe3f3 100644
  		function ToggleRow(props) {
  			const b = props.backend;
  			// The Host serves schema-resolved values, so defaults arrive materialized;
-@@ -444,16 +986,92 @@ window.__ModuleLoader__.load({
+@@ -444,16 +1002,92 @@ window.__ModuleLoader__.load({
  			const checked = props.value === true;
  			// Status dot: green keyless-or-keyed, amber enabled-but-key-missing.
  			const needsKey = !!b.keyEnv && !b.optionalKey && !props.keyConfigured;
@@ -2572,7 +2588,7 @@ index 783cbe6..c4fe3f3 100644
  			] });
  		}
  
-@@ -463,6 +1081,9 @@ window.__ModuleLoader__.load({
+@@ -463,6 +1097,9 @@ window.__ModuleLoader__.load({
  				react_jsx_runtime.jsx("div", { className: "wsc-fieldHead", children: react_jsx_runtime.jsx("span", { className: "wsc-label", children: props.label }) }),
  				react_jsx_runtime.jsx("select", {
  					className: "wsc-input",
@@ -2582,7 +2598,7 @@ index 783cbe6..c4fe3f3 100644
  					value: props.value,
  					onChange: (e) => props.onChange(e.target.value),
  					children: props.options.map((o) =>
-@@ -472,171 +1093,442 @@ window.__ModuleLoader__.load({
+@@ -472,181 +1109,479 @@ window.__ModuleLoader__.load({
  			] });
  		}
  
@@ -2779,11 +2795,7 @@ index 783cbe6..c4fe3f3 100644
 +				state.readErrors.length > 0 && react_jsx_runtime.jsxs("div", { role: "status", "aria-live": "polite", className: "wsc-warn", style: { margin: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }, children: [
 +					react_jsx_runtime.jsx("span", { children: t("credentialsReadFailed", { n: state.readErrors.length }) }),
 +					react_jsx_runtime.jsx("button", { type: "button", className: "wsc-btn wsc-btnGhost", style: { height: 26, padding: "0 8px", fontSize: 11 }, onClick: () => onRetryCredentials(), children: t("retryCredentials") }),
- 				] }),
--				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: props.t("description") }),
--				(enabledCount === 0) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("fallbackHint") }),
--				(state.writable === false) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("readOnlyScope") }),
--				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupFree") }),
++				] }),
 +				hasOverride && react_jsx_runtime.jsxs("div", { id: "wsc-override-hint", className: "wsc-warn", style: { margin: 0, fontSize: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }, children: [
 +					react_jsx_runtime.jsx("span", { children: overrideSource === "base" ? t("overrideBaseHint") : t("overrideHint") }),
 +					overrideSource === "user" && react_jsx_runtime.jsx("button", {
@@ -2793,7 +2805,11 @@ index 783cbe6..c4fe3f3 100644
 +						children: overrideClearing ? t("overrideClearing") : t("clearOverride"),
 +					}),
 +					overrideFailed && react_jsx_runtime.jsx("span", { className: "wsc-error", role: "status", "aria-live": "polite", children: t("overrideFailed") }),
-+				] }),
+ 				] }),
+-				react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, opacity: .65 }, children: props.t("description") }),
+-				(enabledCount === 0) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("fallbackHint") }),
+-				(state.writable === false) && react_jsx_runtime.jsx("p", { style: { margin: 0, fontSize: 12, color: "#e6a700" }, children: props.t("readOnlyScope") }),
+-				react_jsx_runtime.jsx("h5", { className: "wsc-sectionTitle", children: props.t("groupFree") }),
 +				(!hasOverride && enabledCount === 0) && react_jsx_runtime.jsx("p", { className: "wsc-warn", style: { margin: 0, fontSize: 12 }, children: t("fallbackHint") }),
 +				(state.writable === false) && react_jsx_runtime.jsx("p", { className: "wsc-warn", style: { margin: 0, fontSize: 12 }, children: t("readOnlyScope") }),
 +			] });
@@ -3009,6 +3025,27 @@ index 783cbe6..c4fe3f3 100644
 +		 * The optional-key grid (private instances / metered limits) and the save bar.
 +		 * @param {object} props { state, card, t }
 +		 */
++		/** Advanced JSON editor for config-declared custom MCP backends. */
++		function CustomBackendsEditor(props) {
++			const { state, card, t } = props;
++			const value = state.stagedText("customBackends") ?? JSON.stringify(state.value.customBackends ?? [], null, 2);
++			const invalid = state.failedFields.includes("customBackends");
++			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
++				react_jsx_runtime.jsx("h4", { className: "wsc-sectionTitle", children: t("customTitle") }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: t("customHint") }),
++				react_jsx_runtime.jsx("textarea", {
++					className: "wsc-input wsc-json",
++					"aria-label": t("customTitle"),
++					"aria-invalid": invalid || undefined,
++					spellCheck: false,
++					value,
++					onChange: (e) => card.edit("customBackends", e.target.value),
++				}),
++				invalid && react_jsx_runtime.jsx("p", { className: "wsc-hint wsc-error", role: "status", children: t("customInvalid") }),
++				react_jsx_runtime.jsx("p", { className: "wsc-hint", children: t("customSchemaHint") }),
++			] });
++		}
++
 +		function OptionalKeysAndActions(props) {
 +			const { state, card, t } = props;
 +			return react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, { children: [
@@ -3084,10 +3121,10 @@ index 783cbe6..c4fe3f3 100644
 +						!state.failed && !state.saving && state.savedAt > 0 && react_jsx_runtime.jsx("span", { className: "wsc-status", children: t("savedOk") }),
 +					] }),
 +					state.conflict && react_jsx_runtime.jsx("button", { className: "wsc-btn wsc-btnGhost", disabled: state.saving, onClick: () => card.retry(), children: t("retry") }),
-+				] }),
-+			] });
-+		}
-+
+ 				] }),
+ 			] });
+ 		}
+ 
 +		function UnifiedSearchSection(props) {
 +			const state = props.useUnifiedSearchCard((snapshot) => snapshot);
 +			const card = { edit: props.edit, setToggle: props.setToggle, reset: props.reset, editKey: props.editKey, save: props.save, discard: props.discard, retry: props.retry, clearOverride: props.clearOverride, retryCredentials: props.retryCredentials };
@@ -3147,13 +3184,16 @@ index 783cbe6..c4fe3f3 100644
 +				// select and button without relying on each call site.
 +				react_jsx_runtime.jsxs("fieldset", { disabled: state.writable === false, style: { border: 0, margin: 0, padding: 0, minWidth: 0 }, children: [
 +					react_jsx_runtime.jsx(BackendToggles, { state, card, toggleField, overridden, overrideIds, t: props.t }),
++					react_jsx_runtime.jsx(CustomBackendsEditor, { state, card, t: props.t }),
 +					react_jsx_runtime.jsx(SettingsFields, { state, card, t: props.t }),
- 				] }),
++				] }),
 +				react_jsx_runtime.jsx(OptionalKeysAndActions, { state, card, t: props.t }),
- 			] });
- 		}
- 
-@@ -646,7 +1538,12 @@ window.__ModuleLoader__.load({
++			] });
++		}
++
+ 		/**
+ 		 * Plugin entry: register the card into the settings plugins page.
+ 		 * Compatibility: the legacy `settingsScope` client service was removed on
  		 * the 0.2.x line; the card binds whichever data source the build offers
  		 * (see selectBridge) and registers the section unconditionally.
  		 */
@@ -3167,7 +3207,7 @@ index 783cbe6..c4fe3f3 100644
  		/**
  		 * Resolve the settings data source for this build, in order:
  		 *  1. the legacy `settingsScope` service (DSH <= 0.1.6 line, or a shim);
-@@ -672,12 +1569,15 @@ window.__ModuleLoader__.load({
+@@ -672,12 +1607,15 @@ window.__ModuleLoader__.load({
  				ctx.get("connection"),
  				ctx.get("remote"),
  			);
@@ -3184,7 +3224,7 @@ index 783cbe6..c4fe3f3 100644
  				} catch (_noEventFace) { /* this build does not forward that event */ }
  			}
  			// Re-read when another client saves this namespace (settings document
-@@ -705,22 +1605,25 @@ window.__ModuleLoader__.load({
+@@ -705,22 +1643,25 @@ window.__ModuleLoader__.load({
  				try {
  					if (window.__dshDevkit && typeof window.__dshDevkit.toast === "function") {
  						window.__dshDevkit.toast(hint, { kind: "info" });
